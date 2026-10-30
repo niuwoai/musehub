@@ -1,0 +1,19 @@
+{
+  "document_date": "2026-10-30",
+  "kind": "static_document_validation",
+  "result": "passed",
+  "counts": {
+    "markdown_documents": 10,
+    "local_links": 9,
+    "json_examples": 3,
+    "mcp_tools": 50,
+    "database_tables": 51,
+    "p0_requirements": 24
+  },
+  "errors": [],
+  "limits": [
+    "Only local links, JSON syntax, uniqueness and basic document structure checked.",
+    "No Rust runtime, SQL migrations, MCP implementation, competitor installation or performance tests executed.",
+    "Requirement mapping check is family-level; semantic cross-document review was manual."
+  ]
+}

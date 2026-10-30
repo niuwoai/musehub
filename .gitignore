@@ -1,0 +1,37 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Rust build output; Cargo.lock should be tracked for this application
+/target/
+**/target/
+
+# Frontend dependencies and generated output
+node_modules/
+web/dist/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/install-state.gz
+.pnp.*
+
+# Local runtime data and logs
+/data/
+/tmp/
+*.log
+coverage/
+playwright-report/
+test-results/
+
+# Editor and OS files
+.DS_Store
+.idea/
+*.swp
+*.swo
