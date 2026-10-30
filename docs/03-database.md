@@ -4,7 +4,7 @@
 
 ## 1. 通用约定
 
-- 业务存储选 PostgreSQL；所有表（包括关联表）都有 `id UUID PRIMARY KEY`、`created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`、`updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`。ID 使用应用生成 UUIDv7，数据库 PK 保证唯一。
+- 业务存储只支持 PostgreSQL，不提供 SQLite、MySQL 或其他数据库后端；所有表（包括关联表）都有 `id UUID PRIMARY KEY`、`created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`、`updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`。ID 使用应用生成 UUIDv7，数据库 PK 保证唯一。
 - `updated_at` 由数据库 BEFORE UPDATE trigger 维护；不可变记录禁止业务 UPDATE，保留其创建时间作为 updated_at。禁止依赖客户端自报时间作为租约/审批期限依据。
 - 下列字典省略通用三列。字段默认 NOT NULL，`?` 表示 nullable；`FK` 表示外键。字符串状态使用 TEXT + CHECK，避免 PostgreSQL enum 演进成本。
 - 表格未重复标类型的字段按约定展开：`*_id` 为 UUID，`*_at`/`*_until` 为 TIMESTAMPTZ，`row_version`/`policy_version`/`*_number`/`byte_length` 为 BIGINT，布尔显式 BOOL；name/slug/path/state/kind/ref/OID/hash 等其余标量为 TEXT（OID/hash 另受格式约束）。已标 JSONB 的字段按专用 schema 校验。

@@ -33,7 +33,7 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 
 - 服务端、调度器、Runner、MCP 适配层使用 Rust；React + TypeScript + i18n 负责 Web。
 - 第一版使用标准 Git 子进程实现协议与写操作，不从零实现 pack/协议引擎。
-- PostgreSQL 保存业务与调度状态；bare Git 仓库保存代码；本地制品存储作为首版默认，OCI 镜像放外部私有 Registry。
+- 业务数据库只支持 PostgreSQL，保存业务与调度状态；bare Git 仓库保存代码；本地制品存储作为首版默认，OCI 镜像放外部私有 Registry。
 - 模块化单体控制面 + 独立 Linux Runner；构建与 Agent 工作空间隔离；部署 Runner 独立授权。
 - 第一版部署目标为单台 Linux 上的 Docker Compose 应用；先支持测试环境与人工批准的受保护环境。
 - 一个通用受控进程适配协议，一个完成实测的 Agent 集成；不承诺所有 CLI、模型通用。
