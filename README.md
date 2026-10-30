@@ -48,6 +48,8 @@ musehub/
   crates/musehub-core/       # 版本、配置与稳定错误码
   crates/musehub-server/     # /healthz、/readyz、/version
   crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
+  crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
+  crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
 ```
@@ -78,12 +80,14 @@ yarn --cwd web build
 - 结构化日志，以及 `/healthz`、`/readyz`、`/version`。
 - 标准 Git 子进程完成本地 bare 仓库的 clone、非空 commit 和 push。
 - 最小 Web 从 `VERSION` 读取版本，中英文文案来自 i18n。
+- 本地进程探针覆盖工作目录约束、超时终止和取消后不再写文件。
+- 本地 fixture 覆盖 NDJSON 事件、空 diff 拒绝，以及取消后没有新文件或提交。
 
 尚未完成，不能把 M0 标为通过：
 
 - OpenSSH forced command 与 Rust 网关的身份传递、并发和取消。
-- Agent 适配器选型，以及真实任务的提交、取消和预算证据。
-- rootless 隔离构建，且不向任务暴露宿主 Docker socket。
+- 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
+- Linux rootless 隔离构建，且不向任务暴露宿主 Docker socket。当前 Runner 探针只覆盖本地进程。
 - 按 OCI digest 部署 Compose 并核对实际运行摘要。
 - rmcp 的 stdio/HTTP 客户端兼容验证。
 - 同类产品最小任务试用和差异结论。
