@@ -6,6 +6,7 @@ members = [
     "crates/musehub-runner-probe",
     "crates/musehub-container-probe",
     "crates/musehub-rootless-probe",
+    "crates/musehub-ssh-probe",
     "crates/musehub-agent-probe",
     "crates/musehub-server",
 ]
