@@ -266,6 +266,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "musehub-container-probe"
+version = "0.1.0-rc1"
+dependencies = [
+ "musehub-core",
+ "thiserror",
+]
+
+[[package]]
 name = "musehub-core"
 version = "0.1.0-rc1"
 dependencies = [
