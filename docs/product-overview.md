@@ -41,7 +41,7 @@ Git LFS、跨仓库 fork PR、持续镜像、代码语义索引、原生 K8s/Hel
 
 ## 当前实现
 
-已完成最小服务、单一版本源、本地 Git 探针、本地进程探针、Agent fixture、Colima Docker digest 探针和最小 Web。还没有用户、仓库托管、Issue、PR、流水线、真实 Agent、Release 或生产部署。Docker 证据不是 rootless 隔离。
+已完成最小服务、单一版本源、本地 Git 探针、本地进程探针、Agent fixture、Colima Docker digest 探针、Colima Linux VM 内的单用户 rootless 探针和最小 Web。还没有用户、仓库托管、Issue、PR、流水线、真实 Agent、Release 或生产部署。rootless 证据不是生产级多租户隔离。
 
 ## 当前待办
 

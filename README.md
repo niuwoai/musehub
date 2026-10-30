@@ -50,6 +50,7 @@ musehub/
   crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
   crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
   crates/musehub-container-probe/ # Colima Docker digest 与 socket 检查；不是 rootless 证据
+  crates/musehub-rootless-probe/ # Colima Linux VM 内的单用户 rootless 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
@@ -84,11 +85,12 @@ yarn --cwd web build
 - 本地进程探针覆盖工作目录约束、超时终止和取消后不再写文件。
 - 本地 fixture 覆盖 NDJSON 事件、空 diff 拒绝，以及取消后没有新文件或提交。
 - Colima Docker VM 上按 busybox digest 启动 Compose，实际运行镜像 ID 与请求 digest 的镜像 ID 一致，容器没有挂载 Docker socket。
+- Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
 
 尚未完成，不能把 M0 标为通过：
 
 - OpenSSH forced command 与 Rust 网关的身份传递、并发和取消。
 - 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
-- Linux rootless 隔离构建。当前 Docker 证据来自 Colima VM，不是 rootless；它只证明 digest 一致且容器未挂载 Docker socket。
+- 生产级多租户隔离。当前 rootless 证据只覆盖 Colima Linux VM 内的单个普通用户，不代表不可信贡献者隔离。
 - rmcp 的 stdio/HTTP 客户端兼容验证。
 - 同类产品最小任务试用和差异结论。
