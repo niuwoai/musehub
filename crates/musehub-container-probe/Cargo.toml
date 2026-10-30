@@ -1,0 +1,8 @@
+[package]
+name = "musehub-container-probe"
+version = "0.1.0-rc1"
+edition = "2021"
+
+[dependencies]
+musehub-core = { path = "../musehub-core" }
+thiserror = { workspace = true }

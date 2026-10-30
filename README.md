@@ -1,12 +1,12 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。目标首版：`0.1.0-rc1`（尚未实现、尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc1`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
 MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台的私有部署项目，连接 Git 托管、Issue、Agent 开发、PR、流水线、Release 和部署。它是独立项目，模型网关只是可配置的外部依赖。
 
-当前交付物是产品与技术设计，不包含可运行服务、已执行 migration、已验证的性能结果或部署成果。下述范围是建议冻结的实现基线；商业定位、许可证和正式版本日期仍待决定。
+当前已有设计文档、最小 Rust 服务和最小 Web。没有账号、Git 托管、数据库 migration、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
 
 ## 文档导航
 
@@ -39,17 +39,56 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 - 一个通用受控进程适配协议，一个完成实测的 Agent 集成；不承诺所有 CLI、模型通用。
 - UI、REST、MCP 共用领域服务和授权策略；MCP 不能绕过分支保护与发布策略。
 
-## 后续仓库结构（规划）
+## 当前仓库结构
 
 ```text
 musehub/
-  Cargo.toml                 # 实现阶段建立 Rust workspace
-  crates/{domain,application,store,git,server,runner,agent,mcp,cli}/
+  VERSION                    # 单一版本源，当前 0.1.0-rc1
+  Cargo.toml                 # workspace：core、server、git-probe
+  crates/musehub-core/       # 版本、配置与稳定错误码
+  crates/musehub-server/     # /healthz、/readyz、/version
+  crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
+  crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
+  crates/musehub-container-probe/ # Colima Docker digest 与 socket 检查；不是 rootless 证据
+  crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
   web/                       # React / Vite / TypeScript / yarn / i18n
-  migrations/                # up/down 成对，尚未生成
-  deploy/                    # Docker Compose 安装与升级配置
-  tests/                     # 协议、集成、故障恢复、端到端
   docs/
 ```
 
-初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。代码实现阶段统一版本源并生成 Web 展示版本、二进制版本和 `X-App-Version`。当前仓库仅包含设计文档和基础忽略规则，尚未初始化 Rust workspace 或实现服务。
+规划中的 `application`、`store`、完整 Git 服务、`runner`、`agent`、`mcp`、`cli`、`migrations/` 和 `deploy/` 都还没有。
+
+初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
+
+## 本地验证
+
+复制 `.env.example` 了解可选配置。当前只读取 `MUSEHUB_BIND`，默认 `127.0.0.1:8080`，不需要数据库。
+
+```sh
+cargo test --workspace
+cargo run -p musehub-server
+yarn --cwd web install --frozen-lockfile
+yarn --cwd web test
+yarn --cwd web build
+```
+
+`/healthz` 只表示进程存活。数据库和 Git 存储尚未接入，所以 `/readyz` 返回 HTTP 503，不会把服务报告为就绪。
+
+## M0 进度
+
+已验证：
+
+- Rust workspace、单一版本源、配置错误和 Git 探针错误码。
+- 结构化日志，以及 `/healthz`、`/readyz`、`/version`。
+- 标准 Git 子进程完成本地 bare 仓库的 clone、非空 commit 和 push。
+- 最小 Web 从 `VERSION` 读取版本，中英文文案来自 i18n。
+- 本地进程探针覆盖工作目录约束、超时终止和取消后不再写文件。
+- 本地 fixture 覆盖 NDJSON 事件、空 diff 拒绝，以及取消后没有新文件或提交。
+- Colima Docker VM 上按 busybox digest 启动 Compose，实际运行镜像 ID 与请求 digest 的镜像 ID 一致，容器没有挂载 Docker socket。
+
+尚未完成，不能把 M0 标为通过：
+
+- OpenSSH forced command 与 Rust 网关的身份传递、并发和取消。
+- 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
+- Linux rootless 隔离构建。当前 Docker 证据来自 Colima VM，不是 rootless；它只证明 digest 一致且容器未挂载 Docker socket。
+- rmcp 的 stdio/HTTP 客户端兼容验证。
+- 同类产品最小任务试用和差异结论。

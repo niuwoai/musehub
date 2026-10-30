@@ -1,0 +1,8 @@
+{
+  "app": {
+    "name": "MuseHub",
+    "tagline": "私有部署的研发与交付平台；当前仍是未发布的开发版，尚未完成 {{version}} 发布。",
+    "versionLabel": "版本",
+    "switchLanguage": "切换到 English"
+  }
+}
