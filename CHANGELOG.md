@@ -13,6 +13,7 @@
 - 增加最小 React 页面，展示版本并提供中英文 i18n。
 - 增加本地进程探针，验证工作目录约束、超时和取消。
 - 增加本地 Agent fixture，验证事件契约、空 diff 拒绝和取消后无新副作用。
+- 增加 Colima Docker 探针，按镜像 digest 启动 Compose，并核对实际镜像 ID 与 Docker socket 未挂载。
 
 ## [0.0.0-docs1] — 2026-10-30
 
