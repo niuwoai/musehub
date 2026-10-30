@@ -41,11 +41,10 @@ Git LFS、跨仓库 fork PR、持续镜像、代码语义索引、原生 K8s/Hel
 
 ## 当前实现
 
-已完成最小服务、单一版本源、本地 Git 探针、本地进程探针、Agent fixture、Colima Docker digest 探针、Colima Linux VM 内的单用户 rootless 探针和最小 Web。还没有用户、仓库托管、Issue、PR、流水线、真实 Agent、Release 或生产部署。rootless 证据不是生产级多租户隔离。
+已完成最小服务、单一版本源、本地 Git 探针、本地进程探针、Agent fixture、Colima Docker digest 探针、Colima Linux VM 内的单用户 rootless 探针、Colima Linux VM 内的单用户 OpenSSH forced command 探针和最小 Web。还没有用户、仓库托管、Issue、PR、流水线、真实 Agent、Release 或生产部署。rootless 与 OpenSSH 证据都不是生产级多租户隔离。
 
 ## 当前待办
 
-- 验证 OpenSSH forced command、身份传递、并发和取消。
 - 通过首轮技术验证选定一个 Agent 适配器和实测模型组合。
 - 验证 rootless 隔离构建，以及按 OCI digest 部署 Compose。
 - 用两个客户端验证 rmcp 的 stdio/HTTP 接入。

@@ -55,7 +55,7 @@ M1 起每个领域同时提供 REST、Web 必要操作与 MCP 适配，不把整
 
 ## 4. M0 必须做出的选择
 
-1. 用 Linux 验证 OpenSSH + forced command + Rust gateway 的身份传递、并发与取消。
+1. 用 Linux 验证 OpenSSH + forced command + Rust gateway 的身份传递、并发与取消。Colima Linux VM 内的单用户临时 sshd 已给出这项证据；它不传输真实 Git pack，也不是生产 Git 服务。
 2. 选择 Agent：以 headless 运行、结构化输出、可配置端点、工具权限、取消、预算观测和许可证为筛选条件。最终至少一个组合通过真实任务；尚未指定某个品牌默认获胜。
 3. 验证隔离构建与 rootless 镜像构建，不把宿主 Docker socket 暴露给 PR/Agent。
 4. 验证一个 OCI 镜像按 digest 部署 Compose，并确认实际运行摘要。

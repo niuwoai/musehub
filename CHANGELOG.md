@@ -15,6 +15,7 @@
 - 增加本地 Agent fixture，验证事件契约、空 diff 拒绝和取消后无新副作用。
 - 增加 Colima Docker 探针，按镜像 digest 启动 Compose，并核对实际镜像 ID 与 Docker socket 未挂载。
 - 增加 Colima Linux VM 内的 rootless 探针，验证 rootless 身份、用户数据目录、BuildKit 构建和容器内无 Docker socket。
+  - 增加 Colima Linux VM 内的 OpenSSH forced command 探针，验证服务端身份传递、命令白名单、并发和取消。这是单用户临时 sshd 证据，不传输真实 Git pack。
 - 确认业务数据库只支持 PostgreSQL，不做其他数据库适配。
 
 ## [0.0.0-docs1] — 2026-10-30
