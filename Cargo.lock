@@ -256,6 +256,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "musehub-agent-probe"
+version = "0.1.0-rc1"
+dependencies = [
+ "musehub-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "musehub-core"
 version = "0.1.0-rc1"
 dependencies = [
@@ -264,6 +274,14 @@ dependencies = [
 
 [[package]]
 name = "musehub-git-probe"
+version = "0.1.0-rc1"
+dependencies = [
+ "musehub-core",
+ "thiserror",
+]
+
+[[package]]
+name = "musehub-runner-probe"
 version = "0.1.0-rc1"
 dependencies = [
  "musehub-core",

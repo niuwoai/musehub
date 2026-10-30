@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/musehub-core",
     "crates/musehub-git-probe",
+    "crates/musehub-runner-probe",
+    "crates/musehub-agent-probe",
     "crates/musehub-server",
 ]
 

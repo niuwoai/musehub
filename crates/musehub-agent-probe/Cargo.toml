@@ -1,0 +1,10 @@
+[package]
+name = "musehub-agent-probe"
+version = "0.1.0-rc1"
+edition = "2021"
+
+[dependencies]
+musehub-core = { path = "../musehub-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
