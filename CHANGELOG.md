@@ -17,6 +17,7 @@
 - 增加 Colima Linux VM 内的 rootless 探针，验证 rootless 身份、用户数据目录、BuildKit 构建和容器内无 Docker socket。
   - 增加 Colima Linux VM 内的 OpenSSH forced command 探针，验证服务端身份传递、命令白名单、并发和取消。这是单用户临时 sshd 证据，不传输真实 Git pack。
 - 确认业务数据库只支持 PostgreSQL，不做其他数据库适配。
+- 增加 `musehub-migrate` 和成对的 `0001_common`、`0002_identity` migration。隔离 PostgreSQL 17 已验证 up、down、up，以及身份表时间戳、更新触发器和外键索引。Web 启动不执行 migration；其余业务表尚未落地。
 
 ## [0.0.0-docs1] — 2026-10-30
 

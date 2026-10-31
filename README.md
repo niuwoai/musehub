@@ -6,7 +6,7 @@ GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始�
 
 MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台的私有部署项目，连接 Git 托管、Issue、Agent 开发、PR、流水线、Release 和部署。它是独立项目，模型网关只是可配置的外部依赖。
 
-当前已有设计文档、最小 Rust 服务和最小 Web。没有账号、Git 托管、数据库 migration、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
+当前已有设计文档、最小 Rust 服务、最小 Web，以及只覆盖身份表的 PostgreSQL migration。没有账号功能、Git 托管、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
 
 ## 文档导航
 
@@ -44,26 +44,28 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 ```text
 musehub/
   VERSION                    # 单一版本源，当前 0.1.0-rc1
-  Cargo.toml                 # workspace：core、server、git-probe
+  Cargo.toml                 # workspace：core、server、git-probe、migrate
   crates/musehub-core/       # 版本、配置与稳定错误码
   crates/musehub-server/     # /healthz、/readyz、/version
+  crates/musehub-migrate/    # 显式 PostgreSQL migration；Web 启动不调用
   crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
   crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
   crates/musehub-container-probe/ # Colima Docker digest 与 socket 检查；不是 rootless 证据
   crates/musehub-rootless-probe/ # Colima Linux VM 内的单用户 rootless 证据
   crates/musehub-ssh-probe/  # Colima Linux VM 内的单用户 OpenSSH forced command 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
+  migrations/                # 0001 common、0002 identity；其余表尚未落地
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
 ```
 
-规划中的 `application`、`store`、完整 Git 服务、`runner`、`agent`、`mcp`、`cli`、`migrations/` 和 `deploy/` 都还没有。
+规划中的 `application`、`store`、完整 Git 服务、`runner`、`agent`、`mcp`、`cli` 和 `deploy/` 都还没有。`migrations/` 目前只有公共函数和身份表。
 
 初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
 
 ## 本地验证
 
-复制 `.env.example` 了解可选配置。当前只读取 `MUSEHUB_BIND`，默认 `127.0.0.1:8080`，不需要数据库。
+复制 `.env.example` 了解可选配置。当前服务只读取 `MUSEHUB_BIND`，默认 `127.0.0.1:8080`，启动时不连接数据库，也不执行 migration。
 
 ```sh
 cargo test --workspace
@@ -88,6 +90,7 @@ yarn --cwd web build
 - Colima Docker VM 上按 busybox digest 启动 Compose，实际运行镜像 ID 与请求 digest 的镜像 ID 一致，容器没有挂载 Docker socket。
 - Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
 - Colima Linux VM 内的临时 OpenSSH 验证 forced command：服务端注入身份，客户端不能覆盖；只接受明确的 `git-upload-pack` / `git-receive-pack` 与一个逻辑路径；两个主体并发时各自看到自己的身份；客户端提前断开后没有仓库文件或提交。没有执行真实 Git pack。
+- `musehub-migrate` 对隔离的 PostgreSQL 17 执行 `0001_common` 与 `0002_identity` 的 up、down、up。身份表具备 `created_at`、`updated_at` 与更新触发器，外键有前缀索引。Web 启动不迁移；仓库、Issue、流水线等其余表仍未落地。
 
 尚未完成，不能把 M0 标为通过：
 

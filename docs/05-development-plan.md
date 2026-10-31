@@ -1,6 +1,6 @@
 # MuseHub 开发与验证计划
 
-> 2026-10-30｜规划基线 0.1。当前仅完成设计文档；下面的工作包、工期、验收结果均不是已完成事项。
+> 2026-10-30｜规划基线 0.1。设计文档之外，BOOT-01 和 BOOT-02 已有实现与验证；其余工作包、工期和验收结果均不是已完成事项。
 
 ## 1. 组织方式与估算前提
 
@@ -29,7 +29,7 @@ M1 起每个领域同时提供 REST、Web 必要操作与 MCP 适配，不把整
 | ID | 工作包 | 依赖 | 交付证据 |
 |---|---|---|---|
 | BOOT-01 | workspace、配置、错误模型、版本源、日志、最小 Web | 无 | cargo/yarn 构建、版本一致检查 |
-| BOOT-02 | PostgreSQL migration 管理与隔离测试库 | BOOT-01 | up/down/up 报告、时间戳/FK 索引检查 |
+| BOOT-02 | PostgreSQL migration 管理与隔离测试库 | BOOT-01 | 已完成：`musehub-migrate` 在隔离 PostgreSQL 17 上对 `0001_common`、`0002_identity` 执行 up/down/up，并检查时间戳与外键索引。其余表未落地 |
 | AUTH-01 | principal/org/membership、登录与会话 | BOOT-02 | 角色/禁用/CSRF 用例 |
 | AUTH-02 | PAT、SSH key、scope、审计 | AUTH-01 | token 撤销与跨租户测试 |
 | GIT-IMP-01 | 仓库创建、受控 Git 子进程、HTTPS | AUTH-02 | 标准客户端 clone/fetch/push |
