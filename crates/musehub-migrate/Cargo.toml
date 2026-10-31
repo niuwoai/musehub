@@ -1,0 +1,14 @@
+[package]
+name = "musehub-migrate"
+version = "0.1.0-rc1"
+edition = "2021"
+
+[[bin]]
+name = "musehub-migrate"
+path = "src/main.rs"
+
+[dependencies]
+musehub-core = { path = "../musehub-core" }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
