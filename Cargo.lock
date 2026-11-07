@@ -915,6 +915,7 @@ dependencies = [
  "musehub-core",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tower",
  "tracing",

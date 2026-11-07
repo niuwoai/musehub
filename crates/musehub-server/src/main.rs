@@ -1,14 +1,17 @@
 //! MuseHub server: minimal HTTP surface for liveness, readiness and version.
 
 use std::process::ExitCode;
+use std::sync::Arc;
 
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -16,6 +19,13 @@ use musehub_core::{version, Config, ErrorCode};
 
 const PROCESS_OK: &str = "ok";
 const NOT_CONFIGURED: &str = "not_configured";
+const DATABASE_ERROR: &str = "error";
+
+#[derive(Clone)]
+struct AppState {
+    database: Option<PgPool>,
+    database_configured: bool,
+}
 
 #[derive(Serialize)]
 struct HealthBody {
@@ -49,7 +59,20 @@ async fn healthz() -> Json<HealthBody> {
     })
 }
 
-async fn readyz() -> impl IntoResponse {
+async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let database = match &state.database {
+        None if state.database_configured => DATABASE_ERROR,
+        None => NOT_CONFIGURED,
+        Some(pool) => match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sqlx::query("SELECT 1").execute(pool),
+        )
+        .await
+        {
+            Ok(Ok(_)) => PROCESS_OK,
+            Ok(Err(_)) | Err(_) => DATABASE_ERROR,
+        },
+    };
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(ReadinessBody {
@@ -57,7 +80,7 @@ async fn readyz() -> impl IntoResponse {
             version: version(),
             checks: ReadinessChecks {
                 process: PROCESS_OK,
-                database: NOT_CONFIGURED,
+                database,
                 git_storage: NOT_CONFIGURED,
             },
         }),
@@ -68,11 +91,12 @@ async fn version_endpoint() -> Json<VersionBody> {
     Json(VersionBody { version: version() })
 }
 
-fn app() -> Router {
+fn app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/version", get(version_endpoint))
+        .with_state(state)
         .layer(middleware::from_fn(with_app_version))
 }
 
@@ -97,6 +121,24 @@ async fn main() -> ExitCode {
         }
     };
 
+    let database = match config.database_url() {
+        Some(database_url) => match PgPoolOptions::new()
+            .max_connections(5)
+            .connect_lazy(database_url)
+        {
+            Ok(pool) => Some(pool),
+            Err(_) => {
+                tracing::error!("invalid PostgreSQL connection configuration");
+                None
+            }
+        },
+        None => None,
+    };
+    let state = Arc::new(AppState {
+        database,
+        database_configured: config.database_url().is_some(),
+    });
+
     let listener = match TcpListener::bind(config.bind()).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -111,7 +153,7 @@ async fn main() -> ExitCode {
         "musehub-server starting"
     );
 
-    if let Err(error) = axum::serve(listener, app()).await {
+    if let Err(error) = axum::serve(listener, app(state)).await {
         tracing::error!(error = %error, "musehub-server stopped with error");
         return ExitCode::FAILURE;
     }
@@ -138,11 +180,25 @@ mod tests {
     use tower::ServiceExt;
 
     async fn call(path: &str) -> (StatusCode, HeaderMap, Value) {
+        call_with_state(
+            path,
+            AppState {
+                database: None,
+                database_configured: false,
+            },
+        )
+        .await
+    }
+
+    async fn call_with_state(path: &str, state: AppState) -> (StatusCode, HeaderMap, Value) {
         let request = Request::builder()
             .uri(path)
             .body(Body::empty())
             .expect("build request");
-        let response = app().oneshot(request).await.expect("router response");
+        let response = app(Arc::new(state))
+            .oneshot(request)
+            .await
+            .expect("router response");
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = response
@@ -184,6 +240,21 @@ mod tests {
         assert_eq!(body["checks"]["database"], NOT_CONFIGURED);
         assert_eq!(body["checks"]["git_storage"], NOT_CONFIGURED);
         assert_eq!(header_version(&headers), Some(version()));
+    }
+
+    #[tokio::test]
+    async fn readyz_reports_database_error_when_configured_pool_is_unavailable() {
+        let (status, _, body) = call_with_state(
+            "/readyz",
+            AppState {
+                database: None,
+                database_configured: true,
+            },
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["checks"]["database"], DATABASE_ERROR);
+        assert_eq!(body["checks"]["git_storage"], NOT_CONFIGURED);
     }
 
     #[tokio::test]

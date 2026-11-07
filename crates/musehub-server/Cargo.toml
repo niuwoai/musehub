@@ -12,6 +12,7 @@ axum = { workspace = true }
 musehub-core = { path = "../musehub-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

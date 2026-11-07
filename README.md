@@ -65,7 +65,7 @@ musehub/
 
 ## 本地验证
 
-复制 `.env.example` 了解可选配置。当前服务只读取 `MUSEHUB_BIND`，默认 `127.0.0.1:8080`，启动时不连接数据库，也不执行 migration。
+复制 `.env.example` 了解可选配置。服务读取 `MUSEHUB_BIND`（默认 `127.0.0.1:8080`）和可选 `DATABASE_URL`（仅 PostgreSQL）。配置数据库后，`/readyz` 通过 `SELECT 1` 检查连接；未配置或连接异常时服务仍启动并报告未就绪。服务启动不执行 migration。
 
 ```sh
 cargo test --workspace
@@ -75,7 +75,7 @@ yarn --cwd web test
 yarn --cwd web build
 ```
 
-`/healthz` 只表示进程存活。数据库和 Git 存储尚未接入，所以 `/readyz` 返回 HTTP 503，不会把服务报告为就绪。
+`/healthz` 只表示进程存活。Git 存储尚未接入，因此即使 PostgreSQL 检查通过，`/readyz` 仍返回 HTTP 503。
 
 ## M0 进度
 

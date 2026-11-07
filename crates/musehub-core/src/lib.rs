@@ -9,6 +9,9 @@ const VERSION_SOURCE: &str = include_str!("../../../VERSION");
 /// Environment variable that holds the HTTP listen address.
 pub const BIND_ENV: &str = "MUSEHUB_BIND";
 
+/// Environment variable that holds the PostgreSQL connection URL.
+pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
+
 /// Listen address used when [`BIND_ENV`] is unset or blank.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
 
@@ -26,17 +29,31 @@ pub trait ErrorCode {
 }
 
 /// Process configuration derived from the environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     bind: SocketAddr,
+    database_url: Option<String>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("bind", &self.bind)
+            .field(
+                "database_url",
+                &self.database_url.as_ref().map(|_| "<configured>"),
+            )
+            .finish()
+    }
 }
 
 impl Config {
-    /// Reads [`BIND_ENV`] from the process environment.
+    /// Reads [`BIND_ENV`] and [`DATABASE_URL_ENV`] from the process environment.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let value = match std::env::var(BIND_ENV) {
-            Ok(value) => value,
-            Err(VarError::NotPresent) => return Self::from_bind_value(None),
+        let bind = match std::env::var(BIND_ENV) {
+            Ok(value) => Some(value),
+            Err(VarError::NotPresent) => None,
             Err(VarError::NotUnicode(_)) => {
                 return Err(ConfigError::InvalidBind {
                     value: "<non-unicode>".to_string(),
@@ -44,7 +61,16 @@ impl Config {
                 })
             }
         };
-        Self::from_bind_value(Some(&value))
+        let config = Self::from_bind_value(bind.as_deref())?;
+        let database_url = match std::env::var(DATABASE_URL_ENV) {
+            Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+            Ok(_) | Err(VarError::NotPresent) => None,
+            Err(VarError::NotUnicode(_)) => return Err(ConfigError::InvalidDatabaseUrl),
+        };
+        Ok(Self {
+            database_url,
+            ..config
+        })
     }
 
     /// Parses a listen address, falling back to [`DEFAULT_BIND`] when absent.
@@ -57,12 +83,20 @@ impl Config {
             value: raw.to_string(),
             reason: error.to_string(),
         })?;
-        Ok(Self { bind })
+        Ok(Self {
+            bind,
+            database_url: None,
+        })
     }
 
     /// The validated listen address.
-    pub fn bind(self) -> SocketAddr {
+    pub fn bind(&self) -> SocketAddr {
         self.bind
+    }
+
+    /// The configured PostgreSQL URL, if present.
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url.as_deref()
     }
 }
 
@@ -71,12 +105,14 @@ impl Config {
 pub enum ConfigError {
     #[error("invalid {BIND_ENV} value {value:?}: {reason}")]
     InvalidBind { value: String, reason: String },
+    #[error("{DATABASE_URL_ENV} must be valid unicode")]
+    InvalidDatabaseUrl,
 }
 
 impl ErrorCode for ConfigError {
     fn code(&self) -> &'static str {
         match self {
-            Self::InvalidBind { .. } => "invalid_config",
+            Self::InvalidBind { .. } | Self::InvalidDatabaseUrl => "invalid_config",
         }
     }
 }
