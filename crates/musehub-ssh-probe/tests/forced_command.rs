@@ -9,9 +9,8 @@ use musehub_ssh_probe::{probe, ProbeConfig, DEMO_UUID_PATH, SCOPE};
 
 #[test]
 fn forced_command_passes_server_identity_and_rejects_everything_else() {
-    let report = probe(&ProbeConfig::default()).unwrap_or_else(|error| {
-        panic!("ssh probe failed ({}): {error}", error.code())
-    });
+    let report = probe(&ProbeConfig::default())
+        .unwrap_or_else(|error| panic!("ssh probe failed ({}): {error}", error.code()));
 
     assert_eq!(report.scope, SCOPE);
     assert_eq!(report.scope, "linux_openssh_colima");

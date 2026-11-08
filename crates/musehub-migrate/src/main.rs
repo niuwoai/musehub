@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use musehub_core::ErrorCode;
-use musehub_migrate::{check_schema, connect, load_migrations, migrate_down, migrate_up, MigrateError};
+use musehub_migrate::{
+    check_schema, connect, load_migrations, migrate_down, migrate_up, MigrateError,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {

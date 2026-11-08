@@ -1,6 +1,6 @@
 {
   "name": "@musehub/web",
-  "version": "0.1.0-rc1",
+  "version": "0.1.0-rc2",
   "private": true,
   "type": "module",
   "resolutions": {

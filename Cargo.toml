@@ -8,6 +8,7 @@ members = [
     "crates/musehub-rootless-probe",
     "crates/musehub-ssh-probe",
     "crates/musehub-agent-probe",
+    "crates/musehub-mcp-probe",
     "crates/musehub-migrate",
     "crates/musehub-server",
 ]
@@ -23,3 +24,17 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+rmcp = { version = "=3.8.0", default-features = false, features = [
+    "server",
+    "client",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-child-process",
+    "transport-streamable-http-server",
+    "transport-streamable-http-client-reqwest",
+] }
+http = "1"
+bytes = "1"
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }

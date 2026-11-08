@@ -34,6 +34,7 @@
 | 首个 Agent 与模型组合 | 不指定获胜者，以协议、预算、取消、结果核验试验选定 | M0 |
 | Registry 与 Linux 目标主机 | 使用外部接口和测试 VM；不假定有生产授权 | M0 |
 | Rust/依赖具体版本 | 选稳定工具链、锁定 Cargo.lock，验证供应链与平台兼容 | M0 |
+| rmcp SDK 与 M0 客户端矩阵 | **已冻结** crate `rmcp = 3.8.0`；`musehub-mcp-probe` 用 stdio 子进程客户端 + Streamable HTTP reqwest 客户端实测（见 `docs/m0-rmcp-matrix.md`）；写工具幂等与 OAuth **未验证** | M0（生产 MCP 继续 M1+） |
 | 本地 PostgreSQL 队列性能 | 使用目标负载做竞争与恢复实验 | M0/M3 |
 | 企业登录/OAuth | 首版本地账户，OAuth MCP 后续单独验收 | 试点反馈后 |
 | 开源许可证与商业模式 | 尚未指定；此文档不赋予第三方代码使用权 | 首次公开源码前 |

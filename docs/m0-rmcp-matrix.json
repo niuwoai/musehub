@@ -1,0 +1,47 @@
+{
+  "rmcp_sdk_crate_version": "3.8.0",
+  "mcp_contract_version": 1,
+  "probe_scope": "m0_mcp_probe",
+  "supported_protocol_versions": ["2025-11-25", "2026-07-28"],
+  "write_idempotency_verified": false,
+  "m0_overall_passed": false,
+  "transports": [
+    {
+      "transport": "stdio",
+      "client_implementation": "musehub-mcp-matrix-stdio-client",
+      "negotiated_protocol": "<set by cargo test -p musehub-mcp-probe --test matrix>",
+      "tools_discovered": [
+        "musehub_capabilities_get",
+        "musehub_probe_echo",
+        "musehub_probe_error_sample"
+      ],
+      "checks": [
+        "capabilities_get",
+        "error_sample_envelope",
+        "initialize",
+        "invalid_echo_rejected",
+        "list_tools",
+        "probe_echo"
+      ]
+    },
+    {
+      "transport": "streamable_http",
+      "client_implementation": "musehub-mcp-matrix-http-client",
+      "negotiated_protocol": "<set by cargo test -p musehub-mcp-probe --test matrix>",
+      "tools_discovered": [
+        "musehub_capabilities_get",
+        "musehub_probe_echo",
+        "musehub_probe_error_sample"
+      ],
+      "checks": [
+        "bearer_auth_gate",
+        "capabilities_get",
+        "error_sample_envelope",
+        "initialize",
+        "invalid_echo_rejected",
+        "list_tools",
+        "probe_echo"
+      ]
+    }
+  ]
+}

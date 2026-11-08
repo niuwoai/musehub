@@ -1,8 +1,14 @@
 # Changelog
 
-## [Unreleased] — 0.1.0-rc1
+## [Unreleased] — 0.1.0-rc2
 
 开发中版本，不是产品发布。
+
+### Added
+
+- 新增 `musehub-mcp-probe`：基于 rmcp `3.8.0` 的 M0 stdio + Streamable HTTP 互操作探针；独立 stdio/HTTP 客户端矩阵测试与 `docs/m0-rmcp-matrix.*` 证据。
+
+## [0.1.0-rc1]
 
 ### Added
 
