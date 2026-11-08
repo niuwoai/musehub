@@ -1,46 +1,98 @@
 {
-  "rmcp_sdk_crate_version": "3.8.0",
-  "mcp_contract_version": 1,
   "probe_scope": "m0_mcp_probe",
+  "server_implementation": "musehub-mcp-probe",
+  "server_rmcp_version": "3.8.0",
+  "mcp_contract_version": 1,
   "supported_protocol_versions": ["2025-11-25", "2026-07-28"],
   "write_idempotency_verified": false,
+  "m0_mcp_interop_matrix_passed": true,
   "m0_overall_passed": false,
-  "transports": [
+  "verification": "cargo test -p musehub-mcp-probe --test matrix (requires python3 + pip3 network on first run)",
+  "clients": [
     {
-      "transport": "stdio",
-      "client_implementation": "musehub-mcp-matrix-stdio-client",
-      "negotiated_protocol": "<set by cargo test -p musehub-mcp-probe --test matrix>",
-      "tools_discovered": [
-        "musehub_capabilities_get",
-        "musehub_probe_echo",
-        "musehub_probe_error_sample"
-      ],
-      "checks": [
-        "capabilities_get",
-        "error_sample_envelope",
-        "initialize",
-        "invalid_echo_rejected",
-        "list_tools",
-        "probe_echo"
+      "client_implementation": "rust-rmcp",
+      "client_sdk_version": "3.8.0",
+      "client_name": "musehub-mcp-matrix-rust-rmcp",
+      "transports": [
+        {
+          "transport": "stdio",
+          "negotiated_protocol": "runtime: cargo test",
+          "tools_discovered": [
+            "musehub_capabilities_get",
+            "musehub_probe_echo",
+            "musehub_probe_error_sample"
+          ],
+          "checks": [
+            "capabilities_get",
+            "error_sample_envelope",
+            "initialize",
+            "invalid_echo_rejected",
+            "list_tools",
+            "probe_echo"
+          ]
+        },
+        {
+          "transport": "streamable_http",
+          "negotiated_protocol": "runtime: cargo test",
+          "tools_discovered": [
+            "musehub_capabilities_get",
+            "musehub_probe_echo",
+            "musehub_probe_error_sample"
+          ],
+          "checks": [
+            "bearer_auth_gate",
+            "capabilities_get",
+            "error_sample_envelope",
+            "initialize",
+            "invalid_echo_rejected",
+            "list_tools",
+            "probe_echo"
+          ]
+        }
       ]
     },
     {
-      "transport": "streamable_http",
-      "client_implementation": "musehub-mcp-matrix-http-client",
-      "negotiated_protocol": "<set by cargo test -p musehub-mcp-probe --test matrix>",
-      "tools_discovered": [
-        "musehub_capabilities_get",
-        "musehub_probe_echo",
-        "musehub_probe_error_sample"
-      ],
-      "checks": [
-        "bearer_auth_gate",
-        "capabilities_get",
-        "error_sample_envelope",
-        "initialize",
-        "invalid_echo_rejected",
-        "list_tools",
-        "probe_echo"
+      "client_implementation": "python-mcp-sdk",
+      "client_sdk_version": "2.3.0",
+      "client_name": "musehub-mcp-matrix-python",
+      "transports": [
+        {
+          "transport": "stdio",
+          "negotiated_protocol": "runtime: cargo test",
+          "tools_discovered": [
+            "musehub_capabilities_get",
+            "musehub_probe_echo",
+            "musehub_probe_error_sample"
+          ],
+          "checks": [
+            "capabilities_get",
+            "error_sample_envelope",
+            "initialize",
+            "invalid_echo_rejected",
+            "list_tools",
+            "probe_echo",
+            "unknown_tool_rejected"
+          ]
+        },
+        {
+          "transport": "streamable_http",
+          "negotiated_protocol": "runtime: cargo test",
+          "tools_discovered": [
+            "musehub_capabilities_get",
+            "musehub_probe_echo",
+            "musehub_probe_error_sample"
+          ],
+          "checks": [
+            "bearer_auth_gate",
+            "capabilities_get",
+            "error_sample_envelope",
+            "initialize",
+            "invalid_echo_rejected",
+            "list_tools",
+            "probe_echo",
+            "unknown_tool_rejected"
+          ]
+        }
       ]
     }
   ]

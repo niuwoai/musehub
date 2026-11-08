@@ -1,6 +1,6 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc2`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc3`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
@@ -94,7 +94,7 @@ yarn --cwd web build
 - Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
 - Colima Linux VM 内的临时 OpenSSH 验证 forced command：服务端注入身份，客户端不能覆盖；只接受明确的 `git-upload-pack` / `git-receive-pack` 与一个逻辑路径；两个主体并发时各自看到自己的身份；客户端提前断开后没有仓库文件或提交。没有执行真实 Git pack。
 - `musehub-migrate` 对隔离的 PostgreSQL 17 执行 `0001_common` 与 `0002_identity` 的 up、down、up。身份表具备 `created_at`、`updated_at` 与更新触发器，外键有前缀索引。Web 启动不迁移；仓库、Issue、流水线等其余表仍未落地。
-- `musehub-mcp-probe` 在 Linux 本地用 **两个独立客户端** 通过 rmcp `3.8.0` 验证：stdio 子进程客户端、`transport-streamable-http-client-reqwest` HTTP 客户端；覆盖协议协商、工具发现/调用、MuseHub 结构化信封、工具级错误样本，以及 HTTP `Bearer` 网关（见 `docs/m0-rmcp-matrix.md`）。这是 **M0 探针**，不是生产 `/mcp`；写工具幂等 **未验证**；OAuth MCP 不在范围内。
+- `musehub-mcp-probe` 在 Linux 本地用 **两种独立 SDK 客户端**（`rust-rmcp` 3.8.0 + 官方 Python `mcp` 2.3.0）各覆盖 stdio 与 Streamable HTTP；见 `docs/m0-rmcp-matrix.md`。这是 **M0 互操作探针**（`m0_mcp_interop_matrix_passed` 由 `cargo test -p musehub-mcp-probe --test matrix` 验证），不是生产 `/mcp`；写工具幂等 **未验证**；OAuth 不在范围。
 
 尚未完成，不能把 M0 标为通过：
 

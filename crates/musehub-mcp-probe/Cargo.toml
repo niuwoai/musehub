@@ -1,6 +1,6 @@
 [package]
 name = "musehub-mcp-probe"
-version = "0.1.0-rc2"
+version = "0.1.0-rc3"
 edition = "2021"
 description = "M0 rmcp stdio and Streamable HTTP interoperability probe for MuseHub"
 publish = false

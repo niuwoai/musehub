@@ -1,59 +1,64 @@
-# M0 rmcp 互操作矩阵
+# M0 rmcp 互操作矩阵（双 SDK）
 
-> 证据类型：`m0_mcp_probe`（**不是**生产 MCP 服务）｜rmcp crate **3.8.0**（锁定）｜开发版本 `0.1.0-rc2`｜**M0 整体仍未通过**
+> 证据 scope：`m0_mcp_probe`（**不是**生产 MCP）｜开发版本见根目录 `VERSION`｜**M0 整体仍未通过**（`m0_overall_passed: false`）
 
-## 范围
+## 开发计划对「两个客户端」的含义
 
-| 在范围内 | 不在范围内 |
-|---|---|
-| stdio 传输 + `TokioChildProcess` 客户端 | 生产 `musehub-server` `/mcp` 挂载 |
-| Streamable HTTP + `StreamableHttpClientTransport`（reqwest） | OAuth / 第三方 MCP 桌面客户端实测 |
-| 协议协商（`2025-11-25` / `2026-07-28` 候选） | 写工具 `idempotency_key` 幂等重放 |
-| 工具发现、`musehub_capabilities_get` / `musehub_probe_echo` / `musehub_probe_error_sample` | 完整 50 工具目录（MCP-IMP-02） |
-| MuseHub 结构化信封（`schema_version` + `request_id` + `data`/`error`） | 声明 M0 已通过 |
+`docs/05-development-plan.md` §4.5 与 §5「MCP 契约」层要求：**两个客户端实现**检查 rmcp/MCP 协议与 stdio、Streamable HTTP 接入；测试分层写明「Rust 客户端夹具 + **实际客户端**」。  
+因此矩阵必须包含 **至少两种不同实现**，不能在同一 SDK 内仅改 `clientInfo.name` 冒充两个客户端。
 
-两个客户端实现名称固定为：
+本矩阵固定为：
 
-- stdio：`musehub-mcp-matrix-stdio-client`
-- HTTP：`musehub-mcp-matrix-http-client`
+| 客户端实现 | SDK / 版本 | 客户端名 | stdio | Streamable HTTP |
+|---|---|---|---|---|
+| `rust-rmcp` | crates.io `rmcp` **3.8.0** | `musehub-mcp-matrix-rust-rmcp` | `TokioChildProcess` → 探针 stdio 二进制 | `StreamableHttpClientTransport` (reqwest) + Bearer |
+| `python-mcp-sdk` | PyPI `mcp` **2.3.0** | `musehub-mcp-matrix-python` | `StdioServerParameters` → 同一探针二进制 | `streamable_http_client` + `httpx2` Bearer |
 
-探针服务端标识：`musehub-mcp-probe`，scope 常量 `m0_mcp_probe`。
+共享探针服务端：`musehub-mcp-probe`（rmcp **3.8.0** 实现，非生产）。
 
-## 复现命令
-
-在仓库根目录（Rust stable ≥ 1.88，网络仅用于首次 `cargo` 依赖下载，**无模型/外部 API 费用**）：
+## 复现
 
 ```sh
+# 首次运行会通过 pip3 将 mcp==2.3.0 安装到 target/mcp-matrix-pydeps（需要网络，无付费 API）
 rustup run stable cargo test -p musehub-mcp-probe --test matrix
-rustup run stable cargo test -p musehub-mcp-probe
 ```
 
-手动启动 stdio 探针（供外部 MCP 客户端试用，非矩阵必需）：
+Python 依赖锁定：`crates/musehub-mcp-probe/python/requirements.txt`。
 
-```sh
-rustup run stable cargo run -p musehub-mcp-probe --bin musehub-mcp-probe-stdio
-```
+## 覆盖的检查项
 
-HTTP 探针 Bearer 由环境变量 `MUSEHUB_MCP_PROBE_BEARER` 配置（仅集成测试内置随机/固定值；生产策略未定义）。
+两种客户端在各自传输上均验证（若适用）：
+
+- 协议协商（`protocol_version` / `peer_info`）
+- `tools/list`
+- `musehub_capabilities_get`（结构化信封 + `probe_scope`）
+- `musehub_probe_echo` / 空参数拒绝
+- `musehub_probe_error_sample`（工具级 `is_error` + 领域错误信封）
+- HTTP：网关 **Bearer**；缺/错 token 不得完成握手（Rust + Python 各测一次）
+- Python 额外：`unknown_tool_rejected`（Rust 用独立测试覆盖）
+- Python Streamable HTTP 使用 `Client(..., mode="legacy")` 初始化；Rust 使用 `ClientLifecycleMode::Auto`——协商出的 `protocol_version` 以测试日志为准，可能同为 `2026-07-28` 或 `2025-11-25`。
 
 ## 机器可读摘要
 
-[`m0-rmcp-matrix.json`](./m0-rmcp-matrix.json) 与 `matrix.rs` 中的 `MatrixReport` 结构对齐。`negotiated_protocol` 字段在 JSON 中保留占位符；**实测协商版本以测试运行时 `peer_info` 为准**（随 rmcp 与客户端 lifecycle 可能为上表候选之一）。
+[`m0-rmcp-matrix.json`](./m0-rmcp-matrix.json) 描述静态契约；`negotiated_protocol` 以 **`cargo test` 运行时**为准（JSON 中标注 `runtime: cargo test`）。
 
-## 检查项
+| 字段 | 含义 |
+|---|---|
+| `m0_mcp_interop_matrix_passed` | **本互操作切片**在自动化测试下是否成立（双 SDK × 双传输） |
+| `m0_overall_passed` | 整个 M0 是否通过（仍为 **false**） |
+| `write_idempotency_verified` | **false** — 未测写工具幂等 |
 
-| 传输 | 客户端 | 检查 |
-|---|---|---|
-| stdio | 子进程 + rmcp client | initialize、list_tools、capabilities、echo、空参数拒绝、error_sample 信封 |
-| streamable_http | reqwest transport | 同上 + 缺/错 Bearer 在 MCP 握手前返回 401 |
+## 明确未覆盖
 
-## 未验证 / 失败声明
+- 生产 `/mcp`、完整工具目录、领域授权、写工具 `idempotency_key` 重放
+- OAuth / 桌面 MCP 宿主
+- 第三方闭源客户端未列入本矩阵
 
-- **写操作幂等**：`write_idempotency_verified: false`（无带 `idempotency_key` 的写工具）。
-- **OAuth MCP**：未实现、未测试。
-- **外部 MCP 客户端**（Cursor、Claude Desktop 等）：未列入本矩阵；需另行记录。
-- **`m0_overall_passed`：false** — Agent、多租户、竞品试用等 M0 项仍开放。
+## Git 标签说明
 
-## 变更记录
+远程仓库存在 tag **`v0.1.0-rc2`**（由前一迭代推送，指向该次提交）。**本轮验收修正不视为发布**：当前工作区版本为 `0.1.0-rc3`（`VERSION`），**本轮不推送新 tag**（除非维护者另行决定发布流程）。
 
-- 2026-11-08：初版矩阵与 `musehub-mcp-probe` crate 落地。
+## 变更
+
+- 2026-11-08：初版（仅双 rmcp 传输，已废止为不合格矩阵）
+- 2026-11-08：增补官方 Python `mcp==2.3.0` 客户端，重构 JSON 与测试
