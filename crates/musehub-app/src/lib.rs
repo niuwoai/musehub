@@ -75,8 +75,6 @@ pub struct AppState {
     pub require_pipeline_oci: bool,
     /// Request-scoped PAT for `/mcp` tools (set by MCP Bearer middleware).
     pub mcp_pat_slot: Arc<tokio::sync::RwLock<Option<pat_auth::PatContext>>>,
-    /// Streamable HTTP `mcp-session-id` → authenticated PAT (session follow-up POST/GET).
-    pub mcp_session_pats: Arc<tokio::sync::RwLock<std::collections::HashMap<String, pat_auth::PatContext>>>,
 }
 
 pub fn require_pipeline_oci_from_env() -> bool {

@@ -410,7 +410,14 @@ pub async fn deployment_start(
     environment_id: Uuid,
     release_id: Uuid,
 ) -> Result<Value, AppError> {
-    crate::deployment::mcp_start_deployment(state, access.org_id, access.repo_id, environment_id, release_id).await
+    crate::deployment::mcp_start_deployment(
+        state,
+        access.org_id,
+        access.repo_id,
+        environment_id,
+        release_id,
+    )
+    .await
 }
 
 pub fn repo_summary_json(

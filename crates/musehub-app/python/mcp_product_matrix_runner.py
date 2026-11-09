@@ -64,6 +64,7 @@ async def _main() -> None:
     from mcp import Client
     from mcp.client.streamable_http import streamable_http_client
 
+    # MCP Python SDK: default client headers apply to every POST/GET (incl. SSE), per streamable_http_client docs.
     async with httpx2.AsyncClient(
         headers={"Authorization": f"Bearer {args.bearer}"},
         timeout=httpx2.Timeout(30.0, read=300.0),
@@ -71,6 +72,7 @@ async def _main() -> None:
         transport = streamable_http_client(args.url, http_client=http_client)
         async with Client(transport, mode=PYTHON_HTTP_CLIENT_MODE) as client:
             out = await _exercise(client, args.org_id)
+    # MCP Python SDK: default client headers apply to every POST/GET (incl. SSE), per streamable_http_client docs.
     async with httpx2.AsyncClient(
         headers={"Authorization": f"Bearer {args.bearer}"},
         timeout=httpx2.Timeout(30.0, read=300.0),

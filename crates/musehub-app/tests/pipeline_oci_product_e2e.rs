@@ -36,6 +36,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     }
     std::env::set_var("MUSEHUB_REQUIRE_PIPELINE_OCI", "1");
     std::env::set_var("MUSEHUB_COMPOSE_ADAPTER_MODE", "runner");
+    std::env::set_var("MUSEHUB_MCP_PRODUCT", "1");
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().expect("git");
     let bootstrap = common::bootstrap_password();
@@ -480,4 +481,93 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         !gap_text.contains(&"mcp_production_not_wired"),
         "product MCP slice removes stale mcp_production_not_wired gap"
     );
+
+    let pat_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(r#"{"name":"mcp-oci","org":"demo"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let pat_json: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let mcp_token = pat_json["token"].as_str().unwrap();
+    let repo_uuid: (Uuid,) =
+        sqlx::query_as("SELECT id FROM repositories WHERE slug = 'oci-product'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let org_uuid: (Uuid,) = sqlx::query_as("SELECT id FROM organizations WHERE slug = 'demo'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    use http::HeaderValue;
+    use rmcp::{
+        model::CallToolRequestParams,
+        transport::{
+            streamable_http_client::StreamableHttpClientTransportConfig,
+            StreamableHttpClientTransport,
+        },
+        ClientLifecycleMode, ClientServiceExt,
+    };
+    use std::collections::HashMap;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = app.clone();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let mut headers = HashMap::new();
+    headers.insert(
+        http::HeaderName::from_static("authorization"),
+        HeaderValue::from_str(&format!("Bearer {mcp_token}")).unwrap(),
+    );
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
+            .custom_headers(headers),
+    );
+    let mcp_client = rmcp::model::ClientConfig::default()
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(rmcp::model::ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("mcp");
+    let trace_mcp = mcp_client
+        .call_tool(
+            CallToolRequestParams::new("musehub_deployment_trace").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("org_id".into(), serde_json::json!(org_uuid.0.to_string()));
+                m.insert(
+                    "repository_id".into(),
+                    serde_json::json!(repo_uuid.0.to_string()),
+                );
+                m.insert("deployment_id".into(), serde_json::json!(deployment_id));
+                m
+            }),
+        )
+        .await
+        .expect("mcp trace");
+    assert!(!trace_mcp.is_error.unwrap_or(true));
+    let gaps_mcp = trace_mcp
+        .structured_content
+        .as_ref()
+        .and_then(|v| v.get("data"))
+        .and_then(|d| d.get("gaps"));
+    assert!(gaps_mcp.is_some());
+    let prompts = mcp_client.list_prompts(None).await.expect("prompts");
+    assert!(!prompts.prompts.is_empty());
+    let resources = mcp_client.list_resources(None).await.expect("resources");
+    assert!(!resources.resources.is_empty());
+    mcp_client.cancel().await.ok();
 }

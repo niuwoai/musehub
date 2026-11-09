@@ -17,8 +17,6 @@ use crate::pat_auth;
 use crate::pat_policy;
 use crate::AppState;
 
-pub const MCP_SESSION_HEADER: &str = "mcp-session-id";
-
 pub fn parse_bearer_token(authorization_header: Option<&str>) -> Option<&str> {
     authorization_header?
         .strip_prefix("Bearer ")
@@ -31,7 +29,7 @@ pub fn product_mcp_router(state: Arc<AppState>, cancel: CancellationToken) -> Ro
         move || Ok(ProductionMcpServer::new(state_for_service.clone())),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(true)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_cancellation_token(cancel),
     );
@@ -41,6 +39,8 @@ pub fn product_mcp_router(state: Arc<AppState>, cancel: CancellationToken) -> Ro
         .layer(middleware::from_fn_with_state(state, require_pat_for_mcp))
 }
 
+/// Every MCP HTTP request (except CORS preflight) must present a valid PAT Bearer token.
+/// `mcp-session-id` is transport routing only; it is never accepted without Bearer.
 async fn require_pat_for_mcp(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -56,56 +56,20 @@ async fn require_pat_for_mcp(
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    let session_id = request
-        .headers()
-        .get(MCP_SESSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(|s| s.to_string());
-    let pat = if let Some(token) = parse_bearer_token(header) {
-        let pat = pat_auth::authenticate_pat_context(&state.pool, token)
-            .await
-            .map_err(|_| StatusCode::UNAUTHORIZED)?;
-        if pat_policy::is_runner_only_pat(&pat.scopes) {
-            return Err(StatusCode::FORBIDDEN);
-        }
-        if let Some(ref sid) = session_id {
-            state
-                .mcp_session_pats
-                .write()
-                .await
-                .insert(sid.clone(), pat.clone());
-        }
-        pat
-    } else if let Some(ref sid) = session_id {
-        state
-            .mcp_session_pats
-            .read()
-            .await
-            .get(sid)
-            .cloned()
-            .ok_or(StatusCode::UNAUTHORIZED)?
-    } else {
+    let Some(token) = parse_bearer_token(header) else {
         return Err(StatusCode::UNAUTHORIZED);
     };
+    let pat = pat_auth::authenticate_pat_context(&state.pool, token)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    if pat_policy::is_runner_only_pat(&pat.scopes) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     {
         let mut guard = state.mcp_pat_slot.write().await;
         *guard = Some(pat);
     }
-    let response = next.run(request).await;
-    if let Some(sid) = response
-        .headers()
-        .get(MCP_SESSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-    {
-        if let Some(pat) = state.mcp_pat_slot.read().await.clone() {
-            state
-                .mcp_session_pats
-                .write()
-                .await
-                .insert(sid.to_string(), pat);
-        }
-    }
-    Ok(response)
+    Ok(next.run(request).await)
 }
 
 pub fn merge_product_mcp(api: Router, state: Arc<AppState>) -> Router {

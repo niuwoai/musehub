@@ -7,6 +7,8 @@ pub mod envelope;
 mod http;
 mod idempotency;
 mod pagination;
+mod prompts;
+mod resources;
 mod server;
 
 pub use capabilities::IMPLEMENTED_TOOLS;
@@ -34,5 +36,17 @@ mod tests {
     fn parse_bearer_requires_prefix() {
         assert_eq!(parse_bearer_token(Some("Bearer mhp_x")), Some("mhp_x"));
         assert_eq!(parse_bearer_token(Some("Basic x")), None);
+    }
+
+    #[test]
+    fn repo_cursor_roundtrip() {
+        use time::OffsetDateTime;
+        let ts = OffsetDateTime::now_utc();
+        let id = uuid::Uuid::new_v4();
+        let c = pagination::encode_repo_cursor(ts, id);
+        let (ts2, id2) = pagination::decode_repo_cursor(&c).expect("decode");
+        assert_eq!(id, id2);
+        assert_eq!(ts, ts2);
+        assert!(pagination::decode_repo_cursor("bad").is_err());
     }
 }

@@ -20,7 +20,7 @@
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
 | DEP-COMPOSE | `[x]` 产品路径 | `musehub-pipeline-oci` → `artifacts.oci_image_ref` 自动绑定 publish → API `compose-runner` 校验 `verified_source_oid`/`applied_oci_digest`；`verify-pipeline-oci-product-e2e.sh` 双 digest；`compose-runner-e2e` 仍为 runner 隔离探针 |
 | OPS-01 | `[x]` | backup：`main` OID + artifact SHA（`verify-backup-restore.sh`） |
-| IAM/PIPE/AGT | `[~]` | 生产 MCP：`m1_product_mcp` 部分工具（含 `musehub_pipeline_run` / `musehub_deployment_start` 写工具、仓库 list 游标）+ `mcp_idempotency_records` 写幂等；CI 矩阵 **Rust rmcp + 官方 Python `mcp` 2.3** 直连同一产品 `/mcp`（`production_mcp_matrix`，非 M0 probe 替代）；Streamable HTTP 会话 `mcp-session-id` PAT 绑定 + legacy session；V1 **PAT Bearer**（`remote_oauth_v1: false`）；Codex：`/adapters/codex/{status,task}` sim/可选 live（`online_verified` 无 CI 证据） |
+| IAM/PIPE/AGT | `[~]` | 生产 MCP：Bearer **每次 HTTP 必验**（`mcp-session-id` 非凭据、无 PAT 内存映射）；部分工具 + Resources/Prompts §13；`production_mcp_*` + Python 矩阵（`spawn_blocking` 子进程）；`pipeline_oci_product_e2e` 内 MCP trace/resources/prompts；V1 PAT Bearer；Codex sim 默认 + `codex_adapter_e2e` |
 
 ## 未验证边界
 

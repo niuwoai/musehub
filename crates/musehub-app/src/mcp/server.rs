@@ -3,14 +3,18 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use crate::mcp::prompts;
+use crate::mcp::resources;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters, ServerHandler},
     model::{
-        CallToolResult, ErrorData, Implementation, ProtocolVersion, ServerCapabilities,
-        ServerConfig,
+        CallToolResult, ErrorData, GetPromptRequestParams, GetPromptResponse, Implementation,
+        ListPromptsResult, ListResourcesResult, PaginatedRequestParams, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
     },
     schemars::JsonSchema,
-    tool, tool_handler, tool_router,
+    service::RequestContext,
+    tool, tool_handler, tool_router, RoleServer,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -23,11 +27,11 @@ use crate::mcp::domain::{
     agent_run_cancel, agent_run_start, deployment_start, issue_create, pipeline_run, plan_accept,
     plan_create, pr_review, repo_summary_json,
 };
-use crate::mcp::pagination;
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
     begin_idempotent_write, complete_idempotent_write, fail_idempotent_write, IdempotencyAction,
 };
+use crate::mcp::pagination;
 use crate::AppState;
 
 const READ_SCOPE: &str = "repo:read";
@@ -293,7 +297,13 @@ fn envelope_value(envelope: &ToolEnvelope) -> Value {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ProductionMcpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
+        )
             .with_server_info(Implementation::new(
                 "musehub-mcp-product",
                 env!("CARGO_PKG_VERSION"),
@@ -305,6 +315,41 @@ impl ServerHandler for ProductionMcpServer {
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(&[ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2026_07_28])
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        Ok(resources::list_static_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        resources::read_resource(&self.state, request.uri.as_str()).await
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        Ok(prompts::list_prompts())
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        prompts::get_prompt(request.name.as_str())
     }
 }
 
@@ -1096,7 +1141,10 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
-        let _src = input.workflow_source_oid.as_deref().unwrap_or(&input.target_oid);
+        let _src = input
+            .workflow_source_oid
+            .as_deref()
+            .unwrap_or(&input.target_oid);
         match pipeline_run(
             &self.state,
             &access,
@@ -1162,9 +1210,7 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
-        match deployment_start(&self.state, &access, environment_id, release_id)
-        .await
-        {
+        match deployment_start(&self.state, &access, environment_id, release_id).await {
             Ok(data) => {
                 let stored = envelope_value(&ToolEnvelope::success(data));
                 let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;

@@ -115,7 +115,7 @@ pub(crate) async fn mcp_start_deployment(
         environment_slug: Some(env_slug),
         health_target: None,
     };
-  let (status, Json(view)) = start_deployment_inner(state, org_id, repo_id, body).await?;
+    let (status, Json(view)) = start_deployment_inner(state, org_id, repo_id, body).await?;
     Ok(serde_json::json!({
         "id": view.id.to_string(),
         "release_id": view.release_id.to_string(),

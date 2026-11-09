@@ -164,7 +164,8 @@ async fn product_mcp_python_streamable_http_matrix() {
     }
 
     let fx = product_mcp_fixture().await;
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/mcp_product_matrix_runner.py");
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/mcp_product_matrix_runner.py");
     let pydeps = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps");
     let url = fx.base_url.clone();
     let bearer = fx.bearer.clone();

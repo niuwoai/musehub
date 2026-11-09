@@ -193,6 +193,5 @@ pub async fn build_product_state(
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
         require_pipeline_oci: musehub_app::require_pipeline_oci_from_env(),
         mcp_pat_slot: Arc::new(tokio::sync::RwLock::new(None)),
-        mcp_session_pats: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     }))
 }
