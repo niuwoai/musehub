@@ -421,10 +421,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     assert!(health["applied_oci_digest"]
         .as_str()
         .is_some_and(|d| d.starts_with("sha256:")));
-    assert_eq!(
-        health["verified_source_oid"].as_str(),
-        Some(merge_commit.as_str())
-    );
+    assert_eq!(health["verified_source_oid"].as_str().unwrap(), merge_commit);
     let deployment_id = dep["id"].as_str().unwrap();
 
     let trace: serde_json::Value = serde_json::from_slice(
