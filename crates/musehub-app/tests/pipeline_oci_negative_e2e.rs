@@ -4,7 +4,6 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 

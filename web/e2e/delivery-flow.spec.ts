@@ -144,9 +144,11 @@ test.describe('delivery chain browser flow', () => {
     await expect(deliveryPanel).toBeVisible()
     await expect(deliveryPanel).toContainText(/main @/, { timeout: 15_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
+    const pipelineTimeout = productOci ? 300_000 : 120_000
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
-      timeout: 120_000,
+      timeout: pipelineTimeout,
     })
+    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
     const releaseDeploy = page.getByRole('button', { name: /release.*mock|mock 部署/i })
     await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
     await releaseDeploy.click()

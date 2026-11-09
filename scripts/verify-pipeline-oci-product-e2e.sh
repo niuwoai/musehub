@@ -29,7 +29,7 @@ git -C "$WORKDIR" config user.name ci
 echo v1 >"$WORKDIR/README"
 git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -q -m v1
 OID1=$(git -C "$WORKDIR" rev-parse HEAD)
-git -C "$WORKDIR" push -q "$TMP/bare.git" HEAD:main
+git -C "$WORKDIR" push -q "$TMP/bare.git" HEAD:refs/heads/main
 build_oid() {
   local oid=$1
   local out run_id repo_id
@@ -53,6 +53,7 @@ REF1=$(build_oid "$OID1")
 echo v2 >"$WORKDIR/README"
 git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -q -m v2
 OID2=$(git -C "$WORKDIR" rev-parse HEAD)
+git -C "$WORKDIR" push -q "$TMP/bare.git" HEAD:refs/heads/main
 REF2=$(build_oid "$OID2")
 [[ -n "$REF1" && -n "$REF2" ]] || { echo "failed to resolve oci refs" >&2; exit 1; }
 [[ "$REF1" != "$REF2" ]] || { echo "expected distinct digests got $REF1" >&2; exit 1; }
