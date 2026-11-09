@@ -84,6 +84,9 @@ jobs:
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_e2e -- --test-threads=1
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_security_e2e -- --test-threads=1
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_matrix -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_auth_http_e2e -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_validation_e2e -- --test-threads=1
+          cargo test -p musehub-app --test codex_adapter_e2e -- --test-threads=1
           cargo test -p musehub-mcp-probe --test matrix python_mcp_sdk -- --test-threads=1
 
   pipeline-oci-product:

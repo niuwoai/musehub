@@ -13,7 +13,8 @@ PYTHON_MCP_SDK_VERSION = "2.3.0"
 CLIENT_NAME = "musehub-product-mcp-matrix-python"
 PRODUCT_SCOPE = "m1_product_mcp"
 MCP_CONTRACT_VERSION = 1
-PYTHON_HTTP_CLIENT_MODE = "legacy"
+# Match rust-rmcp matrix: auto negotiates modern Streamable HTTP then legacy initialize.
+PYTHON_HTTP_CLIENT_MODE = "auto"
 
 
 async def _exercise(client: Any, org_id: str) -> dict[str, Any]:
@@ -63,6 +64,7 @@ async def _main() -> None:
     from mcp import Client
     from mcp.client.streamable_http import streamable_http_client
 
+    # MCP Python SDK: default client headers apply to every POST/GET (incl. SSE), per streamable_http_client docs.
     async with httpx2.AsyncClient(
         headers={"Authorization": f"Bearer {args.bearer}"},
         timeout=httpx2.Timeout(30.0, read=300.0),
@@ -70,6 +72,15 @@ async def _main() -> None:
         transport = streamable_http_client(args.url, http_client=http_client)
         async with Client(transport, mode=PYTHON_HTTP_CLIENT_MODE) as client:
             out = await _exercise(client, args.org_id)
+    # MCP Python SDK: default client headers apply to every POST/GET (incl. SSE), per streamable_http_client docs.
+    async with httpx2.AsyncClient(
+        headers={"Authorization": f"Bearer {args.bearer}"},
+        timeout=httpx2.Timeout(30.0, read=300.0),
+    ) as http_client:
+        transport = streamable_http_client(args.url, http_client=http_client)
+        async with Client(transport, mode=PYTHON_HTTP_CLIENT_MODE) as client:
+            await client.list_tools()
+            out.setdefault("checks_passed", []).append("session_reconnect")
             print(json.dumps(out))
 
 

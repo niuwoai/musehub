@@ -3,14 +3,18 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use crate::mcp::prompts;
+use crate::mcp::resources;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters, ServerHandler},
     model::{
-        CallToolResult, ErrorData, Implementation, ProtocolVersion, ServerCapabilities,
-        ServerConfig,
+        CallToolResult, ErrorData, GetPromptRequestParams, GetPromptResponse, Implementation,
+        ListPromptsResult, ListResourcesResult, PaginatedRequestParams, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
     },
     schemars::JsonSchema,
-    tool, tool_handler, tool_router,
+    service::RequestContext,
+    tool, tool_handler, tool_router, RoleServer,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -20,13 +24,14 @@ use crate::error::AppError;
 use crate::mcp::auth::{self, deny_runner_only_pat, require_scope, resolve_repo};
 use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
-    agent_run_cancel, agent_run_start, issue_create, plan_accept, plan_create, pr_review,
-    repo_summary_json,
+    agent_run_cancel, agent_run_start, deployment_start, issue_create, pipeline_run, plan_accept,
+    plan_create, pr_review, repo_summary_json,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
     begin_idempotent_write, complete_idempotent_write, fail_idempotent_write, IdempotencyAction,
 };
+use crate::mcp::pagination;
 use crate::AppState;
 
 const READ_SCOPE: &str = "repo:read";
@@ -183,6 +188,30 @@ struct AgentRunCancelInput {
     idempotency_key: String,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PipelineRunInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    workflow_path: String,
+    #[serde(default)]
+    workflow_source_oid: Option<String>,
+    target_oid: String,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DeploymentStartInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    environment_id: String,
+    release_id: String,
+    #[serde(default)]
+    expected_environment_version: Option<i64>,
+    #[serde(default)]
+    config_version: Option<i64>,
+    idempotency_key: String,
+}
+
 fn app_error_to_mcp(err: AppError) -> ErrorData {
     match err {
         AppError::Unauthorized => ErrorData::invalid_request("unauthorized", None),
@@ -207,10 +236,10 @@ fn page_limit(limit: Option<u32>) -> i64 {
     }
 }
 
-fn page_meta(has_more: bool) -> Value {
+fn page_meta(has_more: bool, next_cursor: Option<String>) -> Value {
     json!({
         "has_more": has_more,
-        "next_cursor": null
+        "next_cursor": next_cursor
     })
 }
 
@@ -268,7 +297,13 @@ fn envelope_value(envelope: &ToolEnvelope) -> Value {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ProductionMcpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
+        )
             .with_server_info(Implementation::new(
                 "musehub-mcp-product",
                 env!("CARGO_PKG_VERSION"),
@@ -280,6 +315,41 @@ impl ServerHandler for ProductionMcpServer {
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(&[ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2026_07_28])
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        Ok(resources::list_static_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        resources::read_resource(&self.state, request.uri.as_str()).await
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        Ok(prompts::list_prompts())
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let _ = pat_context(&self.state).await?;
+        prompts::get_prompt(request.name.as_str())
     }
 }
 
@@ -330,25 +400,52 @@ impl ProductionMcpServer {
             .map_err(|e| app_error_to_mcp(e.into()))?
             .ok_or_else(|| app_error_to_mcp(AppError::NotFound))?;
         let limit = page_limit(input.page.limit);
-        let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-            "SELECT r.id, r.slug, r.state FROM repositories r
-             WHERE r.org_id = $1 ORDER BY r.created_at LIMIT $2",
-        )
-        .bind(org_id)
-        .bind(limit)
-        .fetch_all(&self.state.pool)
-        .await
+        let after = match input.page.cursor.as_deref() {
+            Some(c) => Some(pagination::decode_repo_cursor(c).map_err(app_error_to_mcp)?),
+            None => None,
+        };
+        let fetch_limit = limit + 1;
+        let rows = if let Some((created_at, repo_id)) = after {
+            sqlx::query_as::<_, (Uuid, String, String, time::OffsetDateTime)>(
+                "SELECT r.id, r.slug, r.state, r.created_at FROM repositories r
+                 WHERE r.org_id = $1
+                   AND (r.created_at > $2 OR (r.created_at = $2 AND r.id > $3))
+                 ORDER BY r.created_at, r.id LIMIT $4",
+            )
+            .bind(org_id)
+            .bind(created_at)
+            .bind(repo_id)
+            .bind(fetch_limit)
+            .fetch_all(&self.state.pool)
+            .await
+        } else {
+            sqlx::query_as::<_, (Uuid, String, String, time::OffsetDateTime)>(
+                "SELECT r.id, r.slug, r.state, r.created_at FROM repositories r
+                 WHERE r.org_id = $1 ORDER BY r.created_at, r.id LIMIT $2",
+            )
+            .bind(org_id)
+            .bind(fetch_limit)
+            .fetch_all(&self.state.pool)
+            .await
+        }
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let has_more = rows.len() as i64 == limit;
+        let has_more = rows.len() as i64 > limit;
+        let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|(id, _, _, created_at)| pagination::encode_repo_cursor(*created_at, *id))
+        } else {
+            None
+        };
         let items: Vec<Value> = rows
             .into_iter()
-            .map(|(id, slug, state)| {
+            .map(|(id, slug, state, _)| {
                 repo_summary_json(&self.state.bind_display, &org_slug.0, id, &slug, &state)
             })
             .collect();
         Ok(domain_ok_page(
             json!({ "items": items }),
-            page_meta(has_more),
+            page_meta(has_more, next_cursor),
         ))
     }
 
@@ -433,7 +530,7 @@ impl ProductionMcpServer {
             .collect();
         Ok(domain_ok_page(
             json!({ "items": items }),
-            page_meta(has_more),
+            page_meta(has_more, None),
         ))
     }
 
@@ -994,6 +1091,129 @@ impl ProductionMcpServer {
                 let _ =
                     complete_idempotent_write(&self.state.pool, record_id, &stored, Some(run_id))
                         .await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_pipeline_run",
+        description = "Start a release pipeline run on the current main tip",
+        annotations(idempotent_hint = true, destructive_hint = true)
+    )]
+    async fn musehub_pipeline_run(
+        &self,
+        Parameters(input): Parameters<PipelineRunInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "workflow_path": input.workflow_path,
+            "target_oid": input.target_oid,
+            "workflow_source_oid": input.workflow_source_oid,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_pipeline_run",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let _src = input
+            .workflow_source_oid
+            .as_deref()
+            .unwrap_or(&input.target_oid);
+        match pipeline_run(
+            &self.state,
+            &access,
+            pat.principal_id,
+            &input.workflow_path,
+            &input.target_oid,
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_deployment_start",
+        description = "Start a deployment for a published release",
+        annotations(idempotent_hint = true, destructive_hint = true)
+    )]
+    async fn musehub_deployment_start(
+        &self,
+        Parameters(input): Parameters<DeploymentStartInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let environment_id = parse_uuid("environment_id", &input.environment_id)?;
+        let release_id = parse_uuid("release_id", &input.release_id)?;
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "environment_id": input.environment_id,
+            "release_id": input.release_id,
+            "expected_environment_version": input.expected_environment_version,
+            "config_version": input.config_version,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_deployment_start",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        match deployment_start(&self.state, &access, environment_id, release_id).await {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
                 Ok(CallToolResult::structured(stored))
             }
             Err(e) => {

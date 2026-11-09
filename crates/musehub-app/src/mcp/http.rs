@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{header::AUTHORIZATION, Method, StatusCode},
     middleware::{self, Next},
     response::Response,
     Router,
@@ -39,12 +39,17 @@ pub fn product_mcp_router(state: Arc<AppState>, cancel: CancellationToken) -> Ro
         .layer(middleware::from_fn_with_state(state, require_pat_for_mcp))
 }
 
+/// Every MCP HTTP request (except CORS preflight) must present a valid PAT Bearer token.
+/// `mcp-session-id` is transport routing only; it is never accepted without Bearer.
 async fn require_pat_for_mcp(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     if !request.uri().path().starts_with("/mcp") {
+        return Ok(next.run(request).await);
+    }
+    if request.method() == Method::OPTIONS {
         return Ok(next.run(request).await);
     }
     let header = request
@@ -64,8 +69,6 @@ async fn require_pat_for_mcp(
         let mut guard = state.mcp_pat_slot.write().await;
         *guard = Some(pat);
     }
-    // Streamable HTTP may perform multiple tool calls per Bearer session; do not clear PAT until
-    // a new authenticated request replaces it (same domain principal as REST, not OAuth).
     Ok(next.run(request).await)
 }
 

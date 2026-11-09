@@ -20,7 +20,9 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     "musehub_agent_run_get",
     "musehub_agent_run_start",
     "musehub_agent_run_cancel",
+    "musehub_pipeline_run",
     "musehub_release_get",
+    "musehub_deployment_start",
     "musehub_deployment_get",
     "musehub_deployment_trace",
 ];
@@ -32,6 +34,8 @@ pub const WRITE_IDEMPOTENCY_TOOLS: &[&str] = &[
     "musehub_pr_review",
     "musehub_agent_run_start",
     "musehub_agent_run_cancel",
+    "musehub_pipeline_run",
+    "musehub_deployment_start",
 ];
 
 pub fn capability_payload() -> Value {
