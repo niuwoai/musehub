@@ -142,21 +142,24 @@ pub async fn build_product_state(
     bootstrap_password: Option<&str>,
 ) -> Result<Arc<ProductState>, Box<dyn std::error::Error + Send + Sync>> {
     prepare(pool.clone(), git_root.clone(), bootstrap_password).await?;
-    let reference_adapter_bin = std::env::var("CARGO_BIN_EXE_musehub-agent-reference")
+    let reference_adapter_bin = std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-agent-reference"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             std::env::current_dir()
                 .unwrap_or_default()
                 .join("target/debug/musehub-agent-reference")
         });
-    let pipeline_adapter_bin = std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference")
+    let pipeline_adapter_bin = std::env::var("MUSEHUB_PIPELINE_ADAPTER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             std::env::current_dir()
                 .unwrap_or_default()
                 .join("target/debug/musehub-pipeline-reference")
         });
-    let compose_adapter_bin = std::env::var("CARGO_BIN_EXE_musehub-compose-mock")
+    let compose_adapter_bin = std::env::var("MUSEHUB_COMPOSE_ADAPTER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-mock"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             std::env::current_dir()

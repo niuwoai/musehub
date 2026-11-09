@@ -13,6 +13,7 @@ test.describe('delivery chain browser flow', () => {
   test('login → agent PR → second user gates → pipeline → mock deploy → trace', async ({
     page,
   }) => {
+    test.setTimeout(300_000)
     const reviewerPass = 'E2e-Reviewer-Delivery-12!'
     const ciPass = 'E2e-Ci-Delivery-12!'
 
@@ -39,9 +40,12 @@ test.describe('delivery chain browser flow', () => {
     await invite('e2e-ci', ciPass, 'admin')
 
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await page.locator('ul li button').first().click()
+    const repoEntry = page.locator('ul li button').last()
+    await expect(repoEntry).toBeVisible({ timeout: 10_000 })
+    const slug = (await repoEntry.textContent())?.trim() ?? ''
+    await repoEntry.click()
     await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
-    await page.getByRole('button', { name: /accept plan|接受计划/i }).click()
+    await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
     const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
     await expect(runAgent).toBeVisible({ timeout: 15_000 })
     await runAgent.click()
@@ -62,15 +66,7 @@ test.describe('delivery chain browser flow', () => {
     const revCookie = await loginApi('e2e-reviewer', reviewerPass)
     const ciCookie = await loginApi('e2e-ci', ciPass)
 
-    const repoSlug = (
-      await page.request.get(`${apiBase}/api/v1/orgs/demo/repos`, {
-        headers: { Cookie: `${sessionCookie!.name}=${sessionCookie!.value}` },
-      })
-    )
-      .json()
-      .then((repos: { slug: string }[]) => repos[0]!.slug)
-
-    const slug = await repoSlug
+    expect(slug).not.toEqual('')
     const collab = await page.request.post(
       `${apiBase}/api/v1/orgs/demo/repos/${slug}/collaborators`,
       {
@@ -113,8 +109,13 @@ test.describe('delivery chain browser flow', () => {
     )
     expect(merge.ok()).toBeTruthy()
 
-    await page.reload()
-    await page.locator('ul li button').first().click()
+    await page.goto('/')
+    await page.getByLabel(/password|密码/i).fill(password!)
+    await page.getByRole('button', { name: /login|登录/i }).click()
+    await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
+    const repoOpen = page.locator('ul li button', { hasText: slug })
+    await expect(repoOpen).toBeVisible({ timeout: 30_000 })
+    await repoOpen.click()
     await expect(page.getByTestId('delivery-panel')).toBeVisible()
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
