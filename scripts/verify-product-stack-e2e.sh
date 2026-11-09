@@ -56,7 +56,7 @@ export POSTGRES_PASSWORD SESSION_SECRET BOOTSTRAP_PW MUSEHUB_GATEWAY_HTTP_PORT
 
 cleanup() {
   dc down -v --remove-orphans 2>/dev/null || true
-  rm -f "$ENV_FILE" "$CADDY_CI_HOST" "$COMPOSE_CI_EXTRA"
+  rm -f "$ENV_FILE" "${CADDY_CI_HOST:-}" "${COMPOSE_CI_EXTRA:-}"
 }
 trap cleanup EXIT
 
