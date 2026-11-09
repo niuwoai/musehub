@@ -4,6 +4,7 @@ on:
   push:
     branches: [develop, main, "cursor/**"]
   pull_request:
+    # Stacked PRs often target another feature branch; still run CI on those heads.
     branches: [develop, main, "cursor/**"]
 
 permissions:
@@ -30,6 +31,7 @@ jobs:
       DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
+      MUSEHUB_ARTIFACT_ROOT: /tmp/musehub-ci-artifacts
       MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
       MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
       RUST_BACKTRACE: 1
@@ -53,6 +55,8 @@ jobs:
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
       - name: product acceptance
@@ -68,6 +72,10 @@ jobs:
           cargo test -p musehub-app --test pr_security_e2e -- --test-threads=1
           cargo test -p musehub-app --test agent_budget -- --test-threads=1
           cargo test -p musehub-app --test pat_scope -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_delivery_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_security_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_runner_pat_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_cancel_e2e -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
@@ -100,9 +108,11 @@ jobs:
       - run: yarn --cwd web install --frozen-lockfile
       - name: install Playwright Chromium (with OS deps)
         run: yarn --cwd web exec playwright install --with-deps chromium
-      - name: build server + reference agent for browser E2E
+      - name: build adapter binaries for server E2E
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
           cargo build -p musehub-server -q
       - run: yarn --cwd web test
       - run: yarn --cwd web build

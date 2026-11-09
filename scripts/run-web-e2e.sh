@@ -14,15 +14,31 @@ mkdir -p "$MUSEHUB_GIT_ROOT"
 cargo run -p musehub-migrate -- down migrations "$DATABASE_URL" || true
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
 cargo build -p musehub-server -q
 
+export MUSEHUB_ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-/tmp/musehub-e2e-artifacts}"
+mkdir -p "$MUSEHUB_ARTIFACT_ROOT"
+MUSEHUB_REFERENCE_ADAPTER_BIN="$PWD/target/debug/musehub-agent-reference"
+MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-reference"
+MUSEHUB_COMPOSE_ADAPTER_BIN="$PWD/target/debug/musehub-compose-mock"
+for bin in "$MUSEHUB_REFERENCE_ADAPTER_BIN" "$MUSEHUB_PIPELINE_ADAPTER_BIN" "$MUSEHUB_COMPOSE_ADAPTER_BIN"; do
+  test -x "$bin" || { echo "missing adapter binary: $bin" >&2; exit 1; }
+done
+
 SESSION_NAME="musehub-e2e-server"
+fuser -k 8080/tcp 2>/dev/null || true
 tmux -f /exec-daemon/tmux.portal.conf kill-session -t "=$SESSION_NAME" 2>/dev/null || true
 tmux -f /exec-daemon/tmux.portal.conf new-session -d -s "$SESSION_NAME" -c "$PWD" -- \
   env DATABASE_URL="$DATABASE_URL" \
   MUSEHUB_GIT_ROOT="$MUSEHUB_GIT_ROOT" \
+  MUSEHUB_ARTIFACT_ROOT="$MUSEHUB_ARTIFACT_ROOT" \
   MUSEHUB_SESSION_SECRET="$MUSEHUB_SESSION_SECRET" \
   MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD" \
+  MUSEHUB_REFERENCE_ADAPTER_BIN="$MUSEHUB_REFERENCE_ADAPTER_BIN" \
+  MUSEHUB_PIPELINE_ADAPTER_BIN="$MUSEHUB_PIPELINE_ADAPTER_BIN" \
+  MUSEHUB_COMPOSE_ADAPTER_BIN="$MUSEHUB_COMPOSE_ADAPTER_BIN" \
   RUST_LOG=info \
   cargo run -p musehub-server
 
@@ -39,6 +55,7 @@ if ! curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
 fi
 
 yarn --cwd web install
+# Playwright page.request helpers hit the API directly; the browser UI uses Vite (/api proxy).
 export MUSEHUB_E2E_API=http://127.0.0.1:8080
 export MUSEHUB_E2E_BASE_URL=http://127.0.0.1:5173
 yarn --cwd web playwright install chromium

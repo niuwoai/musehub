@@ -41,11 +41,12 @@ pub async fn authenticate_pat(pool: &PgPool, token: &str) -> Result<Uuid, AppErr
     Ok(principal_id)
 }
 
-pub async fn create_pat(
+pub async fn create_pat_with_scopes(
     pool: &PgPool,
     principal_id: Uuid,
     org_id: Option<Uuid>,
     name: &str,
+    scopes: &[&str],
 ) -> Result<(Uuid, String), AppError> {
     let plain = generate_pat();
     let token_hash = hash_pat(&plain);
@@ -54,7 +55,7 @@ pub async fn create_pat(
     let expires = OffsetDateTime::now_utc() + time::Duration::days(90);
     sqlx::query(
         "INSERT INTO access_tokens (id, principal_id, org_id, name, token_prefix, token_hash, scopes, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, ARRAY['repo:read','repo:write']::text[], $7)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)",
     )
     .bind(id)
     .bind(principal_id)
@@ -62,8 +63,25 @@ pub async fn create_pat(
     .bind(name)
     .bind(prefix)
     .bind(token_hash)
+    .bind(scopes)
     .bind(expires)
     .execute(pool)
     .await?;
     Ok((id, plain))
+}
+
+pub async fn create_pat(
+    pool: &PgPool,
+    principal_id: Uuid,
+    org_id: Option<Uuid>,
+    name: &str,
+) -> Result<(Uuid, String), AppError> {
+    create_pat_with_scopes(
+        pool,
+        principal_id,
+        org_id,
+        name,
+        &["repo:read", "repo:write"],
+    )
+    .await
 }

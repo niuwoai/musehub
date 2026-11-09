@@ -102,6 +102,11 @@ fn configure_process_group(cmd: &mut TokioCommand) {
 #[cfg(not(unix))]
 fn configure_process_group(_cmd: &mut TokioCommand) {}
 
+/// Puts the child in its own process group so cancel can kill the whole tree.
+pub fn configure_child_process_group(cmd: &mut TokioCommand) {
+    configure_process_group(cmd);
+}
+
 /// Spawns the reference adapter binary in `work_dir`.
 pub async fn spawn_reference(
     task: &AgentTask,

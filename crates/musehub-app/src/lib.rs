@@ -3,18 +3,25 @@
 #![allow(clippy::type_complexity)]
 
 pub mod agent_supervisor;
+pub mod pipeline_supervisor;
 pub use git_http::bare_repo_path;
+mod artifacts;
 mod auth;
 mod bootstrap;
 mod codex;
+mod deployment;
 mod error;
 mod git_http;
 mod hooks;
 mod members;
 pub mod pat;
 mod pat_auth;
+mod pat_policy;
+mod pipeline;
 mod pr;
+mod release;
 mod security;
+mod trace;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +40,7 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::agent_supervisor::AgentSupervisor;
+use crate::pipeline_supervisor::PipelineSupervisor;
 
 use crate::auth::{
     clear_session_cookie, cookie_name, login, logout, principal_from_session, session_cookie,
@@ -47,9 +55,13 @@ use crate::git_http::{git_clone_url, git_http_backend, init_bare_repository};
 pub struct AppState {
     pub pool: PgPool,
     pub git_root: PathBuf,
+    pub artifact_root: PathBuf,
     pub bind_display: String,
     pub reference_adapter_bin: PathBuf,
+    pub pipeline_adapter_bin: PathBuf,
+    pub compose_adapter_bin: PathBuf,
     pub supervisor: Arc<AgentSupervisor>,
+    pub pipeline_supervisor: Arc<PipelineSupervisor>,
 }
 
 pub fn product_router(state: Arc<AppState>) -> Router {
@@ -101,6 +113,42 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/checks/{check_name}",
             patch(pr::set_pull_request_check),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/validation-runs",
+            post(pipeline::start_pr_validation_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs",
+            post(pipeline::start_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}",
+            get(pipeline::get_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}/cancel",
+            post(pipeline::cancel_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/releases",
+            post(release::create_release),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/releases/{release_id}/publish",
+            post(release::publish_release),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/deployments",
+            post(deployment::start_deployment),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/trace/deployments/{deployment_id}",
+            get(trace::get_deployment_trace),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/runner/check-reports",
+            post(pr::runner_report_check),
         )
         .route(
             "/api/v1/adapters/codex/probe",
@@ -266,6 +314,7 @@ async fn create_repo(
     .await?;
     tx.commit().await?;
     pr::seed_repo_required_checks(&state.pool, repo_id).await?;
+    pipeline::seed_repo_environment(&state.pool, org_id, repo_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(RepositoryView {
@@ -660,7 +709,34 @@ async fn create_pat_handler(
     } else {
         None
     };
-    let (id, token) = pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?;
+    let (id, token) = if let Some(scopes) = &body.scopes {
+        pat_policy::validate_scope_issuance(scopes)?;
+        let token_owner = if scopes.iter().any(|s| s == "checks:write") {
+            let org = org_id.ok_or_else(|| {
+                AppError::Validation("checks:write tokens require org binding".to_string())
+            })?;
+            pat_policy::require_org_admin_to_issue_runner_token(
+                &state.pool,
+                org,
+                principal_id,
+                scopes,
+            )
+            .await?;
+            let handle = body.runner_handle.as_deref().ok_or_else(|| {
+                AppError::Validation(
+                    "checks:write tokens require runner_handle for the delegated runner principal"
+                        .to_string(),
+                )
+            })?;
+            pat_policy::resolve_runner_token_principal(&state.pool, org, handle).await?
+        } else {
+            principal_id
+        };
+        let refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+        pat::create_pat_with_scopes(&state.pool, token_owner, org_id, &body.name, &refs).await?
+    } else {
+        pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?
+    };
     Ok(Json(PatCreatedView {
         id,
         token,
@@ -672,6 +748,9 @@ async fn create_pat_handler(
 struct CreatePatRequest {
     name: String,
     org: Option<String>,
+    scopes: Option<Vec<String>>,
+    /// Required when issuing `checks:write`: non-admin member who will use the token.
+    runner_handle: Option<String>,
 }
 
 #[derive(Serialize)]
