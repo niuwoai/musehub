@@ -129,7 +129,7 @@ merge_commit=$(echo "$st" | jq -r .result_commit_oid)
 api POST /api/v1/orgs/demo/members \
   "$(jq -n --arg p 'Stack-Reviewer-12345678' '{handle:"stack-rev",password:$p,role:"member"}')" >/dev/null
 api POST /api/v1/orgs/demo/members \
-  "$(jq -n --arg p 'Stack-CI-Admin-12345678' '{handle:"stack-ci",password:$p,role:"admin"}')" >/dev/null
+  "$(jq -n --arg p 'StackCiReporter12345678' '{handle:"stack-ci",password:$p,role:"admin"}')" >/dev/null
 
 CI_JAR=$(mktemp)
 REV_JAR=$(mktemp)
@@ -137,7 +137,7 @@ curl -fsS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h stack-rev --arg p 'Stack-Reviewer-12345678' '{handle:$h,password:$p}')" \
   "$BASE/api/v1/auth/login" >/dev/null
 curl -fsS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg h stack-ci --arg p 'Stack-CI-1!' '{handle:$h,password:$p}')" \
+  -d "$(jq -n --arg h stack-ci --arg p 'StackCiReporter12345678' '{handle:$h,password:$p}')" \
   "$BASE/api/v1/auth/login" >/dev/null
 
 branch="agent/${run_id}"
