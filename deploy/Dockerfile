@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # MuseHub product images (fixed toolchain versions). API container does NOT mount docker.sock.
 
-ARG RUST_VERSION=1.85-bookworm
+ARG RUST_VERSION=1.89-bookworm
 ARG NODE_VERSION=20-bookworm-slim
 ARG DEBIAN_VERSION=bookworm-slim
 ARG CADDY_VERSION=2.8.4-alpine
