@@ -42,7 +42,9 @@ test.describe('delivery chain browser flow', () => {
     await page.locator('ul li button').first().click()
     await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
     await page.getByRole('button', { name: /accept plan|接受计划/i }).click()
-    await page.getByRole('button', { name: /run agent|运行/i }).first().click()
+    const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
+    await expect(runAgent).toBeVisible({ timeout: 15_000 })
+    await runAgent.click()
     await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
       timeout: 60_000,
     })

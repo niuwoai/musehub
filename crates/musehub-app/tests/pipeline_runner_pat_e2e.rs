@@ -8,7 +8,6 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
-use uuid::Uuid;
 
 const RUNNER_PASS: &str = "Runner-Pat-E2E-12!";
 const REVIEWER_PASS: &str = "Runner-Rev-E2E-12!";
