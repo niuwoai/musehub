@@ -22,7 +22,7 @@
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
-| IAM/PIPE/AGT | `[~]` | 生产 MCP partial（19 工具 + §13 资源模板）；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim；fixture 仅 CI |
+| IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
 
 ## 首版缺口（源码 + 实测核查，诚实列表）
 
@@ -39,11 +39,12 @@
 | 部署回滚操作 | `[x]` 本地 | `deployment_rollback_runner_e2e` + production stack rollback/trace |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | `organizations.preferences` + PATCH settings（display_name/default_collaborator_role）；Web `config-grants.spec.ts` |
-| MCP V1 完整工具/Resources 读实现 | `[~]` | 21 工具；**5** 个 `resource_reads_implemented_v1`（含 issue/PR revision、commit file）；仍需更多资源与 grant |
+| 受保护环境部署审批 | `[x]` 本地 | `0027` + MCP `deployment_approve` 状态机；`protected_deployment_approval_e2e` |
+| MCP V1 完整工具/Resources 读实现 | `[~]` | **51** 工具；**5** 个 `resource_reads_implemented_v1` 与 catalog 一致；`production_mcp_contract_side_effects_e2e`、`production_mcp_resources_v1_catalog_e2e` |
 | Codex live 在线 | `[~]` | `adapter=codex` 仅 live；`codex-sim` 显式；**无** CI 在线凭据（刻意） |
 
 ## 未验证边界
 
 - 不可信用户提交的 compose YAML（API **不接受**；仅 allowlist health URL）
 - 多租户下跨节点 Runner 与网络策略
-- 生产环境外部 Registry 凭据与受保护环境审批
+- 生产环境外部 Registry 凭据；受保护环境审批已在本地 VM 验（非物理双机）

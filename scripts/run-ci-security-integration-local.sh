@@ -44,6 +44,7 @@ MUSEHUB_MCP_PRODUCT=1 _one production_mcp_contract_guards_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_plan_steps_e2e
 MUSEHUB_MCP_PRODUCT=1 _one protected_deployment_approval_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_contract_side_effects_e2e
+MUSEHUB_MCP_PRODUCT=1 _one production_mcp_resources_v1_catalog_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_contract_reads_e2e
 MUSEHUB_MCP_PRODUCT=1 _one grants_security_e2e
 MUSEHUB_MCP_PRODUCT=1 _one repository_grants_e2e
