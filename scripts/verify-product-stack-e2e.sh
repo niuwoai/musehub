@@ -103,13 +103,16 @@ api() {
 }
 
 echo "=== vertical slice via gateway ==="
+echo "step=create_repo"
 api POST /api/v1/orgs/demo/repos '{"slug":"stack-slice","description":"product stack"}' >/dev/null
+echo "step=create_issue"
 issue=$(api POST /api/v1/orgs/demo/repos/stack-slice/issues '{"title":"stack issue"}')
 issue_id=$(echo "$issue" | jq -r .id)
 issue_n=$(echo "$issue" | jq -r .number)
+echo "step=create_plan"
 api POST "/api/v1/orgs/demo/repos/stack-slice/issues/${issue_n}/plans" '{"body":"frozen plan"}' >/dev/null
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X PATCH \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/issues/${issue_n}/plans" >/dev/null
+echo "step=accept_plan"
+api PATCH "/api/v1/orgs/demo/repos/stack-slice/issues/${issue_n}/plans"
 
 agent=$(api POST /api/v1/orgs/demo/repos/stack-slice/agent-runs \
   "$(jq -n --arg id "$issue_id" '{issue_id:$id,message:"stack agent"}')")
