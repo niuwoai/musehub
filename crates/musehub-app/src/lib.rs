@@ -2,17 +2,20 @@
 
 #![allow(clippy::type_complexity)]
 
+pub mod agent_supervisor;
+pub use git_http::bare_repo_path;
 mod auth;
 mod bootstrap;
 mod codex;
 mod error;
 mod git_http;
+mod hooks;
 mod pat;
+mod pr;
 mod security;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -21,11 +24,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
-use musehub_agent_adapter::{spawn_reference, AgentTask, RunOutcome, REFERENCE_ADAPTER};
+use musehub_agent_adapter::REFERENCE_ADAPTER;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::fs;
 use uuid::Uuid;
+
+use crate::agent_supervisor::AgentSupervisor;
 
 use crate::auth::{
     clear_session_cookie, cookie_name, login, logout, principal_from_session, session_cookie,
@@ -42,6 +47,7 @@ pub struct AppState {
     pub git_root: PathBuf,
     pub bind_display: String,
     pub reference_adapter_bin: PathBuf,
+    pub supervisor: Arc<AgentSupervisor>,
 }
 
 pub fn product_router(state: Arc<AppState>) -> Router {
@@ -66,12 +72,34 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             "/api/v1/orgs/{org}/repos/{repo}/agent-runs",
             post(start_agent_run),
         )
+        .route("/api/v1/agent-runs/{run_id}", get(get_agent_run))
         .route("/api/v1/agent-runs/{run_id}/cancel", post(cancel_agent_run))
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests",
+            get(pr::list_pull_requests).post(pr::create_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/reviews",
+            post(pr::review_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/merge",
+            post(pr::merge_pull_request),
+        )
+        .route(
+            "/api/v1/adapters/codex/probe",
+            post(codex::codex_probe_handler),
+        )
         .route(
             "/git/{org}/{repo_git}/{*git_path}",
             axum::routing::any(git_smart_http),
         )
         .with_state(state)
+}
+
+/// Integration-test helper for seeding credentials (not for production callers).
+pub fn hash_password_for_tests(password: &str) -> Result<String, AppError> {
+    auth::hash_password(password)
 }
 
 pub async fn prepare(
@@ -341,6 +369,7 @@ async fn create_issue(
 struct StartAgentRunRequest {
     issue_id: Uuid,
     message: String,
+    #[allow(dead_code)]
     budget_tokens: Option<u64>,
 }
 
@@ -374,15 +403,16 @@ async fn start_agent_run(
     }
     let plan_ok = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM implementation_plans p
-         JOIN issue_revisions r ON r.issue_id = $1
-         WHERE p.issue_revision_id = r.id AND p.state = 'accepted'",
+         JOIN issues i ON i.id = $1 AND i.repo_id = $2
+         WHERE p.state = 'accepted' AND p.issue_revision_id = i.current_revision_id",
     )
     .bind(body.issue_id)
+    .bind(repo_id)
     .fetch_one(&state.pool)
     .await?;
     if plan_ok.0 == 0 {
         return Err(AppError::Validation(
-            "agent run requires an accepted implementation plan".to_string(),
+            "agent run requires an accepted plan bound to the issue's current revision".to_string(),
         ));
     }
     let run_id = Uuid::new_v4();
@@ -396,7 +426,7 @@ async fn start_agent_run(
         .map_err(AppError::Validation)?;
     sqlx::query(
         "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'running')",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued')",
     )
     .bind(run_id)
     .bind(org_id)
@@ -407,89 +437,61 @@ async fn start_agent_run(
     .bind(&branch)
     .execute(&state.pool)
     .await?;
-    let work_dir = tempfile::tempdir().map_err(|error| AppError::Other(error.to_string()))?;
-    let bare = state.git_root.join(format!("{storage_key}.git"));
-    let clone_status = std::process::Command::new("git")
-        .args([
-            "clone",
-            bare.to_str().expect("path"),
-            work_dir.path().to_str().expect("path"),
-        ])
-        .status()
-        .map_err(|error| AppError::Other(error.to_string()))?;
-    if !clone_status.success() {
-        return Err(AppError::Other("git clone for agent failed".to_string()));
-    }
-    let task = AgentTask {
-        kind: "implementation".to_string(),
-        message: body.message.clone(),
-        branch: Some(branch.clone()),
-    };
-    let run = spawn_reference(&task, work_dir.path(), &state.reference_adapter_bin)
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))?;
-    let outcome =
-        musehub_agent_adapter::finish_run(run, Duration::from_secs(120), body.budget_tokens, None)
-            .await
-            .map_err(|error| AppError::Other(error.to_string()))?;
-    let (state_name, commit, tokens, budget_unknown) = match outcome {
-        RunOutcome::Succeeded { commit, usage } => {
-            ("succeeded", commit, usage.tokens, usage.budget_unknown)
-        }
-        RunOutcome::Failed { code, detail } => {
-            sqlx::query(
-                "UPDATE agent_runs SET state = 'failed', error_code = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-            )
-            .bind(run_id)
-            .bind(&code)
-            .execute(&state.pool)
-            .await?;
-            return Err(AppError::Other(detail));
-        }
-        RunOutcome::Canceled { usage } => {
-            sqlx::query(
-                "UPDATE agent_runs SET state = 'canceled', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-            )
-            .bind(run_id)
-            .bind(usage.tokens as i64)
-            .execute(&state.pool)
-            .await?;
-            return Ok(Json(AgentRunView {
-                id: run_id,
-                adapter_kind: REFERENCE_ADAPTER.to_string(),
-                state: "canceled".to_string(),
-                result_commit_oid: None,
-                usage_tokens: usage.tokens,
-                budget_unknown: usage.budget_unknown,
-            }));
-        }
-    };
-    if commit.is_some() {
-        let push_ok = std::process::Command::new("git")
-            .current_dir(work_dir.path())
-            .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
-            .status()
-            .map_err(|error| AppError::Other(error.to_string()))?;
-        if !push_ok.success() {
-            return Err(AppError::Other("git push after agent failed".to_string()));
-        }
-    }
-    sqlx::query(
-        "UPDATE agent_runs SET state = $2, result_commit_oid = $3, usage_tokens = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .bind(state_name)
-    .bind(commit.clone())
-    .bind(tokens as i64)
-    .execute(&state.pool)
-    .await?;
+    let supervisor = state.supervisor.clone();
+    let pool = state.pool.clone();
+    let git_root = state.git_root.clone();
+    let reference_bin = state.reference_adapter_bin.clone();
+    let message = body.message.clone();
+    let deadline = std::time::Duration::from_secs(120);
+    tokio::spawn(async move {
+        agent_supervisor::run_reference_job(
+            pool,
+            supervisor,
+            run_id,
+            repo_id,
+            storage_key,
+            git_root,
+            reference_bin,
+            branch,
+            message,
+            deadline,
+        )
+        .await;
+    });
     Ok(Json(AgentRunView {
         id: run_id,
         adapter_kind: REFERENCE_ADAPTER.to_string(),
-        state: state_name.to_string(),
+        state: "queued".to_string(),
+        result_commit_oid: None,
+        usage_tokens: 0,
+        budget_unknown: true,
+    }))
+}
+
+async fn get_agent_run(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+) -> Result<Json<AgentRunView>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, i64)>(
+        "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens
+         FROM agent_runs WHERE id = $1 AND requested_by = $2",
+    )
+    .bind(run_id)
+    .bind(principal_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, adapter_kind, run_state, commit, tokens)) = row else {
+        return Err(AppError::NotFound);
+    };
+    Ok(Json(AgentRunView {
+        id,
+        adapter_kind,
+        state: run_state,
         result_commit_oid: commit,
-        usage_tokens: tokens,
-        budget_unknown,
+        usage_tokens: tokens as u64,
+        budget_unknown: true,
     }))
 }
 
@@ -510,6 +512,7 @@ async fn cancel_agent_run(
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    let _ = state.supervisor.cancel(run_id).await;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -550,7 +553,7 @@ async fn git_smart_http(
     .await
 }
 
-async fn require_session(pool: &PgPool, headers: &HeaderMap) -> Result<Uuid, AppError> {
+pub(crate) async fn require_session(pool: &PgPool, headers: &HeaderMap) -> Result<Uuid, AppError> {
     let token = session_token_from_headers(headers).ok_or(AppError::Unauthorized)?;
     principal_from_session(pool, &token).await
 }
@@ -687,7 +690,7 @@ async fn accept_plan(
          FROM issue_revisions r
          JOIN issues i ON i.id = r.issue_id
          WHERE p.issue_revision_id = r.id AND i.repo_id = $1 AND i.number = $2
-           AND p.state = 'draft'",
+           AND p.state = 'draft' AND r.id = i.current_revision_id",
     )
     .bind(repo_id)
     .bind(issue_number)
@@ -775,7 +778,7 @@ async fn repo_org_ids_for_member(
 }
 
 #[allow(clippy::type_complexity)]
-async fn repo_storage_for_member(
+pub(crate) async fn repo_storage_for_member(
     pool: &PgPool,
     org_slug: &str,
     repo_slug: &str,

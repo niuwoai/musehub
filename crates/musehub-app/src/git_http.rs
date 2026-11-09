@@ -26,6 +26,7 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
         return Err(AppError::Other("git init --bare failed".to_string()));
     }
     seed_empty_main_branch(&path)?;
+    crate::hooks::install_pre_receive_hook(&path, "main")?;
     Ok(())
 }
 

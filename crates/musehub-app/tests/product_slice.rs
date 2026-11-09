@@ -6,10 +6,15 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
+use std::time::Duration;
+
+use musehub_app::agent_supervisor::new_supervisor;
 use musehub_app::{prepare, product_router, AppState};
 use musehub_migrate::{load_migrations, migrate_up};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
+
+mod common;
 
 #[tokio::test]
 async fn login_create_repo_issue_reference_agent() {
@@ -26,10 +31,11 @@ async fn login_create_repo_issue_reference_agent() {
     let _ = migrate_up(&pool, &migrations).await.expect("migrate");
 
     let git_root = tempfile::tempdir().expect("git root");
+    let bootstrap = common::bootstrap_password();
     prepare(
         pool.clone(),
         git_root.path().to_path_buf(),
-        Some("Slice-Test-Bootstrap-Strong!1"),
+        Some(&bootstrap),
     )
     .await
     .expect("prepare");
@@ -52,12 +58,13 @@ async fn login_create_repo_issue_reference_agent() {
         git_root: git_root.path().to_path_buf(),
         bind_display: "127.0.0.1:8080".to_string(),
         reference_adapter_bin: adapter,
+        supervisor: new_supervisor(),
     });
     let app = product_router(state);
 
     let login_body = serde_json::json!({
         "handle": "admin",
-        "password": "Slice-Test-Bootstrap-Strong!1"
+        "password": bootstrap
     });
     let login = app
         .clone()
@@ -154,12 +161,13 @@ async fn login_create_repo_issue_reference_agent() {
         "message": "implement slice"
     });
     let agent_resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/orgs/demo/repos/hello/agent-runs")
                 .header(header::CONTENT_TYPE, "application/json")
-                .header(header::COOKIE, cookie)
+                .header(header::COOKIE, cookie.clone())
                 .body(Body::from(agent_body.to_string()))
                 .unwrap(),
         )
@@ -169,9 +177,33 @@ async fn login_create_repo_issue_reference_agent() {
     let agent_json: serde_json::Value =
         serde_json::from_slice(&agent_resp.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
+    let run_id = agent_json["id"].as_str().unwrap().to_string();
     assert_eq!(agent_json["adapter_kind"], "reference");
-    assert_eq!(agent_json["state"], "succeeded");
-    assert!(agent_json["result_commit_oid"]
+
+    let mut final_json = agent_json;
+    for _ in 0..120 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/agent-runs/{run_id}"))
+                    .header(header::COOKIE, cookie.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("get run");
+        final_json =
+            serde_json::from_slice(&get.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let state = final_json["state"].as_str().unwrap_or("");
+        if matches!(state, "succeeded" | "failed" | "canceled") {
+            break;
+        }
+    }
+    assert_eq!(final_json["state"], "succeeded");
+    assert!(final_json["result_commit_oid"]
         .as_str()
         .is_some_and(|c| c.len() == 40));
 }

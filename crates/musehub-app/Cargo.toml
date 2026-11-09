@@ -21,12 +21,14 @@ sha2 = "0.10"
 sqlx = { workspace = true, features = ["time"] }
 thiserror = { workspace = true }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+libc = "0.2"
 tokio = { workspace = true, features = ["process", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
+base64 = "0.22"
 tower = { workspace = true }
 http-body-util = { workspace = true }
 musehub-migrate = { path = "../musehub-migrate" }

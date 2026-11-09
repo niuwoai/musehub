@@ -7,7 +7,7 @@
 
 **验收脚本**：`./scripts/verify-product-acceptance.sh`（需 Postgres；含 up → product_slice → down → up）。
 
-**可演示链路（Slice A）**：本地登录 → 创建组织内仓库（bare Git）→ `git clone/push`（HTTP Basic）→ 创建 Issue → 启动 **参考 Agent 适配器**（无模型）→ 产生可核对 Git 提交 → 取消运行无新提交。
+**可演示链路（Slice A）**：本地登录 → 创建组织内仓库（bare Git）→ `git clone/push`（HTTP Basic，**default 禁直推**）→ Issue + **接受计划**（绑定 `current_revision`）→ 异步 **参考 Agent** → `GET /agent-runs/{id}` / **取消杀进程组** → 创建 **PR / 审查 / 合并**（禁自审、非空 diff）→ `POST /api/v1/adapters/codex/probe`（**sim 协议**，无在线证据）。
 
 ## P0 清单
 
@@ -15,15 +15,16 @@
 |---|---|---|
 | IAM-01 | `[~]` | 登录/登出/会话；`principals`+`sessions`；无 CSRF/完整禁用用户全路径回归 |
 | IAM-02 | `[~]` | `POST /api/v1/tokens`（PAT 仅展示一次）；Git Basic 支持 `mhp_*` 或密码；SSH 未做 |
-| IAM-03 | `[ ]` | 仓库/API 授权基础 grant；跨组织负向测试不完整 |
+| IAM-03 | `[~]` | `auth_matrix`：非成员 403、outsider PAT Git 403 |
 | GIT-01 | `[~]` | POST 创建仓库 + `git init --bare`；`storage_key` 隔离路径 |
-| GIT-02 | `[~]` | `git http-backend` 智能 HTTP；需配置 `MUSEHUB_GIT_ROOT` |
+| GIT-02 | `[~]` | `git http-backend` + pre-receive **保护 default**；`agent/*` 允许 |
 | GIT-03+ | `[ ]` | 浏览文件/历史/diff UI 未做 |
 | ISS-01 | `[~]` | Issue 列表/创建 API+Web；无标签/负责人 |
 | ISS-02 | `[~]` | `issue_revisions` + `implementation_plans`；接受计划后可跑 Agent；无 acceptance_criteria 表 |
 | AGT-01 | `[~]` | **参考**适配器真实进程+提交；**Codex CLI 在线任务未验证**（见 ADR-008） |
-| AGT-02 | `[~]` | 取消、用量字段；预算硬上限在凭证未知时不声称已达标 |
-| PR/CI/REL/DEP/MCP-01/UI-01 | `[ ]` | 下一阶段 |
+| AGT-02 | `[~]` | `agent_cancel_e2e`：取消后无 `result_commit_oid`；进程组 SIGKILL |
+| PR-01 | `[~]` | REST：创建 PR、审查、合并（`merged_oid`）；无 Web UI |
+| CI/REL/DEP/MCP-01/UI-01 | `[ ]` | 流水线/制品/Compose/追溯、业务 MCP、PR Web |
 
 ## 探针（非产品）
 

@@ -53,6 +53,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "budget_unknown": true,
         })
     )?;
+    if task.message == "__slow__" {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+    }
     let commit = if task.kind == "implementation" {
         let branch = task.branch.as_deref().unwrap_or("agent/reference");
         ensure_branch(branch)?;

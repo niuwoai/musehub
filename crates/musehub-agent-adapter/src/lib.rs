@@ -65,11 +65,42 @@ pub struct AdapterRun {
 }
 
 impl AdapterRun {
+    pub fn child_id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub fn request_cancel(&mut self) {
         self.canceled.store(true, Ordering::SeqCst);
+        if let Some(pid) = self.child.id() {
+            kill_process_group(pid);
+        }
         let _ = self.child.start_kill();
     }
 }
+
+#[cfg(unix)]
+pub fn kill_process_group(pid: u32) {
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn kill_process_group(_pid: u32) {}
+
+#[cfg(unix)]
+fn configure_process_group(cmd: &mut TokioCommand) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.as_std_mut().pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_cmd: &mut TokioCommand) {}
 
 /// Spawns the reference adapter binary in `work_dir`.
 pub async fn spawn_reference(
@@ -78,6 +109,15 @@ pub async fn spawn_reference(
     binary: &Path,
 ) -> Result<AdapterRun, AdapterError> {
     spawn_ndjson_adapter(binary, &[], task, work_dir, REFERENCE_ADAPTER).await
+}
+
+/// Spawns the simulated Codex CLI (CI / no credentials).
+pub async fn spawn_codex_sim(
+    task: &AgentTask,
+    work_dir: &Path,
+    binary: &Path,
+) -> Result<AdapterRun, AdapterError> {
+    spawn_ndjson_adapter(binary, &[], task, work_dir, CODEX_ADAPTER).await
 }
 
 /// Spawns Codex CLI when `MUSEHUB_AGENT_CODEX_BIN` is set (live path — not verified without credentials).
@@ -113,18 +153,19 @@ async fn spawn_ndjson_adapter(
     let payload = serde_json::to_string(task).map_err(|error| AdapterError::Failed {
         detail: error.to_string(),
     })?;
-    let mut child = TokioCommand::new(binary)
+    let mut command = TokioCommand::new(binary);
+    command
         .args(extra_args)
         .current_dir(work_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|source| AdapterError::Io {
-            step: "spawn adapter",
-            source,
-        })?;
+        .kill_on_drop(true);
+    configure_process_group(&mut command);
+    let mut child = command.spawn().map_err(|source| AdapterError::Io {
+        step: "spawn adapter",
+        source,
+    })?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(payload.as_bytes())
@@ -153,6 +194,7 @@ pub async fn finish_run(
     deadline: Duration,
     budget_tokens: Option<u64>,
     budget_microusd: Option<u64>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<RunOutcome, AdapterError> {
     let started = Instant::now();
     let mut stdout = run.child.stdout.take().ok_or(AdapterError::Failed {
@@ -161,6 +203,12 @@ pub async fn finish_run(
     let mut buffer = Vec::new();
     let mut reader = tokio::io::BufReader::new(&mut stdout);
     loop {
+        if cancel_rx
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            run.request_cancel();
+        }
         if started.elapsed() > deadline {
             run.request_cancel();
             return Ok(RunOutcome::Failed {

@@ -22,7 +22,7 @@ async fn reference_adapter_creates_commit() {
     let run = spawn_reference(&task, work.path(), &binary)
         .await
         .expect("spawn");
-    let outcome = musehub_agent_adapter::finish_run(run, Duration::from_secs(30), None, None)
+    let outcome = musehub_agent_adapter::finish_run(run, Duration::from_secs(30), None, None, None)
         .await
         .expect("finish");
     match outcome {
@@ -52,7 +52,7 @@ async fn reference_adapter_cancel_mid_run() {
         .await
         .expect("spawn");
     run.request_cancel();
-    let outcome = musehub_agent_adapter::finish_run(run, Duration::from_secs(30), None, None)
+    let outcome = musehub_agent_adapter::finish_run(run, Duration::from_secs(30), None, None, None)
         .await
         .expect("finish");
     assert!(matches!(outcome, RunOutcome::Canceled { .. }));

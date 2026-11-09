@@ -154,5 +154,6 @@ pub async fn build_product_state(
         git_root,
         bind_display,
         reference_adapter_bin,
+        supervisor: Arc::new(musehub_app::agent_supervisor::AgentSupervisor::default()),
     }))
 }

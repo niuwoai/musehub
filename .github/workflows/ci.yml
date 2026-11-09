@@ -49,14 +49,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: migrate
         run: cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
-      - name: build reference agent
-        run: cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+      - name: build agent adapter binaries
+        run: |
+          cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
       - name: product acceptance
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
-      - name: security db tests
-        run: cargo test -p musehub-app --test security_db -- --test-threads=1
+      - name: product security integration tests
+        run: |
+          cargo test -p musehub-app --test security_db -- --test-threads=1
+          cargo test -p musehub-app --test agent_cancel_e2e -- --test-threads=1
+          cargo test -p musehub-app --test protected_branch_git -- --test-threads=1
+          cargo test -p musehub-app --test auth_matrix -- --test-threads=1
+          cargo test -p musehub-app --test plan_immutable -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
