@@ -94,6 +94,7 @@ pub async fn product_app(
         supervisor: new_supervisor(),
         pipeline_supervisor: PipelineSupervisor::new(),
         require_pipeline_oci: musehub_app::require_pipeline_oci_from_env(),
+        mcp_pat_slot: Arc::new(tokio::sync::RwLock::new(None)),
     });
     product_router(state)
 }

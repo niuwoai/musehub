@@ -15,6 +15,7 @@ mod error;
 mod git_http;
 mod hooks;
 pub mod lease;
+pub mod mcp;
 mod members;
 pub mod pat;
 mod pat_auth;
@@ -72,6 +73,8 @@ pub struct AppState {
     pub pipeline_supervisor: Arc<PipelineSupervisor>,
     /// When true: release publish requires pipeline OCI artifact; deploy rejects mock health / mock compose.
     pub require_pipeline_oci: bool,
+    /// Request-scoped PAT for `/mcp` tools (set by MCP Bearer middleware).
+    pub mcp_pat_slot: Arc<tokio::sync::RwLock<Option<pat_auth::PatContext>>>,
 }
 
 pub fn require_pipeline_oci_from_env() -> bool {
@@ -81,7 +84,7 @@ pub fn require_pipeline_oci_from_env() -> bool {
 }
 
 pub fn product_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route("/api/v1/me", get(me_handler))
@@ -171,10 +174,15 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(codex::codex_probe_handler),
         )
         .route(
+            "/api/v1/adapters/codex/status",
+            get(codex::codex_status_handler),
+        )
+        .route(
             "/git/{org}/{repo_git}/{*git_path}",
             axum::routing::any(git_smart_http),
         )
-        .with_state(state)
+        .with_state(state.clone());
+    mcp::merge_product_mcp(api, state)
 }
 
 /// Integration-test helper for seeding credentials (not for production callers).

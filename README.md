@@ -106,7 +106,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
 | Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
-| OCI / 多环境 / 业务 MCP | `[ ]` | 未验证 |
+| OCI / 多环境 / 业务 MCP | `[~]` | OCI 产品路径见 `pipeline-oci-product`；生产 MCP 读工具见 `MUSEHUB_MCP_PRODUCT`（无 OAuth/写工具幂等） |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。
 

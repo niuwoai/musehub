@@ -50,6 +50,48 @@ fn codex_sim_binary() -> PathBuf {
 }
 
 #[derive(Serialize)]
+pub struct CodexStatusResponse {
+    pub adapter: String,
+    pub live_binary_configured: bool,
+    pub probe_allow_live: bool,
+    pub available_modes: Vec<&'static str>,
+    pub note: &'static str,
+}
+
+/// Read-only model adapter entry: whether live Codex is configured vs CI sim-only probe.
+pub async fn codex_status_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<CodexStatusResponse>, AppError> {
+    let _principal = crate::require_session(&state.pool, &headers).await?;
+    let live = codex_live_configured();
+    let allow_live = std::env::var("MUSEHUB_CODEX_PROBE_ALLOW_LIVE")
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false);
+    let mut modes = vec!["simulated_protocol"];
+    if live {
+        modes.push("live_binary_present");
+        if allow_live {
+            modes.push("live_probe_enabled");
+        }
+    }
+    let note = if live && allow_live {
+        "live probe permitted when explicitly enabled; credentials remain in user environment"
+    } else if live {
+        "live binary configured; HTTP probe stays sim unless MUSEHUB_CODEX_PROBE_ALLOW_LIVE=true"
+    } else {
+        "no live binary; use sim probe or set MUSEHUB_AGENT_CODEX_BIN"
+    };
+    Ok(Json(CodexStatusResponse {
+        adapter: CODEX_ADAPTER.to_string(),
+        live_binary_configured: live,
+        probe_allow_live: allow_live,
+        available_modes: modes,
+        note,
+    }))
+}
+
+#[derive(Serialize)]
 pub struct CodexProbeResponse {
     pub adapter: String,
     pub mode: &'static str,
