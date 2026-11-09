@@ -18,6 +18,7 @@ pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
+pub use pipeline::seed_repo_environment;
 mod pr;
 mod release;
 mod security;

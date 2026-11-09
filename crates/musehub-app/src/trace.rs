@@ -148,6 +148,12 @@ pub async fn get_deployment_trace(
         gaps.push("no_ready_artifacts".to_string());
     }
     let adapter = dep.0.clone();
+    if adapter == "compose-mock" {
+        gaps.push("deploy_not_isolated_compose".to_string());
+        gaps.push("deploy_no_oci_registry".to_string());
+    }
+    gaps.push("backup_restore_manual_only".to_string());
+    gaps.push("mcp_production_not_wired".to_string());
     Ok(Json(TraceView {
         deployment_id,
         release_id,

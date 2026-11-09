@@ -22,6 +22,7 @@ pub struct DeploymentView {
     pub state: String,
     pub health_summary: Option<serde_json::Value>,
     pub adapter_kind: String,
+    pub attempt_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -29,6 +30,8 @@ pub struct StartDeploymentRequest {
     pub release_id: Uuid,
     pub environment_slug: Option<String>,
     pub health_target: Option<String>,
+    /// Client-supplied idempotency key; replay returns the same deployment row.
+    pub attempt_id: Option<Uuid>,
 }
 
 pub async fn start_deployment(
@@ -69,6 +72,36 @@ pub async fn start_deployment(
             "deployment requires published release".to_string(),
         ));
     }
+    if let Some(attempt_id) = body.attempt_id {
+        let existing = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<serde_json::Value>)>(
+            "SELECT d.id, d.release_id, d.state, d.adapter_kind, d.health_summary
+             FROM deployments d
+             WHERE d.repo_id = $1 AND d.attempt_id = $2",
+        )
+        .bind(repo_id)
+        .bind(attempt_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if let Some((id, rel_id, dep_state, adapter_kind, health_summary)) = existing {
+            if rel_id != body.release_id {
+                return Err(AppError::Validation(
+                    "attempt_id already used for a different release".to_string(),
+                ));
+            }
+            return Ok((
+                StatusCode::OK,
+                Json(DeploymentView {
+                    id,
+                    environment_slug: env_slug.clone(),
+                    release_id: rel_id,
+                    state: dep_state,
+                    health_summary,
+                    adapter_kind,
+                    attempt_id: Some(attempt_id),
+                }),
+            ));
+        }
+    }
     let pipeline_id: (Uuid,) = sqlx::query_as("SELECT pipeline_run_id FROM releases WHERE id = $1")
         .bind(body.release_id)
         .fetch_one(&state.pool)
@@ -80,15 +113,17 @@ pub async fn start_deployment(
         .unwrap_or_else(|| "mock://healthy".to_string());
     validate_compose_health_target(&health_target).map_err(AppError::Validation)?;
     let deployment_id = Uuid::new_v4();
+    let attempt_id = body.attempt_id.unwrap_or_else(Uuid::new_v4);
     sqlx::query(
-        "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state)
-         VALUES ($1,$2,$3,$4,$5,'compose-mock','running')",
+        "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id)
+         VALUES ($1,$2,$3,$4,$5,'compose-mock','running',$6)",
     )
     .bind(deployment_id)
     .bind(org_id)
     .bind(repo_id)
     .bind(environment_id)
     .bind(body.release_id)
+    .bind(attempt_id)
     .execute(&state.pool)
     .await?;
 
@@ -137,6 +172,7 @@ pub async fn start_deployment(
             state: state_name.to_string(),
             health_summary: Some(summary),
             adapter_kind: "compose-mock".to_string(),
+            attempt_id: Some(attempt_id),
         }),
     ))
 }

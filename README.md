@@ -88,6 +88,11 @@ yarn --cwd web dev   # 代理 /api 与 /git
 ./scripts/cargo-test-portable.sh
 ./scripts/setup-mcp-matrix-python-deps.sh   # MCP 矩阵所需
 cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
+
+# 状态备份/恢复（运维首版；需 pg_dump/pg_restore）
+./scripts/backup-musehub-state.sh /tmp/musehub-backup
+./scripts/restore-musehub-state.sh /tmp/musehub-backup   # 破坏性恢复
+./scripts/verify-backup-restore.sh                        # 迁移后 org 计数校验
 ```
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。

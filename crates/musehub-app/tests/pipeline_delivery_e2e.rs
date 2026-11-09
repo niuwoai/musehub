@@ -427,5 +427,16 @@ async fn merge_then_pipeline_release_deploy_trace() {
     assert_eq!(trace["merged_oid"].as_str(), Some(merge_commit));
     assert_eq!(trace["plan_accepted"].as_bool(), Some(true));
     let gaps = trace["gaps"].as_array().unwrap();
-    assert!(gaps.is_empty(), "unexpected trace gaps: {gaps:?}");
+    let gap_text: Vec<&str> = gaps.iter().filter_map(|g| g.as_str()).collect();
+    for expected in [
+        "deploy_not_isolated_compose",
+        "deploy_no_oci_registry",
+        "backup_restore_manual_only",
+        "mcp_production_not_wired",
+    ] {
+        assert!(
+            gap_text.contains(&expected),
+            "missing trace gap {expected}: {gap_text:?}"
+        );
+    }
 }
