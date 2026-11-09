@@ -14,13 +14,13 @@
 | ID | 状态 | 证据/限制 |
 |---|---|---|
 | IAM-01 | `[~]` | 登录/登出/会话；`principals`+`sessions`；无 CSRF/完整禁用用户全路径回归 |
-| IAM-02 | `[ ]` | PAT/SSH key UI 未做；Git 暂用 HTTP Basic（账号密码） |
+| IAM-02 | `[~]` | `POST /api/v1/tokens`（PAT 仅展示一次）；Git Basic 支持 `mhp_*` 或密码；SSH 未做 |
 | IAM-03 | `[ ]` | 仓库/API 授权基础 grant；跨组织负向测试不完整 |
 | GIT-01 | `[~]` | POST 创建仓库 + `git init --bare`；`storage_key` 隔离路径 |
 | GIT-02 | `[~]` | `git http-backend` 智能 HTTP；需配置 `MUSEHUB_GIT_ROOT` |
 | GIT-03+ | `[ ]` | 浏览文件/历史/diff UI 未做 |
 | ISS-01 | `[~]` | Issue 列表/创建 API+Web；无标签/负责人 |
-| ISS-02 | `[ ]` | 需求版本/计划冻结未做 |
+| ISS-02 | `[~]` | `issue_revisions` + `implementation_plans`；接受计划后可跑 Agent；无 acceptance_criteria 表 |
 | AGT-01 | `[~]` | **参考**适配器真实进程+提交；**Codex CLI 在线任务未验证**（见 ADR-008） |
 | AGT-02 | `[~]` | 取消、用量字段；预算硬上限在凭证未知时不声称已达标 |
 | PR/CI/REL/DEP/MCP-01/UI-01 | `[ ]` | 下一阶段 |

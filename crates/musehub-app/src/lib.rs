@@ -7,6 +7,7 @@ mod bootstrap;
 mod codex;
 mod error;
 mod git_http;
+mod pat;
 mod security;
 
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use base64::Engine;
 use musehub_agent_adapter::{spawn_reference, AgentTask, RunOutcome, REFERENCE_ADAPTER};
@@ -48,6 +49,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route("/api/v1/me", get(me_handler))
+        .route("/api/v1/tokens", post(create_pat_handler))
         .route(
             "/api/v1/orgs/{org}/repos",
             get(list_repos).post(create_repo),
@@ -55,6 +57,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues",
             get(list_issues).post(create_issue),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/plans",
+            post(create_plan).patch(accept_plan),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/agent-runs",
@@ -284,6 +290,8 @@ async fn create_issue(
     .bind(repo_id)
     .fetch_one(&mut *tx)
     .await?;
+    let title = body.title.trim().to_string();
+    let issue_body = body.body.unwrap_or_default();
     let issue_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body)
@@ -294,17 +302,36 @@ async fn create_issue(
     .bind(repo_id)
     .bind(number.0)
     .bind(principal_id)
-    .bind(body.title.trim())
-    .bind(body.body.unwrap_or_default())
+    .bind(&title)
+    .bind(&issue_body)
     .execute(&mut *tx)
     .await?;
+    let revision_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO issue_revisions (id, org_id, repo_id, issue_id, revision, title, body, author_id)
+         VALUES ($1, $2, $3, $4, 1, $5, $6, $7)",
+    )
+    .bind(revision_id)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(issue_id)
+    .bind(&title)
+    .bind(&issue_body)
+    .bind(principal_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE issues SET current_revision_id = $2 WHERE id = $1")
+        .bind(issue_id)
+        .bind(revision_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok((
         StatusCode::CREATED,
         Json(IssueView {
             id: issue_id,
             number: number.0,
-            title: body.title.trim().to_string(),
+            title,
             state: "open".to_string(),
         }),
     ))
@@ -542,7 +569,128 @@ fn basic_auth(headers: &HeaderMap) -> Result<(String, String), AppError> {
     Ok((user.to_string(), pass.to_string()))
 }
 
+async fn create_pat_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CreatePatRequest>,
+) -> Result<Json<PatCreatedView>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let org_id = if let Some(org) = &body.org {
+        Some(org_id_for_member(&state.pool, org, principal_id).await?)
+    } else {
+        None
+    };
+    let (_, token) = pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?;
+    Ok(Json(PatCreatedView {
+        token,
+        note: "shown once",
+    }))
+}
+
+#[derive(Deserialize)]
+struct CreatePatRequest {
+    name: String,
+    org: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PatCreatedView {
+    token: String,
+    note: &'static str,
+}
+
+#[derive(Deserialize)]
+struct CreatePlanRequest {
+    body: String,
+}
+
+#[derive(Serialize)]
+struct PlanView {
+    id: Uuid,
+    version: i32,
+    state: String,
+}
+
+async fn create_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo, issue_number)): Path<(String, String, i64)>,
+    Json(body): Json<CreatePlanRequest>,
+) -> Result<(StatusCode, Json<PlanView>), AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id) = repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let revision = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT r.id FROM issue_revisions r
+         JOIN issues i ON i.id = r.issue_id
+         WHERE i.repo_id = $1 AND i.number = $2 AND r.revision = (
+           SELECT MAX(revision) FROM issue_revisions WHERE issue_id = i.id
+         )",
+    )
+    .bind(repo_id)
+    .bind(issue_number)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((revision_id,)) = revision else {
+        return Err(AppError::NotFound);
+    };
+    let version: (i32,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM implementation_plans WHERE issue_revision_id = $1",
+    )
+    .bind(revision_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let plan_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO implementation_plans (id, org_id, repo_id, issue_revision_id, version, body, state)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft')",
+    )
+    .bind(plan_id)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(revision_id)
+    .bind(version.0)
+    .bind(body.body)
+    .execute(&state.pool)
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(PlanView {
+            id: plan_id,
+            version: version.0,
+            state: "draft".to_string(),
+        }),
+    ))
+}
+
+async fn accept_plan(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo, issue_number)): Path<(String, String, i64)>,
+) -> Result<StatusCode, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let (_, repo_id) = repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let updated = sqlx::query(
+        "UPDATE implementation_plans p SET state = 'accepted', accepted_at = CURRENT_TIMESTAMP
+         FROM issue_revisions r
+         JOIN issues i ON i.id = r.issue_id
+         WHERE p.issue_revision_id = r.id AND i.repo_id = $1 AND i.number = $2
+           AND p.state = 'draft'",
+    )
+    .bind(repo_id)
+    .bind(issue_number)
+    .execute(&state.pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn authenticate_basic(pool: &PgPool, user: &str, pass: &str) -> Result<Uuid, AppError> {
+    if pass.starts_with("mhp_") {
+        return pat::authenticate_pat(pool, pass).await;
+    }
+    let _ = user;
     let row = sqlx::query_as::<_, (Uuid, String, String)>(
         "SELECT p.id, p.status, c.password_hash
          FROM principals p
