@@ -55,6 +55,9 @@ chmod +x "$PWD/scripts/verify-remote-agent-cancel-e2e.sh" \
 ./scripts/verify-remote-agent-budget-e2e.sh
 ./scripts/verify-remote-agent-kill-reclaim-e2e.sh
 ./scripts/verify-production-runner-token-required.sh
+chmod +x "$PWD/scripts/verify-remote-deployment-e2e.sh" "$PWD/scripts/verify-remote-agent-e2e.sh" 2>/dev/null || true
+./scripts/verify-remote-deployment-e2e.sh
+./scripts/verify-remote-agent-e2e.sh
 _one product_profile_e2e
 env "CARGO_BIN_EXE_musehub-agent-codex-sim=${_codex_sim}" \
   cargo test -p musehub-app --test agent_codex_mainline_select_e2e -- --test-threads=1

@@ -2,7 +2,7 @@
 
 Clean Linux install uses **Docker Compose** only. The API container has **no** host `docker.sock` mount and runs subprocess adapters with fixed binaries under `/opt/musehub/bin`.
 
-## Quick start
+## Quick start (demo / lab stack)
 
 ```bash
 cp deploy/.env.example deploy/.env
@@ -10,6 +10,22 @@ cp deploy/.env.example deploy/.env
 cd deploy
 docker compose up -d --build
 ```
+
+Automated smoke (throwaway project, no worker): from repo root  
+`./scripts/verify-clean-install-runbook.sh` → `clean_install_runbook=ok`.
+
+## Production profile (API enqueue-only + `musehub-runner`)
+
+Control plane **must not** mount `docker.sock`. Pipeline / agent / deploy run on **`musehub-runner`** with a **selected PAT** (`deploy:execute`, `pipeline:execute`, `agent:execute`).
+
+```bash
+./scripts/install-production-compose.sh          # generates deploy/.env if missing; starts postgres+server+gateway
+# Mint MUSEHUB_RUNNER_PAT via UI or API, set in deploy/.env, then:
+cd deploy && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d musehub-runner
+```
+
+Full acceptance on a dev machine with Docker:  
+`./scripts/verify-product-production-stack-e2e.sh` → `product_production_stack_e2e=ok`.
 
 Gateway serves **production static** `web/dist` (built in the gateway image) and proxies `/api`, `/git`, `/mcp` to `musehub-server:8080`.
 
@@ -76,9 +92,14 @@ CI stack test automates backup/restore against the compose Postgres port overlay
 
 ## Runner boundary
 
-In-process **supervisor** workers are not a separate remote runner service. Pipeline/deploy adapters are **child processes** of the API container (`compose-mock` by default in the product image), not arbitrary shell from HTTP.
+| Profile | API `docker.sock` | Executors |
+|---------|-------------------|-----------|
+| Demo (`docker-compose.yml`) | **No** | In-process adapters; `compose-mock` default |
+| Production (`docker-compose.production.yml`) | **No** | `MUSEHUB_*_EXECUTOR=remote`; worker **`musehub-runner`** holds `docker.sock` + adapter bins |
 
-`GET /readyz` reports `checks.compose_adapter_mode` (`mock` | `runner` | `auto`) and `checks.pipeline_executor` (`in_process` | `remote`). The product image sets `MUSEHUB_COMPOSE_ADAPTER_MODE=mock`. For verified compose-runner + OCI, set `MUSEHUB_COMPOSE_ADAPTER_MODE=runner`, mount Docker, and follow `scripts/verify-pipeline-oci-product-e2e.sh` / `scripts/verify-compose-runner-e2e.sh`.
+Worker env **must** include `MUSEHUB_COMPOSE_ADAPTER_MODE=runner` when `MUSEHUB_REQUIRE_PIPELINE_OCI=1`.
+
+`GET /readyz` reports `compose_adapter_mode`, `pipeline_executor`, `agent_executor`, `deploy_executor`. See `docs/RUNNER-BOUNDARY.md`.
 
 ## What is not in this stack
 

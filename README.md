@@ -106,7 +106,8 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
 | Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
-| OCI / 多环境 / 业务 MCP | `[~]` | OCI：`pipeline-oci-product` 内 **rmcp 写** + Python **`mcp_product_oci_write_probe.py`（SDK 写链，lite/full）** + read probe；部署回滚 REST **经 runner 重部署**（runner 需 CI Docker）；**无** 远程 OAuth |
+| **生产 compose 远程 worker 全链** | `[x]` 本地 | `verify-product-production-stack-e2e.sh`；`install-production-compose.sh` |
+| OCI / 多环境 / 业务 MCP | `[~]` | OCI 产品路径已验；MCP **21 工具 + 5 资源读**（`04-mcp-api.md` 全集未实现）；**无** 远程 OAuth |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200，并暴露 `compose_adapter_mode`（产品镜像默认 **mock**）与 `pipeline_executor`（默认 **in_process**；远程 worker 为 `MUSEHUB_PIPELINE_EXECUTOR=remote`）。
 

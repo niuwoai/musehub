@@ -1,44 +1,41 @@
 # 本地验收跑批记录
 
 > Branch: `cursor/local-product-integration-5f97` → PR [#16](https://github.com/niuwoai/musehub/pull/16)  
-> 跑批起点 SHA: 见本 commit `git rev-parse HEAD`  
-> **未** `git push` 触发 GitHub Actions；无 merge/tag/生产发布。  
-> DB: `postgres://musehub:musehub@127.0.0.1:5432/musehub`
+> **本 commit SHA**: 见 `git rev-parse HEAD`  
+> **未** 触发 GitHub Actions merge/tag；用户可在本仓库联跑更新后的 `ci.yml`。
 
-## 摘要（production stack 收口）
+## 本地可交付（VM 已跑通）
 
-| 类别 | Exit | 备注 |
+| 类别 | Exit | 证据 / 日志 |
+|------|------|-------------|
+| 生产 compose 全链 | 0 | `verify-product-production-stack-e2e.sh` → `product_production_stack_e2e=ok` |
+| CI security 镜像（本地） | 0 | `run-ci-security-integration-local.sh`（含 remote deploy/agent cancel/kill/budget/epoch） |
+| OCI 产品路径 | 0 | `sg docker ./scripts/verify-pipeline-oci-product-e2e.sh` |
+| Demo stack + backup/upgrade | 0 | `verify-product-stack-e2e.sh` |
+| Runbook 干净安装 | 0 | `verify-clean-install-runbook.sh` → `clean_install_runbook=ok` |
+| 备份恢复 | 0 | `verify-backup-restore.sh` → `backup_restore_verify=ok` |
+| 生产 profile fail-closed | 0 | `verify-product-production-profile.sh` |
+| Playwright `product_oci=1` | 0 | `run-web-e2e.sh` 4 passed |
+| 子进程 remote | 0 | `verify-remote-deployment-e2e.sh`、`verify-remote-agent-e2e.sh` |
+
+## 与用户联跑 CI（仓库已同步，未 push 触发）
+
+- `rust-portable` 现调用 **`./scripts/run-ci-security-integration-local.sh`**（与本地矩阵一致，含 remote 全套）。
+- 新增 job **`product-production-stack`** → `verify-product-production-stack-e2e.sh`。
+
+## 诚实缺口（非“外部阻塞”但与 04-mcp-api 全集差距）
+
+| 主题 | 状态 | 说明 |
 |------|------|------|
-| `verify-product-production-stack-e2e.sh` | 0 | `product_production_stack_e2e=ok`（bootstrap→PAT→worker→agent/PR/CI/merge→OCI→deploy/rollback/trace）；API 无 docker.sock |
-| `run-ci-security-integration-local.sh` | 0 | 含 `remote_deployment_runner_e2e`、`remote_agent_epoch_e2e` + 远端 agent 子进程脚本 |
-| `verify-pipeline-oci-product-e2e.sh` | 0 | `sg docker`；`pipeline_oci_product=ok` |
-| `verify-product-stack-e2e.sh` | 0 | `product_stack_e2e=ok` |
-| `verify-product-production-profile.sh` | 0 | `product_production_profile_fail_closed=ok` |
-| `run-web-e2e.sh` `MUSEHUB_PRODUCT_OCI_E2E=1` | 0 | Playwright **4 passed**；remote `pipeline/agent/deploy` worker |
+| MCP 工具全集 | `[~]` | 已实现 **21** 工具 + **5** 资源读；`repository_create`、`issue_update` 等仍无 |
+| Web 信息架构 | `[~]` | 单页 `App.tsx` 覆盖主线；无独立环境/审计/Runner 管理页 |
+| systemd / 多机 HA | 外部 | V1 明确排除 |
+| Live Codex 在线 | 外部 | 需凭据；`codex-sim` / fixture 已验 |
+| 物理双主机 Runner | 外部 | 跨容器 + host-network 代替 |
 
-## 关键修复（本 commit）
+## 新增脚本
 
-| 项 | 原因 | 修复 |
-|----|------|------|
-| `curl: (2) no URL` | PAT `curl` 缺 URL | `verify-product-production-stack-e2e.sh` |
-| Pipeline OCI on worker | docker CLI API 过旧 / 无 compose 插件 | Dockerfile 静态 docker + compose 插件；CI overlay 挂 host CLI/插件 |
-| Deploy GET 404 | 无 REST `GET .../deployments/{id}` | `deployment::get_deployment` + 路由 |
-| Deploy `running` 卡死 | worker 默认 `compose-mock` + OCI | `MUSEHUB_COMPOSE_ADAPTER_MODE=runner` on worker |
-| `product_oci=1` Playwright queued | 仅 pipeline remote worker | `run-web-e2e.sh`：`all` work kinds + remote agent/deploy |
-
-## 逐项命令（节选）
-
-| # | 命令 | Exit | 备注 |
-|---|------|------|------|
-| P1 | `./scripts/verify-product-production-stack-e2e.sh` | 0 | log: `/tmp/prod-full14.log` |
-| P2 | `./scripts/run-ci-security-integration-local.sh` | 0 | `/tmp/accept-security.log` |
-| P3 | `sg docker -c ./scripts/verify-pipeline-oci-product-e2e.sh` | 0 | 勿与 migrate 并行 |
-| P4 | `./scripts/verify-product-stack-e2e.sh` | 0 | |
-| P5 | `./scripts/verify-product-production-profile.sh` | 0 | |
-| P6 | `sg docker -c 'MUSEHUB_PRODUCT_OCI_E2E=1 ./scripts/run-web-e2e.sh'` | 0 | |
-
-## 仅外部 / 未本地替代
-
-- **真实双主机** runner：以 compose + host-network worker 代替（见 `RUNNER-BOUNDARY.md`）。
-- **Live Codex**：需 `MUSEHUB_AGENT_CODEX_BIN` + 凭据。
-- **GitHub Actions**：用户统一触发。
+| 脚本 | 用途 |
+|------|------|
+| `scripts/install-production-compose.sh` | 生成 `deploy/.env`、构建并启动 production 控制面 |
+| `scripts/verify-clean-install-runbook.sh` | 实测 `deploy/RUNBOOK.md` quick start |
