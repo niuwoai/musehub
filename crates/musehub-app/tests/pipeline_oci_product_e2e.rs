@@ -583,7 +583,6 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     assert!(!prompts.prompts.is_empty());
     let resources = mcp_client.list_resources(None).await.expect("resources");
     assert!(!resources.resources.is_empty());
-    mcp_client.cancel().await.ok();
 
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("python/mcp_product_oci_write.py");
@@ -621,4 +620,5 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     } else {
         eprintln!("skip python oci mcp: SDK or script missing");
     }
+    mcp_client.cancel().await.ok();
 }
