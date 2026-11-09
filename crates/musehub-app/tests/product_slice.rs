@@ -122,7 +122,9 @@ async fn login_create_repo_issue_reference_agent() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"))
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"
+                ))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, cookie.clone())
                 .body(Body::from(plan_body.to_string()))
@@ -136,7 +138,9 @@ async fn login_create_repo_issue_reference_agent() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"))
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"
+                ))
                 .header(header::COOKIE, cookie.clone())
                 .body(Body::empty())
                 .unwrap(),
