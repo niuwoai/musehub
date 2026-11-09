@@ -119,6 +119,36 @@ pub async fn renew_pipeline_work_lease(
     Ok(())
 }
 
+/// Terminal writes require matching holder + epoch (stale worker cannot publish state).
+#[allow(clippy::too_many_arguments)]
+pub async fn finalize_agent_run_state(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    state: &str,
+    error_code: Option<&str>,
+    result_commit_oid: Option<&str>,
+    usage_tokens: Option<i64>,
+) -> Result<bool, AppError> {
+    let updated = sqlx::query(
+        "UPDATE agent_runs SET state = $4, error_code = $5, result_commit_oid = COALESCE($6, result_commit_oid),
+         usage_tokens = COALESCE($7, usage_tokens), updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
+           AND state IN ('running','cancel_requested')",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(state)
+    .bind(error_code)
+    .bind(result_commit_oid)
+    .bind(usage_tokens)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() == 1)
+}
+
 pub(crate) struct RenewAbortOnDrop(JoinHandle<()>);
 impl Drop for RenewAbortOnDrop {
     fn drop(&mut self) {
@@ -168,20 +198,6 @@ pub(crate) fn agent_lease_renew_guard(
     RenewAbortOnDrop(spawn_agent_lease_renewal(pool, run_id, instance_id, epoch))
 }
 
-pub(crate) fn pipeline_lease_renew_guard(
-    pool: PgPool,
-    run_id: Uuid,
-    instance_id: Uuid,
-    epoch: i64,
-) -> RenewAbortOnDrop {
-    RenewAbortOnDrop(spawn_pipeline_lease_renewal(
-        pool,
-        run_id,
-        instance_id,
-        epoch,
-    ))
-}
-
 pub fn spawn_pipeline_lease_renewal(
     pool: PgPool,
     run_id: Uuid,
@@ -215,41 +231,18 @@ pub fn spawn_pipeline_lease_renewal(
     })
 }
 
-/// Pre-queues a tentative lease so boot reconcile does not steal before the worker claims.
-pub async fn reserve_agent_run_lease(
-    pool: &PgPool,
+pub(crate) fn pipeline_lease_renew_guard(
+    pool: PgPool,
     run_id: Uuid,
     instance_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE agent_runs SET lease_holder = $2,
-         lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval
-         WHERE id = $1 AND state = 'queued' AND lease_holder IS NULL",
-    )
-    .bind(run_id)
-    .bind(instance_id)
-    .bind(LEASE_SECS)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn reserve_pipeline_run_lease(
-    pool: &PgPool,
-    run_id: Uuid,
-    instance_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE pipeline_runs SET lease_holder = $2,
-         lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval
-         WHERE id = $1 AND state = 'queued' AND lease_holder IS NULL",
-    )
-    .bind(run_id)
-    .bind(instance_id)
-    .bind(LEASE_SECS)
-    .execute(pool)
-    .await?;
-    Ok(())
+    epoch: i64,
+) -> RenewAbortOnDrop {
+    RenewAbortOnDrop(spawn_pipeline_lease_renewal(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+    ))
 }
 
 pub fn parse_instance_id() -> Uuid {
@@ -259,7 +252,6 @@ pub fn parse_instance_id() -> Uuid {
         .unwrap_or_else(Uuid::new_v4)
 }
 
-/// Test-only: drive renew immediately (deterministic TTL tests).
 pub async fn renew_agent_work_lease_for_test(
     pool: &PgPool,
     run_id: Uuid,
@@ -269,6 +261,14 @@ pub async fn renew_agent_work_lease_for_test(
     renew_agent_work_lease(pool, run_id, instance_id, epoch).await
 }
 
-pub fn _lease_secs_for_tests() -> i64 {
-    LEASE_SECS
+/// Simulate a new epoch (e.g. after reconcile or peer reclaim) without a live worker.
+pub async fn bump_agent_run_epoch_for_test(pool: &PgPool, run_id: Uuid) -> Result<i64, AppError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE agent_runs SET lease_epoch = lease_epoch + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 RETURNING lease_epoch",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
 }

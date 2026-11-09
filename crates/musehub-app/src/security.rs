@@ -80,19 +80,27 @@ pub fn validate_git_oid(oid: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Mock compose health probe only allows explicit mock scheme or loopback http(s).
+/// Mock compose health probe only allows explicit mock scheme or loopback http(s) with port.
+/// Callers cannot supply compose YAML — only a health check URL on localhost.
 pub fn validate_compose_health_target(target: &str) -> Result<(), String> {
     let target = target.trim();
     if target == "mock://healthy" {
         return Ok(());
     }
-    if let Some(rest) = target.strip_prefix("http://127.0.0.1:") {
-        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
-            return Ok(());
-        }
-    }
-    if let Some(rest) = target.strip_prefix("http://localhost:") {
-        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+    for prefix in ["http://127.0.0.1:", "http://localhost:"] {
+        if let Some(rest) = target.strip_prefix(prefix) {
+            let (port, suffix) = match rest.split_once('/') {
+                Some((p, s)) => (p, Some(s)),
+                None => (rest, None),
+            };
+            if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if let Some(path) = suffix {
+                if path.contains("..") || path.contains('@') {
+                    return Err("health target not in allowlist".to_string());
+                }
+            }
             return Ok(());
         }
     }
@@ -119,5 +127,12 @@ mod tests {
     fn agent_branch_must_not_be_main() {
         assert!(validate_agent_work_branch("main", "main").is_err());
         assert!(validate_agent_work_branch("agent/run-1", "main").is_ok());
+    }
+
+    #[test]
+    fn compose_health_target_allowlist() {
+        assert!(validate_compose_health_target("mock://healthy").is_ok());
+        assert!(validate_compose_health_target("http://127.0.0.1:18080/").is_ok());
+        assert!(validate_compose_health_target("http://evil.example/").is_err());
     }
 }

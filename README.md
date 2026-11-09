@@ -92,8 +92,20 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 # 状态备份/恢复（运维首版；需 pg_dump/pg_restore）
 ./scripts/backup-musehub-state.sh /tmp/musehub-backup
 ./scripts/restore-musehub-state.sh /tmp/musehub-backup   # 破坏性恢复
-./scripts/verify-backup-restore.sh                        # 迁移后 org 计数校验
+./scripts/verify-backup-restore.sh                        # PG + bare main OID + artifact SHA
+./scripts/verify-compose-runner-e2e.sh                    # 需 Docker：真实 pull/up/安全 inspect（CI 门禁）
 ```
+
+## 验收主线（已跑 vs 未跑）
+
+| 步骤 | 状态 | 证据 |
+|------|------|------|
+| 参考 Agent 端到端 | `[x]` | `product_slice`、`run-web-e2e.sh` |
+| PR / 流水线 / mock 部署 / trace | `[x]` | `pipeline_delivery_e2e` |
+| 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
+| **Compose runner 真实部署** | `[x]` CI only | GitHub Actions job `compose-runner-e2e`；本地需 Docker |
+| Compose **经产品 API** 默认路径 | `[~]` | 仍为 compose-mock；runner 需 `MUSEHUB_COMPOSE_ADAPTER_MODE=runner` |
+| OCI / 多环境 / 业务 MCP | `[ ]` | 未验证 |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。
 
