@@ -40,7 +40,7 @@
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | `organizations.preferences` + PATCH settings（display_name/default_collaborator_role）；Web `config-grants.spec.ts` |
 | 受保护环境部署审批 | `[x]` 本地 | `0027` + MCP `deployment_approve` 状态机；`protected_deployment_approval_e2e` |
-| MCP V1 完整工具/Resources 读实现 | `[~]` | **51** 工具；**5** 个 `resource_reads_implemented_v1` 与 catalog 一致；`production_mcp_contract_side_effects_e2e`、`production_mcp_resources_v1_catalog_e2e` |
+| MCP V1 完整工具/Resources 读实现 | `[~]` | **51** 工具 + **22** 写幂等；side-effect 矩阵（`side_effects` + `writes_remainder`）；§13 catalog + `resources_v1_negatives` |
 | Codex live 在线 | `[~]` | `adapter=codex` 仅 live；`codex-sim` 显式；**无** CI 在线凭据（刻意） |
 
 ## 未验证边界
