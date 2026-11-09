@@ -149,11 +149,31 @@ pub async fn build_product_state(
                 .unwrap_or_default()
                 .join("target/debug/musehub-agent-reference")
         });
+    let pipeline_adapter_bin = std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("target/debug/musehub-pipeline-reference")
+        });
+    let compose_adapter_bin = std::env::var("CARGO_BIN_EXE_musehub-compose-mock")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("target/debug/musehub-compose-mock")
+        });
+    let artifact_root = std::env::var("MUSEHUB_ARTIFACT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| git_root.join("../musehub-artifacts"));
     Ok(Arc::new(ProductState {
         pool,
         git_root,
+        artifact_root,
         bind_display,
         reference_adapter_bin,
+        pipeline_adapter_bin,
+        compose_adapter_bin,
         supervisor: Arc::new(musehub_app::agent_supervisor::AgentSupervisor::default()),
     }))
 }

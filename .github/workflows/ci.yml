@@ -97,9 +97,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: install Playwright OS deps
-        run: yarn --cwd web exec playwright install-deps chromium
       - run: yarn --cwd web install --frozen-lockfile
+      - name: install Playwright Chromium (with OS deps)
+        run: yarn --cwd web exec playwright install --with-deps chromium
       - run: yarn --cwd web test
       - run: yarn --cwd web build
       - name: web browser E2E (Playwright)

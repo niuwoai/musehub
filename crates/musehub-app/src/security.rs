@@ -55,6 +55,50 @@ pub fn validate_agent_work_branch(branch: &str, default_branch: &str) -> Result<
     Ok(())
 }
 
+/// Artifact names must be a single path segment without traversal.
+pub fn validate_artifact_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 128 {
+        return Err("invalid artifact name".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains('\0') {
+        return Err("invalid artifact name".to_string());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err("invalid artifact name".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_git_oid(oid: &str) -> Result<(), String> {
+    if oid.len() != 40 || !oid.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("invalid git oid".to_string());
+    }
+    Ok(())
+}
+
+/// Mock compose health probe only allows explicit mock scheme or loopback http(s).
+pub fn validate_compose_health_target(target: &str) -> Result<(), String> {
+    let target = target.trim();
+    if target == "mock://healthy" {
+        return Ok(());
+    }
+    if let Some(rest) = target.strip_prefix("http://127.0.0.1:") {
+        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+            return Ok(());
+        }
+    }
+    if let Some(rest) = target.strip_prefix("http://localhost:") {
+        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+            return Ok(());
+        }
+    }
+    Err("health target not in allowlist".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

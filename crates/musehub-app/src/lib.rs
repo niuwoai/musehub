@@ -4,17 +4,22 @@
 
 pub mod agent_supervisor;
 pub use git_http::bare_repo_path;
+mod artifacts;
 mod auth;
 mod bootstrap;
 mod codex;
+mod deployment;
 mod error;
 mod git_http;
 mod hooks;
 mod members;
 pub mod pat;
 mod pat_auth;
+mod pipeline;
 mod pr;
+mod release;
 mod security;
+mod trace;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,8 +52,11 @@ use crate::git_http::{git_clone_url, git_http_backend, init_bare_repository};
 pub struct AppState {
     pub pool: PgPool,
     pub git_root: PathBuf,
+    pub artifact_root: PathBuf,
     pub bind_display: String,
     pub reference_adapter_bin: PathBuf,
+    pub pipeline_adapter_bin: PathBuf,
+    pub compose_adapter_bin: PathBuf,
     pub supervisor: Arc<AgentSupervisor>,
 }
 
@@ -101,6 +109,38 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/checks/{check_name}",
             patch(pr::set_pull_request_check),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs",
+            post(pipeline::start_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}",
+            get(pipeline::get_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}/cancel",
+            post(pipeline::cancel_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/releases",
+            post(release::create_release),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/releases/{release_id}/publish",
+            post(release::publish_release),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/deployments",
+            post(deployment::start_deployment),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/trace/deployments/{deployment_id}",
+            get(trace::get_deployment_trace),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/runner/check-reports",
+            post(pr::runner_report_check),
         )
         .route(
             "/api/v1/adapters/codex/probe",
@@ -266,6 +306,7 @@ async fn create_repo(
     .await?;
     tx.commit().await?;
     pr::seed_repo_required_checks(&state.pool, repo_id).await?;
+    pipeline::seed_repo_environment(&state.pool, org_id, repo_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(RepositoryView {
@@ -660,7 +701,12 @@ async fn create_pat_handler(
     } else {
         None
     };
-    let (id, token) = pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?;
+    let (id, token) = if let Some(scopes) = &body.scopes {
+        let refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+        pat::create_pat_with_scopes(&state.pool, principal_id, org_id, &body.name, &refs).await?
+    } else {
+        pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?
+    };
     Ok(Json(PatCreatedView {
         id,
         token,
@@ -672,6 +718,7 @@ async fn create_pat_handler(
 struct CreatePatRequest {
     name: String,
     org: Option<String>,
+    scopes: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

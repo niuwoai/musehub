@@ -37,6 +37,24 @@ export type PullRequest = {
   head_oid?: string | null
 }
 
+export type PipelineRun = {
+  id: string
+  source_oid: string
+  workflow_name: string
+  state: string
+  run_attempt_id: string
+  error_code?: string | null
+}
+
+export type DeploymentTrace = {
+  deployment_id: string
+  release_id: string
+  pipeline_run_id: string
+  commit_oid: string
+  agent_run_id?: string | null
+  artifacts: { name: string; sha256: string; byte_length: number }[]
+}
+
 export async function login(handle: string, password: string) {
   return api<{ ok: true }>('/api/v1/auth/login', {
     method: 'POST',
@@ -118,4 +136,25 @@ export async function createPullRequest(
     method: 'POST',
     body: JSON.stringify({ title, source_branch: sourceBranch }),
   })
+}
+
+export async function startPipeline(org: string, repo: string, sourceOid: string) {
+  return api<PipelineRun>(`/api/v1/orgs/${org}/repos/${repo}/pipeline-runs`, {
+    method: 'POST',
+    body: JSON.stringify({ source_oid: sourceOid, workflow_name: 'product-ci' }),
+  })
+}
+
+export async function getPipeline(org: string, repo: string, runId: string) {
+  return api<PipelineRun>(`/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}`)
+}
+
+export async function getDeploymentTrace(
+  org: string,
+  repo: string,
+  deploymentId: string,
+) {
+  return api<DeploymentTrace>(
+    `/api/v1/orgs/${org}/repos/${repo}/trace/deployments/${deploymentId}`,
+  )
 }
