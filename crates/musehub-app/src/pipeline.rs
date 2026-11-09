@@ -233,7 +233,7 @@ async fn active_pipeline(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn spawn_pipeline_run(
+pub(crate) async fn spawn_pipeline_run(
     state: &Arc<AppState>,
     org_id: Uuid,
     repo_id: Uuid,

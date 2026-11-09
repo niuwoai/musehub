@@ -89,6 +89,50 @@ pub async fn start_deployment(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    start_deployment_inner(&state, org_id, repo_id, body).await
+}
+
+pub(crate) async fn mcp_start_deployment(
+    state: &Arc<crate::AppState>,
+    org_id: Uuid,
+    repo_id: Uuid,
+    environment_id: Uuid,
+    release_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
+    let env = sqlx::query_as::<_, (String,)>(
+        "SELECT slug FROM environments WHERE id = $1 AND repo_id = $2",
+    )
+    .bind(environment_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((env_slug,)) = env else {
+        return Err(AppError::NotFound);
+    };
+    let body = StartDeploymentRequest {
+        release_id,
+        attempt_id: Some(Uuid::new_v4()),
+        environment_slug: Some(env_slug),
+        health_target: None,
+    };
+  let (status, Json(view)) = start_deployment_inner(state, org_id, repo_id, body).await?;
+    Ok(serde_json::json!({
+        "id": view.id.to_string(),
+        "release_id": view.release_id.to_string(),
+        "environment_slug": view.environment_slug,
+        "state": view.state,
+        "adapter_kind": view.adapter_kind,
+        "attempt_id": view.attempt_id.map(|u| u.to_string()),
+        "http_status": status.as_u16(),
+    }))
+}
+
+async fn start_deployment_inner(
+    state: &Arc<crate::AppState>,
+    org_id: Uuid,
+    repo_id: Uuid,
+    body: StartDeploymentRequest,
+) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
     let env_slug = body
         .environment_slug
         .clone()
@@ -103,6 +147,7 @@ pub async fn start_deployment(
     let Some((environment_id,)) = env else {
         return Err(AppError::NotFound);
     };
+    let _ = org_id;
     let release = sqlx::query_as::<_, (String, Option<String>, Option<String>, String)>(
         "SELECT state, manifest_sha256, oci_image_ref, commit_oid FROM releases WHERE id = $1 AND repo_id = $2",
     )

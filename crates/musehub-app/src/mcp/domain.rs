@@ -342,6 +342,77 @@ pub async fn pr_review(
     }))
 }
 
+pub async fn pipeline_run(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    principal_id: Uuid,
+    workflow_path: &str,
+    target_oid: &str,
+) -> Result<Value, AppError> {
+    security::validate_git_oid(target_oid).map_err(AppError::Validation)?;
+    let storage_key: (Uuid,) = sqlx::query_as("SELECT storage_key FROM repositories WHERE id = $1")
+        .bind(access.repo_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let bare = bare_repo_path(&state.git_root, &storage_key.0);
+    let live_main = pr::git_rev_parse_public(&bare, "refs/heads/main")?;
+    if target_oid != live_main {
+        return Err(AppError::Validation(
+            "target_oid must match current main tip".to_string(),
+        ));
+    }
+    let merged = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<Uuid>)>(
+        "SELECT id, issue_id, agent_run_id FROM pull_requests
+         WHERE repo_id = $1 AND state = 'merged' AND merged_oid = $2
+         ORDER BY merged_at DESC NULLS LAST LIMIT 1",
+    )
+    .bind(access.repo_id)
+    .bind(target_oid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((merged_pr_id, issue_id, agent_run_id)) = merged else {
+        return Err(AppError::Validation(
+            "target_oid must be a merged pull request commit".to_string(),
+        ));
+    };
+    let workflow = if workflow_path.trim().is_empty() {
+        "product-ci".to_string()
+    } else {
+        workflow_path.trim().to_string()
+    };
+    let (_, axum::Json(view)) = crate::pipeline::spawn_pipeline_run(
+        state,
+        access.org_id,
+        access.repo_id,
+        storage_key.0,
+        target_oid.to_string(),
+        workflow,
+        "release_build",
+        principal_id,
+        Some(merged_pr_id),
+        issue_id,
+        agent_run_id,
+    )
+    .await?;
+    Ok(json!({
+        "id": view.id.to_string(),
+        "source_oid": view.source_oid,
+        "workflow_name": view.workflow_name,
+        "state": view.state,
+        "run_attempt_id": view.run_attempt_id.to_string(),
+        "error_code": view.error_code,
+    }))
+}
+
+pub async fn deployment_start(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    environment_id: Uuid,
+    release_id: Uuid,
+) -> Result<Value, AppError> {
+    crate::deployment::mcp_start_deployment(state, access.org_id, access.repo_id, environment_id, release_id).await
+}
+
 pub fn repo_summary_json(
     bind_display: &str,
     org_slug: &str,

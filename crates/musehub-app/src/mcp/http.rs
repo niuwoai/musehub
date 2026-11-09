@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{header::AUTHORIZATION, Method, StatusCode},
     middleware::{self, Next},
     response::Response,
     Router,
@@ -17,6 +17,8 @@ use crate::pat_auth;
 use crate::pat_policy;
 use crate::AppState;
 
+pub const MCP_SESSION_HEADER: &str = "mcp-session-id";
+
 pub fn parse_bearer_token(authorization_header: Option<&str>) -> Option<&str> {
     authorization_header?
         .strip_prefix("Bearer ")
@@ -29,7 +31,7 @@ pub fn product_mcp_router(state: Arc<AppState>, cancel: CancellationToken) -> Ro
         move || Ok(ProductionMcpServer::new(state_for_service.clone())),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(false)
+            .with_legacy_session_mode(true)
             .with_json_response(true)
             .with_cancellation_token(cancel),
     );
@@ -47,26 +49,63 @@ async fn require_pat_for_mcp(
     if !request.uri().path().starts_with("/mcp") {
         return Ok(next.run(request).await);
     }
+    if request.method() == Method::OPTIONS {
+        return Ok(next.run(request).await);
+    }
     let header = request
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    let Some(token) = parse_bearer_token(header) else {
+    let session_id = request
+        .headers()
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(|s| s.to_string());
+    let pat = if let Some(token) = parse_bearer_token(header) {
+        let pat = pat_auth::authenticate_pat_context(&state.pool, token)
+            .await
+            .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        if pat_policy::is_runner_only_pat(&pat.scopes) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if let Some(ref sid) = session_id {
+            state
+                .mcp_session_pats
+                .write()
+                .await
+                .insert(sid.clone(), pat.clone());
+        }
+        pat
+    } else if let Some(ref sid) = session_id {
+        state
+            .mcp_session_pats
+            .read()
+            .await
+            .get(sid)
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)?
+    } else {
         return Err(StatusCode::UNAUTHORIZED);
     };
-    let pat = pat_auth::authenticate_pat_context(&state.pool, token)
-        .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if pat_policy::is_runner_only_pat(&pat.scopes) {
-        return Err(StatusCode::FORBIDDEN);
-    }
     {
         let mut guard = state.mcp_pat_slot.write().await;
         *guard = Some(pat);
     }
-    // Streamable HTTP may perform multiple tool calls per Bearer session; do not clear PAT until
-    // a new authenticated request replaces it (same domain principal as REST, not OAuth).
-    Ok(next.run(request).await)
+    let response = next.run(request).await;
+    if let Some(sid) = response
+        .headers()
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some(pat) = state.mcp_pat_slot.read().await.clone() {
+            state
+                .mcp_session_pats
+                .write()
+                .await
+                .insert(sid.to_string(), pat);
+        }
+    }
+    Ok(response)
 }
 
 pub fn merge_product_mcp(api: Router, state: Arc<AppState>) -> Router {

@@ -83,6 +83,7 @@ async fn login_create_repo_issue_reference_agent() {
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
         require_pipeline_oci: false,
         mcp_pat_slot: Arc::new(tokio::sync::RwLock::new(None)),
+        mcp_session_pats: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
     let app = product_router(state);
 

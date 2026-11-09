@@ -6,6 +6,7 @@ mod domain;
 pub mod envelope;
 mod http;
 mod idempotency;
+mod pagination;
 mod server;
 
 pub use capabilities::IMPLEMENTED_TOOLS;
