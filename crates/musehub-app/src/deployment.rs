@@ -321,7 +321,8 @@ async fn launch_deployment(
     }
     insert?;
 
-    let teardown_project: Option<String> = if launch.rollback_of_id.is_some() {
+    let product_runner = state.require_pipeline_oci && adapter_kind == "compose-runner";
+    let teardown_project: Option<String> = if product_runner || launch.rollback_of_id.is_some() {
         sqlx::query_scalar(
             "SELECT d.health_summary->>'compose_project' FROM deployments d
              WHERE d.repo_id = $1 AND d.environment_id = $2 AND d.state = 'succeeded' AND d.id != $3
@@ -335,7 +336,7 @@ async fn launch_deployment(
     } else {
         None
     };
-    let project = if launch.rollback_of_id.is_some() {
+    let project = if product_runner || launch.rollback_of_id.is_some() {
         format!("musehub-env-{environment_id}")
     } else {
         format!("musehub-deploy-{deployment_id}")
@@ -358,10 +359,12 @@ async fn launch_deployment(
     if let Some(ref prev) = teardown_project {
         cmd.env("MUSEHUB_COMPOSE_TEARDOWN_PROJECT", prev);
     }
-    if launch.rollback_of_id.is_some() && adapter_kind == "compose-runner" {
+    if product_runner || (launch.rollback_of_id.is_some() && adapter_kind == "compose-runner") {
         cmd.env("MUSEHUB_COMPOSE_LEAVE_STACK", "1");
     }
-    let child = cmd.spawn().map_err(|e| AppError::Other(e.to_string()))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| AppError::Other(format!("spawn {:?}: {e}", compose_bin)))?;
     let finished = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await;
     let (ok, adapter_stdout, capability_gap) = match &finished {
         Ok(Ok(out)) => {
@@ -536,11 +539,16 @@ pub async fn rollback_deployment(
     .bind(target_id)
     .fetch_one(&state.pool)
     .await?;
-    let health_target = health_summary
-        .as_ref()
-        .and_then(|v| v.get("target"))
-        .and_then(|t| t.as_str())
-        .map(String::from);
+    let health_target = if state.require_pipeline_oci {
+        // New runner publish port; reuse env compose project via launch_deployment.
+        None
+    } else {
+        health_summary
+            .as_ref()
+            .and_then(|v| v.get("target"))
+            .and_then(|t| t.as_str())
+            .map(String::from)
+    };
     let launch = DeploymentLaunch {
         release_id,
         environment_slug: env_slug.0.clone(),

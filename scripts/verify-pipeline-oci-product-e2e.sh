@@ -13,6 +13,11 @@ export MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-127.0.0.1:5000}"
 export MUSEHUB_REQUIRE_PIPELINE_OCI=1
 export MUSEHUB_COMPOSE_ADAPTER_MODE=runner
 export DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-postgres://musehub:musehub@localhost:5432/musehub}}"
+export MUSEHUB_TEST_DATABASE_URL="$DATABASE_URL"
+export MUSEHUB_GIT_ROOT="${MUSEHUB_GIT_ROOT:-/tmp/musehub-oci-product-git}"
+export MUSEHUB_SESSION_SECRET="${MUSEHUB_SESSION_SECRET:-ci-oci-product-secret}"
+export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-Ci-Oci-Product-Strong!2026}"
+export MUSEHUB_ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-/tmp/musehub-oci-product-artifacts}"
 
 cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-pipeline-oci -q
@@ -64,6 +69,10 @@ docker pull "$REF1" >/dev/null
 docker pull "$REF2" >/dev/null
 echo "digest1=$REF1"
 echo "digest2=$REF2 oid1=$OID1 oid2=$OID2"
+export MUSEHUB_TEST_OID1="$OID1"
+export MUSEHUB_TEST_OID2="$OID2"
+export MUSEHUB_TEST_REF1="$REF1"
+export MUSEHUB_TEST_REF2="$REF2"
 
 export MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-oci"
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
@@ -76,5 +85,7 @@ env \
   CARGO_BIN_EXE_musehub_compose_runner="$PWD/target/debug/musehub-compose-runner" \
   CARGO_BIN_EXE_musehub_compose_mock="$PWD/target/debug/musehub-compose-mock" \
   cargo test -p musehub-app --test pipeline_oci_product_e2e -- --test-threads=1
-cargo test -p musehub-app --test deployment_rollback_e2e --test deployment_rollback_negative_e2e -- --test-threads=1
-echo "pipeline_oci_product=ok (includes deployment_rollback mock e2e; OCI runner rollback re-validate on CI docker)"
+cargo test -p musehub-app --test deployment_rollback_runner_e2e -- --test-threads=1 --nocapture
+env -u MUSEHUB_REQUIRE_PIPELINE_OCI MUSEHUB_COMPOSE_ADAPTER_MODE=mock \
+  cargo test -p musehub-app --test deployment_rollback_e2e --test deployment_rollback_negative_e2e -- --test-threads=1
+echo "pipeline_oci_product=ok (python write full + runner two-release HTTP rollback + mock rollback)"

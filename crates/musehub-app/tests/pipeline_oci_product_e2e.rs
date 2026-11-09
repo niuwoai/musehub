@@ -651,7 +651,9 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         let url = format!("http://{py_addr}/mcp");
         let api_base = format!("http://{py_addr}");
         let mcp_token_own = mcp_token.to_string();
+        let admin_cookie_own = admin_cookie.clone();
         let release_id_own = release_id.to_string();
+        let merge_commit_own = merge_commit.to_string();
         let org_s = org_uuid.0.to_string();
         let repo_s = repo_uuid.0.to_string();
         let env_s = env_uuid.0.to_string();
@@ -665,6 +667,8 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
                 .arg(&url)
                 .arg("--bearer")
                 .arg(&mcp_token_own)
+                .arg("--session-cookie")
+                .arg(&admin_cookie)
                 .arg("--api-base")
                 .arg(&api_base)
                 .arg("--org-slug")
@@ -680,7 +684,9 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
                 .arg("--release-id")
                 .arg(release_id_own)
                 .arg("--mode")
-                .arg("lite")
+                .arg("full")
+                .arg("--target-oid")
+                .arg(merge_commit_own)
                 .output()
         })
         .await
@@ -688,7 +694,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         .expect("python write probe");
         assert!(
             out.status.success(),
-            "python oci write probe (lite): stderr={} stdout={}",
+            "python oci write probe (full): stderr={} stdout={}",
             String::from_utf8_lossy(&out.stderr),
             String::from_utf8_lossy(&out.stdout)
         );

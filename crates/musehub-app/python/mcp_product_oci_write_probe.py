@@ -21,14 +21,14 @@ PYTHON_HTTP_CLIENT_MODE = "auto"
 async def _poll_pipeline(
     http_client: Any,
     base: str,
-    bearer: str,
+    session_cookie: str,
     org: str,
     repo: str,
     pipeline_id: str,
     timeout_s: float = 300.0,
 ) -> str:
     url = f"{base.rstrip('/')}/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{pipeline_id}"
-    headers = {"Authorization": f"Bearer {bearer}"}
+    headers = {"Cookie": session_cookie}
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         r = await http_client.get(url, headers=headers)
@@ -44,6 +44,11 @@ async def _main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True, help="MCP streamable HTTP base e.g. http://127.0.0.1:PORT/mcp")
     parser.add_argument("--bearer", required=True)
+    parser.add_argument(
+        "--session-cookie",
+        required=True,
+        help="Session cookie header value for REST pipeline polling (e.g. musehub_session=...)",
+    )
     parser.add_argument("--api-base", required=True, help="REST API origin e.g. http://127.0.0.1:PORT")
     parser.add_argument("--org-slug", default="demo")
     parser.add_argument("--repo-slug", required=True)
@@ -124,7 +129,7 @@ async def _main() -> None:
                 state = await _poll_pipeline(
                     http_client,
                     args.api_base,
-                    args.bearer,
+                    args.session_cookie,
                     args.org_slug,
                     args.repo_slug,
                     str(pipeline_id),

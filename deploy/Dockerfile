@@ -24,7 +24,10 @@ RUN cargo build --release -p musehub-server -p musehub-migrate \
 FROM node:${NODE_VERSION} AS web-builder
 WORKDIR /web
 COPY web/package.json web/yarn.lock ./
-RUN corepack enable && yarn install --frozen-lockfile
+RUN sed -i 's|https://registry.npmmirror.com/|https://registry.npmjs.org/|g' yarn.lock \
+  && corepack enable \
+  && yarn config set npmRegistryServer https://registry.npmjs.org \
+  && yarn install --frozen-lockfile
 COPY web/ ./
 COPY VERSION /VERSION
 RUN yarn build
