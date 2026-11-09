@@ -20,7 +20,8 @@ test.describe('delivery chain browser flow', () => {
   test('login → agent PR → second user gates → pipeline → mock deploy → trace', async ({
     page,
   }) => {
-    test.setTimeout(300_000)
+    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
+    test.setTimeout(productOci ? 600_000 : 300_000)
     const reviewerPass = 'E2e-Reviewer-Delivery-12!'
     const ciPass = 'E2e-Ci-Delivery-12!'
 
@@ -148,12 +149,10 @@ test.describe('delivery chain browser flow', () => {
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
       timeout: pipelineTimeout,
     })
-    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
     const releaseDeploy = page.getByRole('button', { name: /release.*mock|mock 部署/i })
     await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
     await releaseDeploy.click()
     await expect(page.getByTestId('delivery-trace')).toBeVisible({ timeout: 90_000 })
-    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
     if (productOci) {
       await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
         timeout: 120_000,
