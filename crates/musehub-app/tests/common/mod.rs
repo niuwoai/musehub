@@ -3,11 +3,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::body::Body;
+use axum::http::{header, Request, StatusCode};
+use axum::Router;
 use musehub_app::agent_supervisor::new_supervisor;
 use musehub_app::{prepare, product_router, AppState};
 use musehub_migrate::{load_migrations, migrate_up};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use tower::ServiceExt;
 
 pub async fn migrated_pool() -> PgPool {
     let database_url =
@@ -24,6 +28,11 @@ pub async fn migrated_pool() -> PgPool {
     pool
 }
 
+pub fn bootstrap_password() -> String {
+    std::env::var("MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD")
+        .unwrap_or_else(|_| "Acceptance-Bootstrap-Strong-1!".to_string())
+}
+
 pub fn reference_adapter_bin() -> PathBuf {
     std::env::var("CARGO_BIN_EXE_musehub-agent-reference")
         .ok()
@@ -35,16 +44,11 @@ pub fn reference_adapter_bin() -> PathBuf {
         })
 }
 
-pub fn bootstrap_password() -> String {
-    std::env::var("MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD")
-        .unwrap_or_else(|_| "Acceptance-Bootstrap-Strong-1!".to_string())
-}
-
 pub async fn product_app(
     pool: PgPool,
     git_root: &std::path::Path,
     bootstrap_password: &str,
-) -> axum::Router {
+) -> Router {
     prepare(
         pool.clone(),
         git_root.to_path_buf(),
@@ -60,4 +64,59 @@ pub async fn product_app(
         supervisor: new_supervisor(),
     });
     product_router(state)
+}
+
+pub async fn login_cookie(app: &Router, handle: &str, password: &str) -> String {
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"handle": handle, "password": password}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("login");
+    assert_eq!(login.status(), StatusCode::OK);
+    login
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("cookie")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+pub fn branch_commit_count(bare: &std::path::Path, branch: &str) -> u64 {
+    let verify = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str().unwrap(),
+            "show-ref",
+            "--verify",
+            &format!("refs/heads/{branch}"),
+        ])
+        .status()
+        .expect("show-ref");
+    if !verify.success() {
+        return 0;
+    }
+    let output = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str().unwrap(),
+            "rev-list",
+            "--count",
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()
+        .expect("rev-list");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0)
 }

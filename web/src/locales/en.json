@@ -10,6 +10,9 @@
     "signedInAs": "Signed in as",
     "createRepo": "Create repository",
     "createIssue": "Create issue",
-    "runReferenceAgent": "Run reference agent (no model)"
+    "runReferenceAgent": "Run reference agent (no model)",
+    "acceptPlan": "Accept plan",
+    "cancelAgent": "Cancel agent run",
+    "createPullRequest": "Create pull request"
   }
 }

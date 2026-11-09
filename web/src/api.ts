@@ -1,9 +1,6 @@
 const API_BASE = ''
 
-async function api<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -11,7 +8,7 @@ async function api<T>(
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    throw new Error(body.message ?? response.statusText)
+    throw new Error((body as { message?: string }).message ?? response.statusText)
   }
   if (response.status === 204) {
     return undefined as T
@@ -29,6 +26,15 @@ export type AgentRun = {
   result_commit_oid?: string | null
   usage_tokens: number
   budget_unknown: boolean
+}
+export type PullRequest = {
+  id: string
+  number: number
+  title: string
+  state: string
+  source_branch: string
+  target_branch: string
+  head_oid?: string | null
 }
 
 export async function login(handle: string, password: string) {
@@ -64,6 +70,20 @@ export async function createIssue(org: string, repo: string, title: string) {
   })
 }
 
+export async function createPlan(org: string, repo: string, issueNumber: number, body: string) {
+  return api('/api/v1/orgs/' + org + '/repos/' + repo + '/issues/' + issueNumber + '/plans', {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
+}
+
+export async function acceptPlan(org: string, repo: string, issueNumber: number) {
+  return api<void>(
+    `/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}/plans`,
+    { method: 'PATCH' },
+  )
+}
+
 export async function startAgentRun(
   org: string,
   repo: string,
@@ -73,5 +93,29 @@ export async function startAgentRun(
   return api<AgentRun>(`/api/v1/orgs/${org}/repos/${repo}/agent-runs`, {
     method: 'POST',
     body: JSON.stringify({ issue_id: issueId, message }),
+  })
+}
+
+export async function getAgentRun(runId: string) {
+  return api<AgentRun>(`/api/v1/agent-runs/${runId}`)
+}
+
+export async function cancelAgentRun(runId: string) {
+  return api<void>(`/api/v1/agent-runs/${runId}/cancel`, { method: 'POST' })
+}
+
+export async function listPullRequests(org: string, repo: string) {
+  return api<PullRequest[]>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`)
+}
+
+export async function createPullRequest(
+  org: string,
+  repo: string,
+  title: string,
+  sourceBranch: string,
+) {
+  return api<PullRequest>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`, {
+    method: 'POST',
+    body: JSON.stringify({ title, source_branch: sourceBranch }),
   })
 }

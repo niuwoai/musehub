@@ -293,7 +293,7 @@ fn budget_exceeded(
     budget_microusd: Option<u64>,
 ) -> bool {
     if let Some(limit) = budget_tokens {
-        if usage.tokens > limit {
+        if !usage.budget_unknown && usage.tokens > limit {
             return true;
         }
     }

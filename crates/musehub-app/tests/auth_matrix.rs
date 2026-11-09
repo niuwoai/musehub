@@ -7,7 +7,6 @@ use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-
 #[tokio::test]
 async fn outsider_cannot_list_repos_and_pat_scoped() {
     let pool = common::migrated_pool().await;

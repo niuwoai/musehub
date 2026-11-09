@@ -64,6 +64,9 @@ jobs:
           cargo test -p musehub-app --test protected_branch_git -- --test-threads=1
           cargo test -p musehub-app --test auth_matrix -- --test-threads=1
           cargo test -p musehub-app --test plan_immutable -- --test-threads=1
+          cargo test -p musehub-app --test pr_gates_e2e -- --test-threads=1
+          cargo test -p musehub-app --test agent_budget -- --test-threads=1
+          cargo test -p musehub-app --test pat_scope -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest

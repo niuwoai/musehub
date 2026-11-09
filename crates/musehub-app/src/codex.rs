@@ -69,12 +69,20 @@ pub async fn codex_probe_handler(
         message: "http probe".to_string(),
         branch: None,
     };
-    let (mode, run) = if codex_live_configured() {
+    let allow_live = std::env::var("MUSEHUB_CODEX_PROBE_ALLOW_LIVE")
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false);
+    let (mode, run) = if allow_live && codex_live_configured() {
         (
-            "live_configured_not_evidence",
+            "live_attempt_no_ci_evidence",
             spawn_codex_live(&task, work.path()).await?,
         )
     } else {
+        if codex_live_configured() && !allow_live {
+            return Err(AppError::Validation(
+                "live codex binary is configured but probe is sim-only; set MUSEHUB_CODEX_PROBE_ALLOW_LIVE=true to attempt live".to_string(),
+            ));
+        }
         let bin = codex_sim_binary();
         (
             "simulated_protocol",
@@ -92,9 +100,9 @@ pub async fn codex_probe_handler(
         musehub_agent_adapter::RunOutcome::Canceled { .. } => "canceled",
     };
     let note = if mode.starts_with("live") {
-        "live binary present; no online model evidence in CI"
+        "explicit live attempt; no online model evidence recorded"
     } else {
-        "simulated NDJSON only; no online model evidence"
+        "simulated NDJSON only; does not execute live codex"
     };
     Ok(Json(CodexProbeResponse {
         adapter: CODEX_ADAPTER.to_string(),

@@ -10,7 +10,6 @@ use musehub_app::bare_repo_path;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-
 #[tokio::test]
 async fn direct_main_push_denied_agent_branch_allowed() {
     let pool = common::migrated_pool().await;

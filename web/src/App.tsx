@@ -2,14 +2,21 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
+  acceptPlan,
   AgentRun,
+  cancelAgentRun,
   createIssue,
+  createPlan,
+  createPullRequest,
   createRepo,
+  getAgentRun,
   Issue,
   listIssues,
+  listPullRequests,
   listRepos,
   login,
   me,
+  PullRequest,
   Repository,
   startAgentRun,
 } from './api'
@@ -26,6 +33,7 @@ export default function App() {
   const [repos, setRepos] = useState<Repository[]>([])
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
   const [issues, setIssues] = useState<Issue[]>([])
+  const [pulls, setPulls] = useState<PullRequest[]>([])
   const [lastRun, setLastRun] = useState<AgentRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loginForm, setLoginForm] = useState({ handle: 'admin', password: '' })
@@ -64,12 +72,32 @@ export default function App() {
     setSelectedRepo(slug)
     const data = await listIssues(DEFAULT_ORG, slug)
     setIssues(data)
+    const prs = await listPullRequests(DEFAULT_ORG, slug)
+    setPulls(prs)
   }
 
   async function onCreateIssue() {
     if (!selectedRepo) return
     await createIssue(DEFAULT_ORG, selectedRepo, 'Slice issue')
     await loadIssues(selectedRepo)
+  }
+
+  async function onAcceptPlan(issue: Issue) {
+    if (!selectedRepo) return
+    await createPlan(DEFAULT_ORG, selectedRepo, issue.number, 'UI plan draft')
+    await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
+  }
+
+  async function pollRun(runId: string) {
+    for (let i = 0; i < 120; i++) {
+      const run = await getAgentRun(runId)
+      setLastRun(run)
+      if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
+        return run
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    throw new Error('agent run timeout')
   }
 
   async function onRunAgent(issue: Issue) {
@@ -81,6 +109,26 @@ export default function App() {
       `Implement: ${issue.title}`,
     )
     setLastRun(run)
+    await pollRun(run.id)
+    if (selectedRepo) await loadIssues(selectedRepo)
+  }
+
+  async function onCancelRun() {
+    if (!lastRun) return
+    await cancelAgentRun(lastRun.id)
+    await pollRun(lastRun.id)
+  }
+
+  async function onCreatePrFromRun() {
+    if (!selectedRepo || !lastRun?.result_commit_oid) return
+    const branch = `agent/${lastRun.id}`
+    await createPullRequest(
+      DEFAULT_ORG,
+      selectedRepo,
+      `PR for ${branch}`,
+      branch,
+    )
+    await loadIssues(selectedRepo)
   }
 
   return (
@@ -124,7 +172,7 @@ export default function App() {
             ))}
           </ul>
           {selectedRepo ? (
-            <motion box style={{ marginTop: '1rem' }}>
+            <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
               <button type="button" onClick={() => void onCreateIssue()}>
                 {t('app.createIssue')}
@@ -133,6 +181,9 @@ export default function App() {
                 {issues.map((issue) => (
                   <li key={issue.id}>
                     #{issue.number} {issue.title}{' '}
+                    <button type="button" onClick={() => void onAcceptPlan(issue)}>
+                      {t('app.acceptPlan')}
+                    </button>
                     <button type="button" onClick={() => void onRunAgent(issue)}>
                       {t('app.runReferenceAgent')}
                     </button>
@@ -140,15 +191,37 @@ export default function App() {
                 ))}
               </ul>
               {lastRun ? (
-                <p data-testid="last-agent-run">
-                  {lastRun.adapter_kind} / {lastRun.state}
-                  {lastRun.result_commit_oid
-                    ? ` → ${lastRun.result_commit_oid.slice(0, 7)}`
-                    : ''}
-                  {lastRun.budget_unknown ? ' (budget unknown)' : ''}
-                </p>
+                <div data-testid="last-agent-run">
+                  <p>
+                    {lastRun.adapter_kind} / {lastRun.state}
+                    {lastRun.result_commit_oid
+                      ? ` → ${lastRun.result_commit_oid.slice(0, 7)}`
+                      : ''}
+                    {lastRun.budget_unknown ? ' (budget unknown)' : ''}
+                  </p>
+                  {lastRun.state === 'running' || lastRun.state === 'queued' ? (
+                    <button type="button" onClick={() => void onCancelRun()}>
+                      {t('app.cancelAgent')}
+                    </button>
+                  ) : null}
+                  {lastRun.state === 'succeeded' ? (
+                    <button type="button" onClick={() => void onCreatePrFromRun()}>
+                      {t('app.createPullRequest')}
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
-            </motion>
+              {pulls.length > 0 ? (
+                <ul data-testid="pull-request-list">
+                  {pulls.map((pr) => (
+                    <li key={pr.id}>
+                      #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} →{' '}
+                      {pr.target_branch}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </Panel>
           ) : null}
         </section>
       ) : (
@@ -180,7 +253,13 @@ export default function App() {
   )
 }
 
-function motion({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+function Panel({
+  children,
+  style,
+}: {
+  children: React.ReactNode
+  style?: React.CSSProperties
+}) {
   return (
     <div
       style={{

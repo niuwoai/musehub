@@ -10,7 +10,9 @@ mod codex;
 mod error;
 mod git_http;
 mod hooks;
-mod pat;
+mod members;
+pub mod pat;
+mod pat_auth;
 mod pr;
 mod security;
 
@@ -21,7 +23,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use base64::Engine;
 use musehub_agent_adapter::REFERENCE_ADAPTER;
@@ -56,6 +58,12 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/auth/logout", post(logout_handler))
         .route("/api/v1/me", get(me_handler))
         .route("/api/v1/tokens", post(create_pat_handler))
+        .route("/api/v1/tokens/{token_id}", delete(revoke_pat_handler))
+        .route("/api/v1/orgs/{org}/members", post(members::invite_member))
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/collaborators",
+            post(members::grant_repo_collaborator),
+        )
         .route(
             "/api/v1/orgs/{org}/repos",
             get(list_repos).post(create_repo),
@@ -85,6 +93,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/merge",
             post(pr::merge_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/sync",
+            patch(pr::sync_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/checks/{check_name}",
+            patch(pr::set_pull_request_check),
         )
         .route(
             "/api/v1/adapters/codex/probe",
@@ -249,6 +265,7 @@ async fn create_repo(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    pr::seed_repo_required_checks(&state.pool, repo_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(RepositoryView {
@@ -369,7 +386,6 @@ async fn create_issue(
 struct StartAgentRunRequest {
     issue_id: Uuid,
     message: String,
-    #[allow(dead_code)]
     budget_tokens: Option<u64>,
 }
 
@@ -425,8 +441,8 @@ async fn start_agent_run(
     security::validate_agent_work_branch(&branch, &default_branch.0)
         .map_err(AppError::Validation)?;
     sqlx::query(
-        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued')",
+        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8)",
     )
     .bind(run_id)
     .bind(org_id)
@@ -435,6 +451,7 @@ async fn start_agent_run(
     .bind(principal_id)
     .bind(REFERENCE_ADAPTER)
     .bind(&branch)
+    .bind(body.budget_tokens.map(|limit| limit as i64))
     .execute(&state.pool)
     .await?;
     let supervisor = state.supervisor.clone();
@@ -443,6 +460,7 @@ async fn start_agent_run(
     let reference_bin = state.reference_adapter_bin.clone();
     let message = body.message.clone();
     let deadline = std::time::Duration::from_secs(120);
+    let budget_tokens = body.budget_tokens;
     tokio::spawn(async move {
         agent_supervisor::run_reference_job(
             pool,
@@ -455,6 +473,7 @@ async fn start_agent_run(
             branch,
             message,
             deadline,
+            budget_tokens,
         )
         .await;
     });
@@ -525,7 +544,29 @@ async fn git_smart_http(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let (user, pass) = basic_auth(&headers)?;
-    let principal_id = authenticate_basic(&state.pool, &user, &pass).await?;
+    let org_id = org_id_from_slug(&state.pool, &org).await?;
+    let principal_id = if pass.starts_with("mhp_") {
+        let pat_ctx = pat_auth::authenticate_pat_context(&state.pool, &pass).await?;
+        if !pat_auth::pat_org_allowed(pat_ctx.org_id, org_id) {
+            return Err(AppError::Forbidden);
+        }
+        let service = query
+            .iter()
+            .find(|(key, _)| key == "service")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or("");
+        let needs_write = service.contains("receive-pack") || method == Method::POST;
+        let needs_read = needs_write || service.contains("upload-pack") || method == Method::GET;
+        if needs_write && !pat_auth::scope_allows(&pat_ctx.scopes, "repo:write") {
+            return Err(AppError::Forbidden);
+        }
+        if needs_read && !pat_auth::scope_allows(&pat_ctx.scopes, "repo:read") {
+            return Err(AppError::Forbidden);
+        }
+        pat_ctx.principal_id
+    } else {
+        authenticate_basic(&state.pool, &user, &pass).await?
+    };
     let repo = repo_git.strip_suffix(".git").ok_or(AppError::Validation(
         "repository URL must end with .git".to_string(),
     ))?;
@@ -585,6 +626,26 @@ fn basic_auth(headers: &HeaderMap) -> Result<(String, String), AppError> {
     Ok((user.to_string(), pass.to_string()))
 }
 
+async fn revoke_pat_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let updated = sqlx::query(
+        "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND principal_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(token_id)
+    .bind(principal_id)
+    .execute(&state.pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn create_pat_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -596,8 +657,9 @@ async fn create_pat_handler(
     } else {
         None
     };
-    let (_, token) = pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?;
+    let (id, token) = pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?;
     Ok(Json(PatCreatedView {
+        id,
         token,
         note: "shown once",
     }))
@@ -611,6 +673,7 @@ struct CreatePatRequest {
 
 #[derive(Serialize)]
 struct PatCreatedView {
+    id: Uuid,
     token: String,
     note: &'static str,
 }
@@ -725,6 +788,15 @@ async fn authenticate_basic(pool: &PgPool, user: &str, pass: &str) -> Result<Uui
     Ok(id)
 }
 
+async fn org_id_from_slug(pool: &PgPool, org_slug: &str) -> Result<Uuid, AppError> {
+    let row =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug_normalized = $1")
+            .bind(org_slug.to_lowercase())
+            .fetch_optional(pool)
+            .await?;
+    row.map(|(id,)| id).ok_or(AppError::NotFound)
+}
+
 async fn org_id_for_member(
     pool: &PgPool,
     org_slug: &str,
@@ -742,7 +814,7 @@ async fn org_id_for_member(
     row.map(|(id,)| id).ok_or(AppError::Forbidden)
 }
 
-async fn repo_id_for_member(
+pub(crate) async fn repo_id_for_member(
     pool: &PgPool,
     org_slug: &str,
     repo_slug: &str,

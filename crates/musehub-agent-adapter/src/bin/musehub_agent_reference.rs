@@ -43,18 +43,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "detail": "reference adapter running",
         })
     )?;
+    let (usage_tokens, budget_unknown) = if task.message == "__budget_exceed__" {
+        (50_000u64, false)
+    } else {
+        (0u64, true)
+    };
     writeln!(
         stdout,
         "{}",
         serde_json::json!({
             "type": "usage",
-            "tokens": 0,
+            "tokens": usage_tokens,
             "microusd": 0,
-            "budget_unknown": true,
+            "budget_unknown": budget_unknown,
         })
     )?;
     if task.message == "__slow__" {
         std::thread::sleep(std::time::Duration::from_secs(8));
+    }
+    if task.message == "__budget_exceed__" {
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let commit = if task.kind == "implementation" {
         let branch = task.branch.as_deref().unwrap_or("agent/reference");

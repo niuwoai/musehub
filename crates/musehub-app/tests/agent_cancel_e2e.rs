@@ -7,8 +7,8 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
+use musehub_app::bare_repo_path;
 use tower::ServiceExt;
-
 
 #[tokio::test]
 async fn slow_agent_cancel_leaves_no_commit() {
@@ -170,4 +170,14 @@ async fn slow_agent_cancel_leaves_no_commit() {
     .unwrap()
     .0;
     assert!(oid.is_none());
+    let branch = format!("agent/{run_id}");
+    let storage_key: uuid::Uuid = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT storage_key FROM repositories WHERE slug_normalized = 'cancel'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .0;
+    let bare = bare_repo_path(git_root.path(), &storage_key);
+    assert_eq!(common::branch_commit_count(&bare, &branch), 0);
 }

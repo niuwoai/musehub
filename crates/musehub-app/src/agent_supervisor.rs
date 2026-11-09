@@ -65,6 +65,7 @@ pub async fn run_reference_job(
     branch: String,
     message: String,
     deadline: Duration,
+    budget_tokens: Option<u64>,
 ) {
     let _ = sqlx::query(
         "UPDATE agent_runs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
@@ -93,6 +94,10 @@ pub async fn run_reference_job(
         let _ = mark_failed(&pool, run_id, "git_clone_failed").await;
         return;
     }
+    let _ = std::process::Command::new("git")
+        .current_dir(work_dir.path())
+        .args(["checkout", "-B", &branch, "main"])
+        .status();
 
     let task = AgentTask {
         kind: "implementation".to_string(),
@@ -130,12 +135,19 @@ pub async fn run_reference_job(
             }
         }
     });
-    let outcome =
-        match musehub_agent_adapter::finish_run(run, deadline, None, None, Some(cancel_rx)).await {
-            Ok(outcome) => normalize_cancel_outcome(&pool, run_id, outcome).await,
-            Err(_) => {
-                let _ = mark_failed(&pool, run_id, "adapter_failed").await;
-                supervisor.inner.lock().await.remove(&run_id);
+    let outcome = match musehub_agent_adapter::finish_run(
+        run,
+        deadline,
+        budget_tokens,
+        None,
+        Some(cancel_rx),
+    )
+    .await
+    {
+        Ok(outcome) => normalize_cancel_outcome(&pool, run_id, outcome).await,
+        Err(_) => {
+            let _ = mark_failed(&pool, run_id, "adapter_failed").await;
+            supervisor.inner.lock().await.remove(&run_id);
             poll.abort();
             return;
         }
@@ -145,20 +157,36 @@ pub async fn run_reference_job(
 
     match outcome {
         RunOutcome::Succeeded { commit, usage } => {
-            if commit.is_some() {
+            if cancel_requested(&pool, run_id).await {
+                let _ = sqlx::query(
+                    "UPDATE agent_runs SET state = 'canceled', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                )
+                .bind(run_id)
+                .bind(usage.tokens as i64)
+                .execute(&pool)
+                .await;
+            } else if commit.is_some() {
                 let _ = std::process::Command::new("git")
                     .current_dir(work_dir.path())
                     .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
                     .status();
+                let _ = sqlx::query(
+                    "UPDATE agent_runs SET state = 'succeeded', result_commit_oid = $2, usage_tokens = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                )
+                .bind(run_id)
+                .bind(commit)
+                .bind(usage.tokens as i64)
+                .execute(&pool)
+                .await;
+            } else {
+                let _ = sqlx::query(
+                    "UPDATE agent_runs SET state = 'succeeded', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                )
+                .bind(run_id)
+                .bind(usage.tokens as i64)
+                .execute(&pool)
+                .await;
             }
-            let _ = sqlx::query(
-                "UPDATE agent_runs SET state = 'succeeded', result_commit_oid = $2, usage_tokens = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-            )
-            .bind(run_id)
-            .bind(commit)
-            .bind(usage.tokens as i64)
-            .execute(&pool)
-            .await;
             let _ = repo_id;
         }
         RunOutcome::Canceled { usage } => {
@@ -202,6 +230,16 @@ async fn normalize_cancel_outcome(pool: &PgPool, run_id: Uuid, outcome: RunOutco
             RunOutcome::Canceled { usage }
         }
     }
+}
+
+async fn cancel_requested(pool: &PgPool, run_id: Uuid) -> bool {
+    matches!(
+        sqlx::query_as::<_, (String,)>("SELECT state FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await,
+        Ok(Some((state,))) if state == "cancel_requested"
+    )
 }
 
 async fn mark_failed(pool: &PgPool, run_id: Uuid, code: &str) -> Result<(), AppError> {

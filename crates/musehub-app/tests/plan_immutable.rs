@@ -8,7 +8,6 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-
 #[tokio::test]
 async fn accepted_plan_immutable_and_stale_revision_blocks_agent() {
     let pool = common::migrated_pool().await;
