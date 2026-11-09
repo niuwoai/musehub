@@ -95,6 +95,7 @@ fn main() {
     tmpfs:
       - /var/cache/nginx:size=8m
       - /var/run:size=1m
+      - /tmp:size=1m
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -124,16 +125,28 @@ fn main() {
             "-d",
             "--pull",
             "always",
-            "--wait",
         ])
         .current_dir(work.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .status();
+        .output();
 
-    if !up.map(|s| s.success()).unwrap_or(false) {
+    let up_ok = up.as_ref().map(|o| o.status.success()).unwrap_or(false);
+    if !up_ok {
         rollback(&compose_path, &project);
-        emit(r#"{"type":"error","code":"compose_up_failed"}"#);
+        if let Ok(o) = up {
+            let detail = String::from_utf8_lossy(&o.stderr)
+                .lines()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            emit(&format!(
+                r#"{{"type":"error","code":"compose_up_failed","detail":{}}}"#,
+                serde_json::to_string(&detail).unwrap_or_else(|_| "\"\"".into())
+            ));
+        } else {
+            emit(r#"{"type":"error","code":"compose_up_failed"}"#);
+        }
         std::process::exit(1);
     }
 
