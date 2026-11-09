@@ -23,24 +23,31 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 git init --bare "$TMP/bare.git" >/dev/null 2>&1
 WORKDIR=$(mktemp -d)
-git -C "$WORKDIR" init -q && git -C "$WORKDIR" config user.email ci@musehub.test && git -C "$WORKDIR" config user.name ci
+git -C "$WORKDIR" init -q -b main
+git -C "$WORKDIR" config user.email ci@musehub.test
+git -C "$WORKDIR" config user.name ci
 echo v1 >"$WORKDIR/README"
 git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -q -m v1
 OID1=$(git -C "$WORKDIR" rev-parse HEAD)
 git -C "$WORKDIR" push -q "$TMP/bare.git" HEAD:main
 build_oid() {
   local oid=$1
-  local out
+  local out run_id repo_id
   out=$(mktemp -d)
-  MUSEHUB_PIPELINE_SOURCE_OID="$oid" \
+  run_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
+  repo_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
+  if ! MUSEHUB_PIPELINE_SOURCE_OID="$oid" \
     MUSEHUB_PIPELINE_BARE_GIT="$TMP/bare.git" \
     MUSEHUB_PIPELINE_ARTIFACT_PATH="$out/bundle.tar" \
     MUSEHUB_PIPELINE_RUN_KIND=release_build \
-    MUSEHUB_PIPELINE_RUN_ID="$(uuidgen)" \
-    MUSEHUB_PIPELINE_REPO_ID="$(uuidgen)" \
+    MUSEHUB_PIPELINE_RUN_ID="$run_id" \
+    MUSEHUB_PIPELINE_REPO_ID="$repo_id" \
     MUSEHUB_OCI_REGISTRY="$MUSEHUB_OCI_REGISTRY" \
-    "$BIN_OCI" 2>&1 | tee "$out/log" || true
-  grep -oE '[[:graph:]]+@sha256:[a-f0-9]{64}' "$out/log" | head -1
+    "$BIN_OCI" >"$out/log" 2>&1; then
+    cat "$out/log" >&2
+    return 1
+  fi
+  grep -oE '[0-9./:a-zA-Z_-]+@sha256:[a-f0-9]{64}' "$out/log" | head -1
 }
 REF1=$(build_oid "$OID1")
 echo v2 >"$WORKDIR/README"

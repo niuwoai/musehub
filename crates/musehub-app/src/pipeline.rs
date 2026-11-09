@@ -28,7 +28,6 @@ const JOB_BUILD: &str = "build";
 const KIND_RELEASE: &str = "release_build";
 const KIND_PR_VALIDATION: &str = "pr_validation";
 const ARTIFACT_NAME: &str = "bundle.tar";
-const ARTIFACT_OCI_NAME: &str = "oci-image.ref";
 
 #[derive(Serialize)]
 pub struct PipelineRunView {
@@ -469,7 +468,7 @@ async fn run_pipeline_job(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_child_process_group(&mut cmd);
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(child) => child,
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
@@ -532,7 +531,7 @@ async fn run_pipeline_job(
         return;
     }
     if let Some(oci_ref) = oci_from_adapter {
-        let oci_path = match safe_join(&dir, ARTIFACT_OCI_NAME) {
+        let oci_path = match safe_join(&dir, artifacts::ARTIFACT_OCI_REF_NAME) {
             Ok(p) => p,
             Err(_) => {
                 mark_failed(&pool, run_id, job_id, "oci_artifact_path_failed").await;
@@ -563,7 +562,7 @@ async fn run_pipeline_job(
         .bind(org_id)
         .bind(repo_id)
         .bind(run_id)
-        .bind(ARTIFACT_OCI_NAME)
+        .bind(artifacts::ARTIFACT_OCI_REF_NAME)
         .bind(&sha)
         .bind(len as i64)
         .bind(dir.to_string_lossy().as_ref())

@@ -120,7 +120,6 @@ pub async fn verify_ready_artifacts_for_pipeline(
     Ok(())
 }
 
-pub const ARTIFACT_KIND_FILE: &str = "file";
 pub const ARTIFACT_KIND_OCI: &str = "oci_image";
 pub const ARTIFACT_OCI_REF_NAME: &str = "oci-image.ref";
 
