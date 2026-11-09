@@ -10,7 +10,7 @@
 | `rust-portable` | `[x]` | fmt/clippy/portable/acceptance/backup/安全 E2E |
 | `web` | `[x]` | Playwright `scripts/run-web-e2e.sh`（失败时 `collect-e2e-diagnostics.sh`）；`MUSEHUB_PRODUCT_OCI_E2E=1` 时 delivery 经 pipeline OCI 产品路径 |
 | `compose-runner-e2e` | `[x]` | `scripts/verify-compose-runner-e2e.sh`（真实 pull/up/inspect/rollback，**非** `docker info` 探针） |
-| `pipeline-oci-product` | `[~]` | `verify-pipeline-oci-product-e2e.sh`：双 digest + **`MUSEHUB_MCP_PRODUCT=1` 产品 MCP 写路径**；待本 PR CI SHA 全绿后标回 `[x]` |
+| `pipeline-oci-product` | `[x]` | `verify-pipeline-oci-product-e2e.sh`：双 digest + MCP `pipeline_run`/`deployment_start`（PR #12，`42610489459` 全绿） |
 
 ## P0 清单（节选）
 
