@@ -138,12 +138,14 @@ api POST /api/v1/orgs/demo/members \
 
 CI_JAR=$(mktemp)
 REV_JAR=$(mktemp)
-curl -fsS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
+rev_login=$(curl -fsS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h stack-rev --arg p 'Stack-Reviewer-12345678' '{handle:$h,password:$p}')" \
-  "$BASE/api/v1/auth/login" >/dev/null
-curl -fsS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
+  "$BASE/api/v1/auth/login")
+echo "$rev_login" | jq -e '.ok == true' >/dev/null
+ci_login=$(curl -fsS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h stack-ci --arg p 'StackCiReporter12345678' '{handle:$h,password:$p}')" \
-  "$BASE/api/v1/auth/login" >/dev/null
+  "$BASE/api/v1/auth/login")
+echo "$ci_login" | jq -e '.ok == true' >/dev/null
 
 echo "step=pr_collaborator"
 api POST /api/v1/orgs/demo/repos/stack-slice/collaborators \
@@ -158,8 +160,6 @@ pr_n=$(echo "$pr" | jq -r .number)
 pr_id=$(echo "$pr" | jq -r .id)
 
 echo "step=review_pr"
-rev_me=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" "$BASE/api/v1/me")
-echo "$rev_me" | jq -e '.handle == "stack-rev"' >/dev/null
 rev_tmp=$(mktemp)
 rev_code=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
   -d '{"decision":"approve"}' -o "$rev_tmp" -w "%{http_code}" \
