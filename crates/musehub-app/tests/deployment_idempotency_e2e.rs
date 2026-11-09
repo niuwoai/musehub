@@ -48,11 +48,18 @@ async fn deployment_start_replays_attempt_id() {
         .unwrap();
     let artifact_bytes = b"idem-test-bundle";
     let sha256 = Sha256::digest(artifact_bytes);
-    let sha_hex = sha256.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-    let artifact_dir = git_root.path().join("artifacts").join(org_id.to_string()).join(repo_id.to_string());
+    let sha_hex = sha256
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    let artifact_dir = git_root
+        .path()
+        .join("artifacts")
+        .join(org_id.to_string())
+        .join(repo_id.to_string());
     std::fs::create_dir_all(&artifact_dir).unwrap();
     std::fs::write(artifact_dir.join("bundle.tar"), artifact_bytes).unwrap();
-  let manifest_sha = "c".repeat(64);
+    let manifest_sha = "c".repeat(64);
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state, requested_by, run_attempt_id, run_kind)
          VALUES ($1,$2,$3,$4,'product-ci','succeeded',$5,$6,'release_build')",
@@ -124,7 +131,10 @@ async fn deployment_start_replays_attempt_id() {
     let first_json: serde_json::Value =
         serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let dep_id = first_json["id"].as_str().unwrap().to_string();
-    assert_eq!(first_json["attempt_id"].as_str().unwrap(), attempt.to_string());
+    assert_eq!(
+        first_json["attempt_id"].as_str().unwrap(),
+        attempt.to_string()
+    );
 
     let second = post().await;
     assert_eq!(second.status(), StatusCode::OK);
@@ -133,13 +143,12 @@ async fn deployment_start_replays_attempt_id() {
     assert_eq!(second_json["id"].as_str().unwrap(), dep_id);
     assert_eq!(second_json["state"].as_str().unwrap(), "succeeded");
 
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM deployments WHERE repo_id = $1 AND attempt_id = $2",
-    )
-    .bind(repo_id)
-    .bind(attempt)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM deployments WHERE repo_id = $1 AND attempt_id = $2")
+            .bind(repo_id)
+            .bind(attempt)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count.0, 1);
 }

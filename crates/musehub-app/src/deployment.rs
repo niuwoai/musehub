@@ -73,15 +73,16 @@ pub async fn start_deployment(
         ));
     }
     if let Some(attempt_id) = body.attempt_id {
-        let existing = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<serde_json::Value>)>(
-            "SELECT d.id, d.release_id, d.state, d.adapter_kind, d.health_summary
+        let existing =
+            sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<serde_json::Value>)>(
+                "SELECT d.id, d.release_id, d.state, d.adapter_kind, d.health_summary
              FROM deployments d
              WHERE d.repo_id = $1 AND d.attempt_id = $2",
-        )
-        .bind(repo_id)
-        .bind(attempt_id)
-        .fetch_optional(&state.pool)
-        .await?;
+            )
+            .bind(repo_id)
+            .bind(attempt_id)
+            .fetch_optional(&state.pool)
+            .await?;
         if let Some((id, rel_id, dep_state, adapter_kind, health_summary)) = existing {
             if rel_id != body.release_id {
                 return Err(AppError::Validation(

@@ -135,19 +135,17 @@ async fn reconcile_marks_orphan_agent_and_pipeline_runs() {
     assert_eq!(agent_state.0, "failed");
     assert_eq!(agent_state.1.as_deref(), Some("orphaned_after_restart"));
 
-    let cancel_state: (String,) =
-        sqlx::query_as("SELECT state FROM agent_runs WHERE id = $1")
-            .bind(cancel_agent)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let cancel_state: (String,) = sqlx::query_as("SELECT state FROM agent_runs WHERE id = $1")
+        .bind(cancel_agent)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(cancel_state.0, "canceled");
 
-    let job_state: (String,) =
-        sqlx::query_as("SELECT state FROM pipeline_jobs WHERE id = $1")
-            .bind(job_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let job_state: (String,) = sqlx::query_as("SELECT state FROM pipeline_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(job_state.0 == "failed" || job_state.0 == "canceled");
 }
