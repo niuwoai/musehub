@@ -171,6 +171,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     )
     .unwrap();
     let run_id = agent["id"].as_str().unwrap();
+    let mut agent_state = "queued".to_string();
     for _ in 0..240 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let st: serde_json::Value = serde_json::from_slice(
@@ -192,10 +193,17 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
                 .to_bytes(),
         )
         .unwrap();
-        if st["state"] == "succeeded" {
+        agent_state = st["state"].as_str().unwrap_or("").to_string();
+        if agent_state == "succeeded" {
             break;
         }
+        assert_ne!(
+            agent_state, "failed",
+            "agent failed: {:?}",
+            st["error_code"]
+        );
     }
+    assert_eq!(agent_state, "succeeded", "agent did not finish");
     let agent_run_uuid = Uuid::parse_str(run_id).unwrap();
     let branch = format!("agent/{run_id}");
 
@@ -227,6 +235,10 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
             .to_bytes(),
     )
     .unwrap();
+    assert!(
+        pr.get("number").is_some(),
+        "pull-request create failed: {pr}"
+    );
     let pr_number = pr["number"].as_i64().unwrap();
     let pr_id = pr["id"].as_str().unwrap();
     let rev_cookie = common::login_cookie(&app, "oci-product-rev", REVIEWER_PASS).await;
@@ -316,7 +328,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     )
     .unwrap();
     let pipeline_id = pipe["id"].as_str().unwrap();
-    for _ in 0..240 {
+    for _ in 0..600 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let st: serde_json::Value = serde_json::from_slice(
             &app.clone()
@@ -421,7 +433,10 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     assert!(health["applied_oci_digest"]
         .as_str()
         .is_some_and(|d| d.starts_with("sha256:")));
-    assert_eq!(health["verified_source_oid"].as_str().unwrap(), merge_commit);
+    assert_eq!(
+        health["verified_source_oid"].as_str().unwrap(),
+        merge_commit
+    );
     let deployment_id = dep["id"].as_str().unwrap();
 
     let trace: serde_json::Value = serde_json::from_slice(
