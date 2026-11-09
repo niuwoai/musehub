@@ -165,16 +165,17 @@ rev_code=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/js
   -d '{"decision":"approve"}' -o "$rev_tmp" -w "%{http_code}" \
   "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/reviews")
 [[ "$rev_code" =~ ^2 ]] || {
-  echo "review failed http=${rev_code} body=$(cat "$rev_tmp") rev_me=${rev_me}" >&2
+  echo "review failed http=${rev_code} body=$(cat "$rev_tmp")" >&2
   exit 1
 }
 rm -f "$rev_tmp"
 
 attempt_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
-curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
+ci_chk=$(curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg a "$attempt_id" '{state:"success",attempt_id:$a}')" \
   -o /dev/null -w "%{http_code}" \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/checks/product-ci" | grep -q '^20'
+  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/checks/product-ci")
+[[ "$ci_chk" =~ ^2 ]] || { echo "ci check failed http=$ci_chk" >&2; exit 1; }
 
 echo "step=merge_pr"
 merged=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -X POST -o /tmp/merge.json -w "%{http_code}" \
