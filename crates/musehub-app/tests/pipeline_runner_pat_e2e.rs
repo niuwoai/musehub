@@ -292,6 +292,7 @@ async fn runner_pat_validation_report_then_merge() {
                             "name": "runner",
                             "org": "demo",
                             "scopes": ["checks:write"],
+                            "scope_mode": "all_accessible",
                             "runner_handle": "runner-ci"
                         })
                         .to_string(),
