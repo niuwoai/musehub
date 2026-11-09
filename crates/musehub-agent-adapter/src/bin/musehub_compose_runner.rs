@@ -4,6 +4,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 static ROLLBACK_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -214,7 +216,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    let healthy = probe_http(&target);
+    let mut healthy = false;
+    for _ in 0..40 {
+        if probe_http(&target) {
+            healthy = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
     if healthy {
         emit(&format!(
             r#"{{"type":"health","status":"healthy","manifest_sha256":"{manifest}","adapter":"compose-runner","container_image_id":"{image_id}","oci_image_ref":"{oci_ref}","applied_oci_digest":"{applied_digest}"}}"#
