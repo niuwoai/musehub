@@ -120,13 +120,18 @@ agent=$(api POST /api/v1/orgs/demo/repos/stack-slice/agent-runs \
 run_id=$(echo "$agent" | jq -r .id)
 [[ "$(echo "$agent" | jq -r .adapter_kind)" == "reference" ]]
 
+final_state=""
 for _ in $(seq 1 120); do
   st=$(api GET "/api/v1/agent-runs/${run_id}")
-  state=$(echo "$st" | jq -r .state)
-  [[ "$state" == "succeeded" ]] && break
-  [[ "$state" == "failed" ]] && { echo "$st" >&2; exit 1; }
+  final_state=$(echo "$st" | jq -r .state)
+  [[ "$final_state" == "succeeded" ]] && break
+  [[ "$final_state" == "failed" ]] && { echo "$st" >&2; exit 1; }
   sleep 0.25
 done
+[[ "$final_state" == "succeeded" ]] || {
+  echo "agent run did not succeed: ${st:-unknown}" >&2
+  exit 1
+}
 merge_commit=$(echo "$st" | jq -r .result_commit_oid)
 [[ ${#merge_commit} -eq 40 ]]
 
@@ -170,6 +175,7 @@ rev_code=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/js
 }
 rm -f "$rev_tmp"
 
+echo "step=ci_check"
 attempt_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
 ci_chk=$(curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg a "$attempt_id" '{state:"success",attempt_id:$a}')" \
