@@ -217,7 +217,7 @@ pub async fn agent_run_start(
     .bind(&branch)
     .bind(budget_tokens.map(|v| v as i64))
     .bind(instance_id)
-    .bind(crate::lease::LEASE_SECS)
+    .bind(crate::lease::lease_secs())
     .execute(&state.pool)
     .await?;
     let supervisor = state.supervisor.clone();

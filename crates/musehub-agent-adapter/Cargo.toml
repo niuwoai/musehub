@@ -29,6 +29,10 @@ name = "musehub-pipeline-reference"
 path = "src/bin/musehub_pipeline_reference.rs"
 
 [[bin]]
+name = "musehub-pipeline-slow"
+path = "src/bin/musehub_pipeline_slow.rs"
+
+[[bin]]
 name = "musehub-pipeline-oci"
 path = "src/bin/musehub_pipeline_oci.rs"
 

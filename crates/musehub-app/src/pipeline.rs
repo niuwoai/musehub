@@ -295,7 +295,7 @@ pub(crate) async fn spawn_pipeline_run(
             .bind(agent_run_id)
             .bind(run_kind)
             .bind(instance_id.unwrap())
-            .bind(crate::lease::LEASE_SECS)
+            .bind(crate::lease::lease_secs())
             .execute(&mut *tx)
             .await?;
     }
@@ -427,17 +427,10 @@ pub async fn execute_pipeline_job(
     let work_lease = match crate::lease::try_begin_pipeline_work(&pool, run_id, instance_id).await {
         Ok(lease) => lease,
         Err(_) => {
-            let resumed = sqlx::query_as::<_, (i64,)>(
-                "SELECT lease_epoch FROM pipeline_runs
-                 WHERE id = $1 AND lease_holder = $2
-                   AND state IN ('running', 'cancel_requested')",
-            )
-            .bind(run_id)
-            .bind(instance_id)
-            .fetch_optional(&pool)
-            .await;
-            if let Ok(Some((epoch,))) = resumed {
-                crate::lease::WorkLease { epoch }
+            if let Some(lease) =
+                crate::lease::lookup_pipeline_work_lease(&pool, run_id, instance_id).await
+            {
+                lease
             } else {
                 let _ = sqlx::query(
                     "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
@@ -506,6 +499,9 @@ pub async fn execute_pipeline_job(
     if let Ok(reg) = std::env::var("MUSEHUB_OCI_REGISTRY") {
         cmd.env("MUSEHUB_OCI_REGISTRY", reg);
     }
+    if let Ok(hold) = std::env::var("MUSEHUB_PIPELINE_HOLD_SECS") {
+        cmd.env("MUSEHUB_PIPELINE_HOLD_SECS", hold);
+    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -522,25 +518,29 @@ pub async fn execute_pipeline_job(
         supervisor.register(run_id, pid).await;
     }
 
-    let deadline = Duration::from_secs(300);
-    let finished = tokio::time::timeout(deadline, child.wait_with_output()).await;
-    let output = match finished {
-        Ok(Ok(out)) => out,
-        _ => {
+    let output = match wait_pipeline_child(child, &pool, run_id).await {
+        Ok(out) => out,
+        Err(ChildWaitOutcome::Canceled) => {
+            let _ = supervisor.cancel(run_id).await;
+            let _ = quarantine_artifact(&pool, artifact_id).await;
+            let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
+            supervisor.finish(run_id).await;
+            return;
+        }
+        Err(ChildWaitOutcome::TimedOut) => {
             let _ = supervisor.cancel(run_id).await;
             let _ = quarantine_artifact(&pool, artifact_id).await;
             let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_timeout").await;
             supervisor.finish(run_id).await;
             return;
         }
+        Err(ChildWaitOutcome::IoFailed) => {
+            let _ = quarantine_artifact(&pool, artifact_id).await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_adapter_failed").await;
+            supervisor.finish(run_id).await;
+            return;
+        }
     };
-    if cancel_flag(&pool, run_id).await {
-        let _ = supervisor.cancel(run_id).await;
-        let _ = quarantine_artifact(&pool, artifact_id).await;
-        let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
-        supervisor.finish(run_id).await;
-        return;
-    }
     if !output.status.success() {
         let _ = quarantine_artifact(&pool, artifact_id).await;
         let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_adapter_failed").await;
@@ -631,6 +631,46 @@ pub async fn execute_pipeline_job(
         let _ = std::fs::remove_file(&file_path);
     }
     supervisor.finish(run_id).await;
+}
+
+enum ChildWaitOutcome {
+    Canceled,
+    TimedOut,
+    IoFailed,
+}
+
+async fn wait_pipeline_child(
+    child: tokio::process::Child,
+    pool: &PgPool,
+    run_id: Uuid,
+) -> Result<std::process::Output, ChildWaitOutcome> {
+    let deadline = Duration::from_secs(300);
+    let cancel_watch = async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            if cancel_flag(pool, run_id).await {
+                break;
+            }
+        }
+    };
+    let waited = tokio::time::timeout(deadline, async {
+        tokio::select! {
+            out = child.wait_with_output() => Either::Left(out),
+            () = cancel_watch => Either::Right(()),
+        }
+    })
+    .await;
+    match waited {
+        Ok(Either::Left(Ok(output))) => Ok(output),
+        Ok(Either::Left(Err(_))) => Err(ChildWaitOutcome::IoFailed),
+        Ok(Either::Right(())) => Err(ChildWaitOutcome::Canceled),
+        Err(_) => Err(ChildWaitOutcome::TimedOut),
+    }
+}
+
+enum Either<L, R> {
+    Left(L),
+    Right(R),
 }
 
 async fn cancel_flag(pool: &PgPool, run_id: Uuid) -> bool {

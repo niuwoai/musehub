@@ -617,7 +617,7 @@ async fn start_agent_run(
     .bind(&branch)
     .bind(body.budget_tokens.map(|limit| limit as i64))
     .bind(instance_id)
-    .bind(crate::lease::LEASE_SECS)
+    .bind(crate::lease::lease_secs())
     .execute(&state.pool)
     .await?;
     let supervisor = state.supervisor.clone();

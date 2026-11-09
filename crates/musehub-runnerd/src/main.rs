@@ -136,7 +136,7 @@ async fn run_claimed(
     let renew_epoch = claimed.lease_epoch;
     let renew_instance = cfg.instance_id;
     let renew_handle = tokio::spawn(async move {
-        let interval = Duration::from_secs(15);
+        let interval = Duration::from_secs(runner_lease_renew_interval_secs());
         loop {
             tokio::time::sleep(interval).await;
             let url = format!(
@@ -178,6 +178,22 @@ async fn run_claimed(
     .await;
     renew_handle.abort();
     Ok(())
+}
+
+fn runner_lease_renew_interval_secs() -> u64 {
+    if let Ok(raw) = std::env::var("MUSEHUB_RUNNER_LEASE_RENEW_SECS") {
+        if let Ok(v) = raw.parse::<u64>() {
+            if v >= 1 && v <= 60 {
+                return v;
+            }
+        }
+    }
+    let lease = std::env::var("MUSEHUB_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&s| (5..=300).contains(&s))
+        .unwrap_or(45);
+    std::cmp::min(15, (lease / 3).max(2) as u64)
 }
 
 fn bearer(pat: &str) -> Result<HeaderValue, String> {

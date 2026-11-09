@@ -8,8 +8,24 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-pub const LEASE_SECS: i64 = 45;
+const DEFAULT_LEASE_SECS: i64 = 45;
 const RENEW_INTERVAL_SECS: u64 = 15;
+
+/// Lease TTL (seconds). Override with `MUSEHUB_LEASE_SECS` (5–300) for acceptance tests.
+pub fn lease_secs() -> i64 {
+    std::env::var("MUSEHUB_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&s| (5..=300).contains(&s))
+        .unwrap_or(DEFAULT_LEASE_SECS)
+}
+
+/// Back-compat for callers that still import a constant-like name in tests.
+pub const LEASE_SECS: i64 = DEFAULT_LEASE_SECS;
+
+pub(crate) fn pipeline_renew_interval_secs() -> u64 {
+    std::cmp::min(RENEW_INTERVAL_SECS, (lease_secs() / 3).max(2) as u64)
+}
 
 /// Returned after a successful atomic work claim.
 #[derive(Debug, Clone, Copy)]
@@ -35,12 +51,32 @@ pub async fn try_begin_agent_work(
     )
     .bind(run_id)
     .bind(instance_id)
-    .bind(LEASE_SECS)
+    .bind(lease_secs())
     .fetch_optional(pool)
     .await?;
     row.map(|(epoch,)| WorkLease { epoch }).ok_or_else(|| {
         AppError::Conflict("agent run already claimed or lease held by peer".to_string())
     })
+}
+
+/// Holder already running this run (e.g. claim API took the lease); used by `execute_pipeline_job`.
+pub async fn lookup_pipeline_work_lease(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Option<WorkLease> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "SELECT lease_epoch FROM pipeline_runs
+         WHERE id = $1 AND lease_holder = $2
+           AND state IN ('running', 'cancel_requested')",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+    Some(WorkLease { epoch: row.0 })
 }
 
 pub async fn try_begin_pipeline_work(
@@ -72,7 +108,7 @@ async fn try_claim_queued_pipeline(
     )
     .bind(run_id)
     .bind(instance_id)
-    .bind(LEASE_SECS)
+    .bind(lease_secs())
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(epoch,)| WorkLease { epoch }))
@@ -97,12 +133,31 @@ pub async fn try_reclaim_expired_pipeline(
     )
     .bind(run_id)
     .bind(instance_id)
-    .bind(LEASE_SECS)
+    .bind(lease_secs())
     .fetch_optional(pool)
     .await?;
-    row.map(|(epoch,)| WorkLease { epoch }).ok_or_else(|| {
-        AppError::Conflict("pipeline run already claimed or lease held by peer".to_string())
-    })
+    if let Some((epoch,)) = row {
+        let _ = sqlx::query(
+            "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP
+             WHERE pipeline_run_id = $1 AND job_key = 'build'
+               AND state IN ('running','failed','canceled')",
+        )
+        .bind(run_id)
+        .execute(pool)
+        .await;
+        let _ = sqlx::query(
+            "UPDATE artifacts SET state = 'quarantined', updated_at = CURRENT_TIMESTAMP
+             WHERE pipeline_run_id = $1 AND state = 'uploading'",
+        )
+        .bind(run_id)
+        .execute(pool)
+        .await;
+        Ok(WorkLease { epoch })
+    } else {
+        Err(AppError::Conflict(
+            "pipeline run already claimed or lease held by peer".to_string(),
+        ))
+    }
 }
 
 pub async fn finalize_pipeline_run_state(
@@ -180,7 +235,7 @@ pub async fn renew_agent_work_lease(
     .bind(run_id)
     .bind(instance_id)
     .bind(epoch)
-    .bind(LEASE_SECS)
+    .bind(lease_secs())
     .execute(pool)
     .await?;
     if updated.rows_affected() == 0 {
@@ -205,7 +260,7 @@ pub async fn renew_pipeline_work_lease(
     .bind(run_id)
     .bind(instance_id)
     .bind(epoch)
-    .bind(LEASE_SECS)
+    .bind(lease_secs())
     .execute(pool)
     .await?;
     if updated.rows_affected() == 0 {
@@ -302,7 +357,7 @@ pub fn spawn_pipeline_lease_renewal(
     epoch: i64,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let interval = Duration::from_secs(RENEW_INTERVAL_SECS);
+        let interval = Duration::from_secs(pipeline_renew_interval_secs());
         loop {
             tokio::time::sleep(interval).await;
             let terminal =

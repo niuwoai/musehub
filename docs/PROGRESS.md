@@ -34,7 +34,7 @@
 | DB 迁移升级 Runbook | `[~]` | 入口 migrate + RUNBOOK；CI 证明 idempotent migrate + 镜像 recreate 保数据 |
 | 最小 RBAC / PAT scope / 审计 | `[~]` | `selected` PAT **不**因 owner/admin 绕过选仓；`production_mcp_selected_repo_e2e`；grant 审计 + 禁自授 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
-| 独立 Runner 进程/服务 | `[~]` | `musehub-runnerd` + `runner_daemon_acceptance_e2e` + `verify-remote-runner-e2e.sh`（**共享 DB + git/artifact 卷**）；非零依赖多租户 production-ready |
+| 独立 Runner 进程/服务 | `[~]` | `musehub-runnerd` + 子进程验收：`verify-runner-cancel-subprocess-e2e.sh`、`verify-runner-kill-reclaim-e2e.sh`（SIGKILL+TTL）、`verify-runner-cross-container-e2e.sh`（**跨容器非双主机**）；`docs/ACCEPTANCE-EVIDENCE.md`；**共享 DB/卷** |
 | 部署回滚操作 | `[~]` | REST + **`musehub_deployment_rollback` MCP** 经 compose 真实 runner（`deployment_rollback_runner_e2e` 在 VM 已跑通）；远端 Docker CI 未统一验收 |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | `organizations.preferences` + PATCH settings（display_name/default_collaborator_role）；Web `config-grants.spec.ts` |

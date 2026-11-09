@@ -29,6 +29,16 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 
 恢复/重试语义见 [RUNNER-RECOVERY.md](RUNNER-RECOVERY.md)（租约 TTL 重认领、epoch 围栏、reconcile 与重试边界）。
 
+### 子进程验收（VM 本地，非 GitHub Actions 唯一完成标准）
+
+| 脚本 | 作用 |
+|------|------|
+| `scripts/verify-runner-cancel-subprocess-e2e.sh` | 慢 adapter + HTTP cancel；进程组退出；无 ready release/deploy |
+| `scripts/verify-runner-kill-reclaim-e2e.sh` | 真实 `kill -9 musehub-runnerd`；租约 TTL；第二 worker `lease_holder` + `runner_reclaim_build_e2e` |
+| `scripts/verify-runner-cross-container-e2e.sh` | 两容器 + 共享 DB/git/artifact 拓扑（诚实：非双主机） |
+
+远程 worker 执行 adapter 时轮询 `cancel_requested`（`wait_pipeline_child`），不再依赖控制面本地的 `PipelineSupervisor` PID。
+
 ## MCP / 写路径诚实性
 
 - **Rust rmcp** 在 `pipeline-oci-product` job 内验收 `pipeline_run` / `deployment_start` 写路径。

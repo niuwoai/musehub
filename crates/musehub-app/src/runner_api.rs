@@ -77,7 +77,7 @@ pub async fn capabilities() -> Json<RunnerCapabilities> {
         } else {
             "inprocess"
         },
-        lease_seconds: lease::LEASE_SECS,
+        lease_seconds: lease::lease_secs(),
         scopes_accepted: &["pipeline:execute", "checks:write"],
         note: "Control plane does not mount a Docker socket; workers execute adapters locally.",
     })
