@@ -13,11 +13,18 @@ CREATE TABLE issue_acceptance_criteria (
     verification_method TEXT NOT NULL DEFAULT 'manual',
     required BOOL NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_issue_criteria_revision_ord UNIQUE (issue_revision_id, ordinal)
 );
 
+CREATE INDEX idx_issue_criteria_org_id ON issue_acceptance_criteria (org_id);
 CREATE INDEX idx_issue_criteria_repo ON issue_acceptance_criteria (repo_id);
 CREATE INDEX idx_issue_criteria_revision ON issue_acceptance_criteria (issue_revision_id);
+
+CREATE TRIGGER issue_acceptance_criteria_set_updated_at
+BEFORE UPDATE ON issue_acceptance_criteria
+FOR EACH ROW
+EXECUTE FUNCTION musehub_set_updated_at();
 
 CREATE TABLE discussion_comments (
     id UUID PRIMARY KEY,
@@ -34,6 +41,9 @@ CREATE TABLE discussion_comments (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_discussion_comments_org_id ON discussion_comments (org_id);
+CREATE INDEX idx_discussion_comments_repo_id_only ON discussion_comments (repo_id);
+CREATE INDEX idx_discussion_comments_author_id ON discussion_comments (author_id);
 CREATE INDEX idx_discussion_comments_target
     ON discussion_comments (repo_id, target_kind, target_id, created_at);
 
@@ -51,10 +61,18 @@ CREATE TABLE agent_run_messages (
     kind TEXT NOT NULL,
     body TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_agent_run_messages_seq UNIQUE (agent_run_id, sequence)
 );
 
+CREATE INDEX idx_agent_run_messages_org_id ON agent_run_messages (org_id);
+CREATE INDEX idx_agent_run_messages_repo_id ON agent_run_messages (repo_id);
 CREATE INDEX idx_agent_run_messages_run ON agent_run_messages (agent_run_id);
+
+CREATE TRIGGER agent_run_messages_set_updated_at
+BEFORE UPDATE ON agent_run_messages
+FOR EACH ROW
+EXECUTE FUNCTION musehub_set_updated_at();
 
 ALTER TABLE agent_runs
     DROP CONSTRAINT IF EXISTS agent_runs_state_check;
@@ -80,10 +98,19 @@ CREATE TABLE pipeline_job_logs (
     text TEXT NOT NULL,
     complete BOOL NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_pipeline_job_logs_chunk UNIQUE (job_id, attempt_id, chunk_index)
 );
 
+CREATE INDEX idx_pipeline_job_logs_org_id ON pipeline_job_logs (org_id);
+CREATE INDEX idx_pipeline_job_logs_repo_id ON pipeline_job_logs (repo_id);
+CREATE INDEX idx_pipeline_job_logs_job_id_only ON pipeline_job_logs (job_id);
 CREATE INDEX idx_pipeline_job_logs_job ON pipeline_job_logs (job_id, attempt_id);
+
+CREATE TRIGGER pipeline_job_logs_set_updated_at
+BEFORE UPDATE ON pipeline_job_logs
+FOR EACH ROW
+EXECUTE FUNCTION musehub_set_updated_at();
 
 CREATE TABLE deployment_approvals (
     id UUID PRIMARY KEY,
@@ -94,7 +121,16 @@ CREATE TABLE deployment_approvals (
     decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject')),
     approver_id UUID NOT NULL REFERENCES principals (id),
     reason TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_deployment_approvals_org_id ON deployment_approvals (org_id);
+CREATE INDEX idx_deployment_approvals_repo_id ON deployment_approvals (repo_id);
+CREATE INDEX idx_deployment_approvals_approver_id ON deployment_approvals (approver_id);
 CREATE INDEX idx_deployment_approvals_dep ON deployment_approvals (deployment_id);
+
+CREATE TRIGGER deployment_approvals_set_updated_at
+BEFORE UPDATE ON deployment_approvals
+FOR EACH ROW
+EXECUTE FUNCTION musehub_set_updated_at();

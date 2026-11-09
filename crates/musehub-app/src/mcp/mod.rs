@@ -2,7 +2,7 @@
 
 mod auth;
 pub mod capabilities;
-mod contract_domain;
+pub(crate) mod contract_domain;
 mod domain;
 mod git_read;
 pub mod envelope;

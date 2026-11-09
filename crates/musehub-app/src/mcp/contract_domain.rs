@@ -1143,7 +1143,7 @@ pub async fn delivery_get(
     Ok((links, status))
 }
 
-pub async fn append_pipeline_job_log(
+pub(crate) async fn append_pipeline_job_log(
     pool: &sqlx::PgPool,
     org_id: Uuid,
     repo_id: Uuid,

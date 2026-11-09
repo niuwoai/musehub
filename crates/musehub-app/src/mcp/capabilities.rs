@@ -55,6 +55,7 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     "musehub_deployment_get",
     "musehub_deployment_list",
     "musehub_deployment_rollback",
+    "musehub_deployment_trace",
     "musehub_audit_list",
 ];
 

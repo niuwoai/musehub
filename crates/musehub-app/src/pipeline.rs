@@ -718,6 +718,24 @@ pub async fn execute_pipeline_job(
     )
     .await
     .unwrap_or(false);
+    if job_ok {
+        if let Ok((attempt_id,)) =
+            sqlx::query_as("SELECT run_attempt_id FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+        {
+            let _ = crate::mcp::contract_domain::append_pipeline_job_log(
+                &pool,
+                org_id,
+                repo_id,
+                job_id,
+                attempt_id,
+                "pipeline job completed successfully",
+            )
+            .await;
+        }
+    }
     let run_ok = crate::lease::finalize_pipeline_run_state(
         &pool,
         run_id,
