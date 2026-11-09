@@ -71,8 +71,10 @@ dc build --pull
 
 echo "=== compose up ==="
 dc up -d
+sleep 5
 
 BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
+echo "gateway base=$BASE postgres_port=$MUSEHUB_CI_POSTGRES_PORT api_host_port=$MUSEHUB_CI_API_HOST_PORT"
 DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub"
 
 wait_ready() {
@@ -89,7 +91,14 @@ wait_ready() {
 wait_ready
 
 echo "=== static web (production build, not Vite dev) ==="
-html=$(curl -fsS "$BASE/")
+html=""
+for _ in $(seq 1 45); do
+  if html=$(curl -fsS "$BASE/" 2>/dev/null); then
+    echo "$html" | grep -q 'id="root"' && break
+  fi
+  sleep 2
+done
+[[ -n "$html" ]] || { dc logs --tail=40 gateway; echo "static index missing" >&2; exit 1; }
 echo "$html" | grep -q 'id="root"'
 echo "$html" | grep -qE '/assets/|MuseHub'
 [[ "$html" != *"/src/main.tsx"* ]] || { echo "dev index leaked into gateway" >&2; exit 1; }
