@@ -88,6 +88,8 @@ fi
 echo "web_e2e product_oci=$PRODUCT_OCI registry=${MUSEHUB_OCI_REGISTRY:-none}"
 if [[ "$PRODUCT_OCI" == "1" ]]; then
   export MUSEHUB_PIPELINE_EXECUTOR=remote
+  export MUSEHUB_AGENT_EXECUTOR=remote
+  export MUSEHUB_DEPLOY_EXECUTOR=remote
 fi
 MUSEHUB_COMPOSE_ADAPTER_BIN="$PWD/target/debug/musehub-compose-mock"
 MUSEHUB_COMPOSE_RUNNER_BIN="$PWD/target/debug/musehub-compose-runner"
@@ -112,6 +114,8 @@ stop_owned "$SERVER_PIDFILE"
     MUSEHUB_REQUIRE_PIPELINE_OCI="${MUSEHUB_REQUIRE_PIPELINE_OCI:-0}" \
     MUSEHUB_COMPOSE_ADAPTER_MODE="${MUSEHUB_COMPOSE_ADAPTER_MODE:-mock}" \
     MUSEHUB_PIPELINE_EXECUTOR="${MUSEHUB_PIPELINE_EXECUTOR:-inprocess}" \
+    MUSEHUB_AGENT_EXECUTOR="${MUSEHUB_AGENT_EXECUTOR:-inprocess}" \
+    MUSEHUB_DEPLOY_EXECUTOR="${MUSEHUB_DEPLOY_EXECUTOR:-inprocess}" \
     MUSEHUB_INSTANCE_ID="${MUSEHUB_INSTANCE_ID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)}" \
     RUST_LOG="${RUST_LOG:-info}" \
     cargo run -p musehub-server >>"$SERVER_LOG" 2>&1
@@ -145,7 +149,7 @@ if [[ "$PRODUCT_OCI" == "1" ]]; then
   ANCHOR_REPO=$(psql "$DATABASE_URL" -Atc "SELECT id FROM repositories WHERE slug='e2e-pat-anchor'" 2>/dev/null || true)
   PAT_JSON=$(curl -sf -X POST "http://127.0.0.1:8080/api/v1/tokens" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
-    -d "{\"name\":\"web-e2e-runner\",\"org\":\"demo\",\"scopes\":[\"pipeline:execute\",\"repo:read\"],\"scope_mode\":\"all_accessible\",\"runner_handle\":\"e2e-oci-runner\"}")
+    -d "{\"name\":\"web-e2e-runner\",\"org\":\"demo\",\"scopes\":[\"pipeline:execute\",\"agent:execute\",\"deploy:execute\",\"checks:write\",\"repo:read\"],\"scope_mode\":\"all_accessible\",\"runner_handle\":\"e2e-oci-runner\"}")
   RUNNER_PAT=$(echo "$PAT_JSON" | jq -r .token)
   stop_owned "$RUNNER_PIDFILE"
   RUNNER_ENV=(
@@ -156,10 +160,13 @@ if [[ "$PRODUCT_OCI" == "1" ]]; then
     MUSEHUB_PIPELINE_ADAPTER_BIN="$MUSEHUB_PIPELINE_ADAPTER_BIN"
     MUSEHUB_REFERENCE_ADAPTER_BIN="$MUSEHUB_REFERENCE_ADAPTER_BIN"
     MUSEHUB_RUNNER_PAT="$RUNNER_PAT"
-    MUSEHUB_RUNNER_WORK_KINDS=pipeline
+    MUSEHUB_RUNNER_WORK_KINDS=all
     MUSEHUB_RUNNER_POLL_SECS=1
     MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-}"
     MUSEHUB_REQUIRE_PIPELINE_OCI="${MUSEHUB_REQUIRE_PIPELINE_OCI:-0}"
+    MUSEHUB_COMPOSE_ADAPTER_MODE="${MUSEHUB_COMPOSE_ADAPTER_MODE:-runner}"
+    MUSEHUB_COMPOSE_ADAPTER_BIN="$MUSEHUB_COMPOSE_RUNNER_BIN"
+    MUSEHUB_COMPOSE_RUNNER_BIN="$MUSEHUB_COMPOSE_RUNNER_BIN"
   )
   _run_runnerd() {
     env "${RUNNER_ENV[@]}" "$PWD/target/debug/musehub-runnerd" >>"$SERVER_LOG" 2>&1

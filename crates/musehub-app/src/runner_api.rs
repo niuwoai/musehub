@@ -398,8 +398,11 @@ pub async fn claim_deployment(
     let org_id = pat.org_id.unwrap();
     let candidate = sqlx::query_as::<_, (Uuid,)>(
         "SELECT id FROM deployments
-         WHERE org_id = $1 AND state = 'queued'
-           AND (lease_holder IS NULL OR lease_until < CURRENT_TIMESTAMP)
+         WHERE org_id = $1 AND (
+           (state = 'queued' AND (lease_holder IS NULL OR lease_until < CURRENT_TIMESTAMP))
+           OR (state = 'running' AND health_summary IS NULL
+               AND updated_at < CURRENT_TIMESTAMP - interval '30 seconds')
+         )
          ORDER BY created_at LIMIT 1",
     )
     .bind(org_id)
@@ -422,8 +425,11 @@ pub async fn claim_deployment(
            lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval,
            lease_epoch = deployments.lease_epoch + 1,
            updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND state = 'queued'
-           AND (lease_holder IS NULL OR lease_holder = $2 OR lease_until < CURRENT_TIMESTAMP)
+         WHERE id = $1 AND (
+           (state = 'queued' AND (lease_holder IS NULL OR lease_holder = $2 OR lease_until < CURRENT_TIMESTAMP))
+           OR (state = 'running' AND health_summary IS NULL
+               AND updated_at < CURRENT_TIMESTAMP - interval '30 seconds')
+         )
          RETURNING lease_epoch",
     )
     .bind(deployment_id)

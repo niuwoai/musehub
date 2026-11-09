@@ -151,6 +151,50 @@ pub async fn start_deployment(
     .await
 }
 
+pub async fn get_deployment(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, deployment_id)): AxumPath<(String, String, Uuid)>,
+) -> Result<Json<DeploymentView>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            String,
+            String,
+            String,
+            Option<serde_json::Value>,
+            Option<Uuid>,
+        ),
+    >(
+        "SELECT d.id, d.release_id, e.slug, d.state, d.adapter_kind, d.health_summary, d.attempt_id
+         FROM deployments d
+         JOIN environments e ON e.id = d.environment_id
+         WHERE d.id = $1 AND d.repo_id = $2",
+    )
+    .bind(deployment_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, release_id, env_slug, dep_state, adapter_kind, health_summary, attempt_id)) = row
+    else {
+        return Err(AppError::NotFound);
+    };
+    Ok(Json(DeploymentView {
+        id,
+        environment_slug: env_slug,
+        release_id,
+        state: dep_state,
+        health_summary,
+        adapter_kind,
+        attempt_id,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn mcp_rollback_deployment(
     state: &Arc<crate::AppState>,
@@ -677,6 +721,31 @@ pub async fn rollback_deployment(
     .await
 }
 
+async fn mark_deployment_worker_failed(
+    pool: &PgPool,
+    deployment_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    error_code: &str,
+    detail: &str,
+) {
+    let summary = serde_json::json!({
+        "status": "unhealthy",
+        "error_code": error_code,
+        "detail": detail,
+    });
+    let _ = sqlx::query(
+        "UPDATE deployments SET state = 'failed', health_summary = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3 AND state = 'running'",
+    )
+    .bind(deployment_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(summary)
+    .execute(pool)
+    .await;
+}
+
 /// Worker-side compose deploy (used when `MUSEHUB_DEPLOY_EXECUTOR=remote`).
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_deployment_job(
@@ -711,12 +780,48 @@ pub async fn execute_deployment_job(
         return Err(AppError::Conflict("deployment lease fenced".into()));
     }
     let payload: DeploymentLaunchPayload =
-        serde_json::from_value(payload_json.unwrap_or(serde_json::json!({})))
-            .map_err(|e| AppError::Other(e.to_string()))?;
+        match serde_json::from_value(payload_json.unwrap_or(serde_json::json!({}))) {
+            Ok(p) => p,
+            Err(e) => {
+                mark_deployment_worker_failed(
+                    pool,
+                    deployment_id,
+                    instance_id,
+                    epoch,
+                    "launch_payload_invalid",
+                    &e.to_string(),
+                )
+                .await;
+                return Err(AppError::Other(e.to_string()));
+            }
+        };
     let (compose_bin, adapter_kind) =
-        resolve_compose_adapter(&compose_mock_bin, &compose_runner_bin, require_pipeline_oci)
-            .map_err(AppError::Validation)?;
+        match resolve_compose_adapter(&compose_mock_bin, &compose_runner_bin, require_pipeline_oci)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                mark_deployment_worker_failed(
+                    pool,
+                    deployment_id,
+                    instance_id,
+                    epoch,
+                    "adapter_resolution_failed",
+                    &e,
+                )
+                .await;
+                return Err(AppError::Validation(e));
+            }
+        };
     if adapter_kind != payload.adapter_kind.as_str() {
+        mark_deployment_worker_failed(
+            pool,
+            deployment_id,
+            instance_id,
+            epoch,
+            "adapter_kind_mismatch",
+            "adapter kind mismatch",
+        )
+        .await;
         return Err(AppError::Validation("adapter kind mismatch".into()));
     }
     let mut cmd = Command::new(&compose_bin);
@@ -745,9 +850,22 @@ pub async fn execute_deployment_job(
     {
         cmd.env("MUSEHUB_COMPOSE_LEAVE_STACK", "1");
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| AppError::Other(format!("spawn compose adapter: {e}")))?;
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("spawn compose adapter: {e}");
+            mark_deployment_worker_failed(
+                pool,
+                deployment_id,
+                instance_id,
+                epoch,
+                "spawn_failed",
+                &msg,
+            )
+            .await;
+            return Err(AppError::Other(msg));
+        }
+    };
     let finished = tokio::time::timeout(Duration::from_secs(300), child.wait_with_output()).await;
     let (ok, adapter_stdout, capability_gap) = match &finished {
         Ok(Ok(out)) => {
@@ -836,6 +954,22 @@ pub async fn execute_deployment_job(
     .bind(epoch)
     .execute(pool)
     .await?;
+    let updated = sqlx::query_as::<_, (String,)>("SELECT state FROM deployments WHERE id = $1")
+        .bind(deployment_id)
+        .fetch_one(pool)
+        .await?;
+    if updated.0 == "running" {
+        mark_deployment_worker_failed(
+            pool,
+            deployment_id,
+            instance_id,
+            epoch,
+            "state_update_missed",
+            "deployment terminal update lost lease match",
+        )
+        .await;
+        return Err(AppError::Conflict("deployment state not updated".into()));
+    }
     if let Some(actor_str) = payload.actor_id.as_ref() {
         if let Ok(actor) = Uuid::parse_str(actor_str) {
             let _ = crate::audit::record(

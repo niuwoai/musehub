@@ -46,6 +46,15 @@ _one runner_reclaim_build_e2e
 _one remote_pipeline_runner_e2e
 _one remote_agent_runner_e2e
 _one remote_deployment_runner_e2e
+_one remote_agent_epoch_e2e
+chmod +x "$PWD/scripts/verify-remote-agent-cancel-e2e.sh" \
+  "$PWD/scripts/verify-remote-agent-budget-e2e.sh" \
+  "$PWD/scripts/verify-remote-agent-kill-reclaim-e2e.sh" \
+  "$PWD/scripts/verify-production-runner-token-required.sh" 2>/dev/null || true
+./scripts/verify-remote-agent-cancel-e2e.sh
+./scripts/verify-remote-agent-budget-e2e.sh
+./scripts/verify-remote-agent-kill-reclaim-e2e.sh
+./scripts/verify-production-runner-token-required.sh
 _one product_profile_e2e
 env "CARGO_BIN_EXE_musehub-agent-codex-sim=${_codex_sim}" \
   cargo test -p musehub-app --test agent_codex_mainline_select_e2e -- --test-threads=1

@@ -144,22 +144,6 @@ fn load_config() -> Result<Config, String> {
     let artifact_root = std::env::var("MUSEHUB_ARTIFACT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| git_root.join("artifacts"));
-    let pipeline_bin = std::env::var("MUSEHUB_PIPELINE_ADAPTER_BIN")
-        .map(PathBuf::from)
-        .map_err(|_| "MUSEHUB_PIPELINE_ADAPTER_BIN required".to_string())?;
-    let reference_adapter_bin = std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
-        .map(PathBuf::from)
-        .map_err(|_| "MUSEHUB_REFERENCE_ADAPTER_BIN required for agent work".to_string())?;
-    let compose_runner_bin = std::env::var("MUSEHUB_COMPOSE_RUNNER_BIN")
-        .map(PathBuf::from)
-        .map_err(|_| "MUSEHUB_COMPOSE_RUNNER_BIN required for deploy work".to_string())?;
-    let compose_mock_bin = std::env::var("MUSEHUB_COMPOSE_ADAPTER_BIN")
-        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-mock"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| compose_runner_bin.clone());
-    let require_pipeline_oci = std::env::var("MUSEHUB_REQUIRE_PIPELINE_OCI")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
     let poll_secs = std::env::var("MUSEHUB_RUNNER_POLL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -174,6 +158,45 @@ fn load_config() -> Result<Config, String> {
         "all" => WorkKinds::All,
         _ => WorkKinds::Both,
     };
+    let needs_pipeline = matches!(
+        work_kinds,
+        WorkKinds::PipelineOnly | WorkKinds::Both | WorkKinds::All
+    );
+    let needs_agent = matches!(
+        work_kinds,
+        WorkKinds::AgentOnly | WorkKinds::Both | WorkKinds::All
+    );
+    let needs_deploy = matches!(work_kinds, WorkKinds::All);
+    let pipeline_bin = if needs_pipeline {
+        std::env::var("MUSEHUB_PIPELINE_ADAPTER_BIN")
+            .map(PathBuf::from)
+            .map_err(|_| "MUSEHUB_PIPELINE_ADAPTER_BIN required".to_string())?
+    } else {
+        PathBuf::from("/dev/null")
+    };
+    let reference_adapter_bin = if needs_agent {
+        std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
+            .map(PathBuf::from)
+            .map_err(|_| "MUSEHUB_REFERENCE_ADAPTER_BIN required for agent work".to_string())?
+    } else {
+        PathBuf::from("/dev/null")
+    };
+    let compose_runner_bin = if needs_deploy {
+        std::env::var("MUSEHUB_COMPOSE_RUNNER_BIN")
+            .map(PathBuf::from)
+            .map_err(|_| "MUSEHUB_COMPOSE_RUNNER_BIN required for deploy work".to_string())?
+    } else {
+        std::env::var("MUSEHUB_COMPOSE_RUNNER_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/dev/null"))
+    };
+    let compose_mock_bin = std::env::var("MUSEHUB_COMPOSE_ADAPTER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-mock"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| compose_runner_bin.clone());
+    let require_pipeline_oci = std::env::var("MUSEHUB_REQUIRE_PIPELINE_OCI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     Ok(Config {
         api_base: api_base.trim_end_matches('/').to_string(),
         pat,

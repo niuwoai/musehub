@@ -210,6 +210,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(deployment::start_deployment),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/deployments/{deployment_id}",
+            get(deployment::get_deployment),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/deployments/rollback",
             post(deployment::rollback_deployment),
         )

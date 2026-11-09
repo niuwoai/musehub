@@ -34,6 +34,7 @@ services:
       MUSEHUB_RUNNER_WORK_KINDS: all
       MUSEHUB_COMPOSE_ADAPTER_BIN: /opt/musehub/bin/musehub-compose-runner
       MUSEHUB_COMPOSE_RUNNER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_COMPOSE_ADAPTER_MODE: runner
       MUSEHUB_REQUIRE_PIPELINE_OCI: ${MUSEHUB_REQUIRE_PIPELINE_OCI:-1}
       MUSEHUB_OCI_REGISTRY: ${MUSEHUB_OCI_REGISTRY:-host.docker.internal:5000}
     volumes:
@@ -41,6 +42,8 @@ services:
       - artifacts:/var/lib/musehub/artifacts
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
+      postgres:
+        condition: service_healthy
       musehub-server:
         condition: service_healthy
     restart: unless-stopped

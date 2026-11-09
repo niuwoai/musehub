@@ -72,12 +72,21 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/docker-entrypoint.sh"]
 CMD ["server"]
 
 FROM debian:${DEBIAN_VERSION} AS runner-runtime
+ARG DOCKER_CLI_VERSION=27.3.1
+ARG COMPOSE_VERSION=2.29.7
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git docker.io tini \
+  && apt-get install -y --no-install-recommends ca-certificates git curl tini \
+  && curl -fsSL "https://download.docker.com/linux/static/stable/$(uname -m)/docker-${DOCKER_CLI_VERSION}.tgz" \
+    | tar xz -C /usr/local/bin --strip-components=1 docker/docker \
+  && mkdir -p /usr/local/lib/docker/cli-plugins \
+  && curl -fsSL "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" \
+    -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd -r -u 10002 -d /var/lib/musehub-runner musehub \
+  && useradd -r -u 10001 -d /var/lib/musehub musehub \
   && mkdir -p /opt/musehub/bin /var/lib/musehub/git /var/lib/musehub/artifacts \
-  && chown -R musehub:musehub /var/lib/musehub
+  && chown -R musehub:musehub /var/lib/musehub \
+  && git config --system --add safe.directory '*'
 COPY --from=rust-builder /build/target/release/musehub-runnerd /usr/local/bin/
 COPY --from=rust-builder /build/target/release/musehub-agent-reference /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-agent-codex-sim /opt/musehub/bin/
