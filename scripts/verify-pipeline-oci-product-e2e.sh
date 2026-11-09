@@ -18,6 +18,7 @@ cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-pipeline-oci -q
 cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
 cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
+cargo build -p musehub-agent-adapter --bin musehub-agent-codex-fixture -q
 BIN_OCI="$PWD/target/debug/musehub-pipeline-oci"
 
 echo "=== two source oids → distinct image digests (build/push/pull) ==="
@@ -66,6 +67,7 @@ echo "digest2=$REF2 oid1=$OID1 oid2=$OID2"
 
 export MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-oci"
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+export MUSEHUB_MCP_PRODUCT=1
 env \
   CARGO_BIN_EXE_musehub_agent_reference="$PWD/target/debug/musehub-agent-reference" \
   CARGO_BIN_EXE_musehub_compose_runner="$PWD/target/debug/musehub-compose-runner" \
