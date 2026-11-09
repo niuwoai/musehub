@@ -7,9 +7,14 @@ edition = "2021"
 name = "musehub-server"
 path = "src/main.rs"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 axum = { workspace = true }
+musehub-app = { path = "../musehub-app" }
 musehub-core = { path = "../musehub-core" }
+tower-http = { version = "0.6", features = ["cors"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+    branches: [develop, main, "cursor/**"]
+  pull_request:
+    branches: [develop, main, "cursor/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-portable:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: musehub
+          POSTGRES_PASSWORD: musehub
+          POSTGRES_DB: musehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U musehub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
+      MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: MCP Python deps
+        run: ./scripts/setup-mcp-matrix-python-deps.sh
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: migrate
+        run: cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+      - name: build agent adapter binaries
+        run: |
+          cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
+      - name: portable tests
+        run: ./scripts/cargo-test-portable.sh
+      - name: product acceptance
+        run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
+      - name: product security integration tests
+        run: |
+          cargo test -p musehub-app --test security_db -- --test-threads=1
+          cargo test -p musehub-app --test agent_cancel_e2e -- --test-threads=1
+          cargo test -p musehub-app --test protected_branch_git -- --test-threads=1
+          cargo test -p musehub-app --test auth_matrix -- --test-threads=1
+          cargo test -p musehub-app --test plan_immutable -- --test-threads=1
+          cargo test -p musehub-app --test pr_gates_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pr_security_e2e -- --test-threads=1
+          cargo test -p musehub-app --test agent_budget -- --test-threads=1
+          cargo test -p musehub-app --test pat_scope -- --test-threads=1
+
+  web:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: musehub
+          POSTGRES_PASSWORD: musehub
+          POSTGRES_DB: musehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U musehub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_GIT_ROOT: /tmp/musehub-web-e2e-git
+      MUSEHUB_SESSION_SECRET: ci-web-e2e-session-secret-32chars
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Web-E2E-Strong!2026'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: yarn --cwd web install --frozen-lockfile
+      - name: install Playwright Chromium (with OS deps)
+        run: yarn --cwd web exec playwright install --with-deps chromium
+      - name: build server + reference agent for browser E2E
+        run: |
+          cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+          cargo build -p musehub-server -q
+      - run: yarn --cwd web test
+      - run: yarn --cwd web build
+      - name: web browser E2E (Playwright)
+        run: chmod +x ./scripts/run-web-e2e.sh && ./scripts/run-web-e2e.sh

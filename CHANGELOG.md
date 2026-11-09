@@ -1,6 +1,20 @@
 # Changelog
 
-## [Unreleased] — 0.1.0-rc4
+## [Unreleased]
+
+### Fixed
+
+- Migration `0005_fk_indexes` for BOOT-02 schema check; Git HTTP route fix (`/git/{org}/{repo}.git/...`).
+- Bootstrap 强密码策略；Agent 分支 `agent/*` 校验；Git 路径穿越拒绝。
+- `verify-product-acceptance.sh`；CI 强 bootstrap 密码与 reference 二进制预构建。
+
+### Added
+
+- 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
+- `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。
+- GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。
+
+## [0.1.0-rc4]
 
 ### Fixed
 

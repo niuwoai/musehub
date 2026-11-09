@@ -1,0 +1,23 @@
+[package]
+name = "musehub-agent-adapter"
+version = "0.1.0-rc4"
+edition = "2021"
+
+[dev-dependencies]
+tempfile = "3"
+
+[dependencies]
+libc = "0.2"
+musehub-core = { path = "../musehub-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+
+[[bin]]
+name = "musehub-agent-reference"
+path = "src/bin/musehub_agent_reference.rs"
+
+[[bin]]
+name = "musehub-agent-codex-sim"
+path = "src/bin/musehub_agent_codex_sim.rs"

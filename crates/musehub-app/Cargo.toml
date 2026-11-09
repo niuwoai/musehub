@@ -1,0 +1,34 @@
+[package]
+name = "musehub-app"
+version = "0.1.0-rc4"
+edition = "2021"
+
+[dependencies]
+argon2 = "0.5"
+axum = { workspace = true }
+base64 = "0.22"
+axum-extra = { version = "0.10", features = ["cookie"] }
+bytes = { workspace = true }
+http = { workspace = true }
+musehub-agent-adapter = { path = "../musehub-agent-adapter" }
+musehub-core = { path = "../musehub-core" }
+rand = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = "0.7"
+tempfile = "3"
+sha2 = "0.10"
+sqlx = { workspace = true, features = ["time"] }
+thiserror = { workspace = true }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+libc = "0.2"
+tokio = { workspace = true, features = ["process", "sync", "time"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[dev-dependencies]
+base64 = "0.22"
+tower = { workspace = true }
+http-body-util = { workspace = true }
+musehub-migrate = { path = "../musehub-migrate" }
