@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::artifacts;
 use crate::error::AppError;
-use crate::security::validate_git_oid;
+use crate::security::{validate_git_oid, validate_oci_image_ref};
 
 #[derive(Serialize)]
 pub struct ReleaseView {
@@ -23,6 +23,13 @@ pub struct ReleaseView {
     pub pipeline_run_id: Uuid,
     pub state: String,
     pub manifest_sha256: Option<String>,
+    pub oci_image_ref: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct PublishReleaseRequest {
+    /// Digest-pinned OCI image for compose-runner deploys (required when using runner in prod paths).
+    pub oci_image_ref: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -150,6 +157,7 @@ pub async fn create_release(
             pipeline_run_id: body.pipeline_run_id,
             state: "draft".to_string(),
             manifest_sha256: Some(manifest_hex),
+            oci_image_ref: None,
         }),
     ))
 }
@@ -158,16 +166,24 @@ pub async fn publish_release(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     AxumPath((org, repo, release_id)): AxumPath<(String, String, Uuid)>,
+    body: Option<Json<PublishReleaseRequest>>,
 ) -> Result<Json<ReleaseView>, AppError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (_, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    if let Some(ref oci) = body.oci_image_ref {
+        validate_oci_image_ref(oci).map_err(AppError::Validation)?;
+    }
     let updated = sqlx::query(
-        "UPDATE releases SET state = 'published', updated_at = CURRENT_TIMESTAMP
+        "UPDATE releases SET state = 'published',
+         oci_image_ref = COALESCE($3, oci_image_ref),
+         updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND repo_id = $2 AND state = 'draft'",
     )
     .bind(release_id)
     .bind(repo_id)
+    .bind(body.oci_image_ref)
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
@@ -175,8 +191,8 @@ pub async fn publish_release(
             "release not in draft or not found".to_string(),
         ));
     }
-    let row = sqlx::query_as::<_, (Uuid, String, String, String, Uuid, String, Option<String>)>(
-        "SELECT id, version, tag_name, commit_oid, pipeline_run_id, state, manifest_sha256
+    let row = sqlx::query_as::<_, (Uuid, String, String, String, Uuid, String, Option<String>, Option<String>)>(
+        "SELECT id, version, tag_name, commit_oid, pipeline_run_id, state, manifest_sha256, oci_image_ref
          FROM releases WHERE id = $1",
     )
     .bind(release_id)
@@ -190,5 +206,6 @@ pub async fn publish_release(
         pipeline_run_id: row.4,
         state: row.5,
         manifest_sha256: row.6,
+        oci_image_ref: row.7,
     }))
 }

@@ -260,8 +260,10 @@ export async function createRelease(
 }
 
 export async function publishRelease(org: string, repo: string, releaseId: string) {
-  return api<void>(`/api/v1/orgs/${org}/repos/${repo}/releases/${releaseId}/publish`, {
+  return api<Release>(`/api/v1/orgs/${org}/repos/${repo}/releases/${releaseId}/publish`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
   })
 }
 

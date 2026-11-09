@@ -147,7 +147,10 @@ test.describe('delivery chain browser flow', () => {
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
       timeout: 120_000,
     })
-    await page.getByRole('button', { name: /release.*mock|mock 部署/i }).click()
+    const releaseDeploy = page.getByRole('button', { name: /release.*mock|mock 部署/i })
+    await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
+    await releaseDeploy.click()
+    await expect(page.getByTestId('delivery-trace')).toBeVisible({ timeout: 90_000 })
     await expect(page.getByTestId('delivery-trace')).toContainText(/compose-mock/, {
       timeout: 60_000,
     })

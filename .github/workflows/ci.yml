@@ -64,8 +64,6 @@ jobs:
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
       - name: backup restore verification
         run: chmod +x ./scripts/verify-backup-restore.sh && ./scripts/verify-backup-restore.sh
-      - name: compose runner capability probe
-        run: chmod +x ./scripts/probe-compose-runner.sh && ./scripts/probe-compose-runner.sh
       - name: product security integration tests
         run: |
           cargo test -p musehub-app --test security_db -- --test-threads=1
@@ -123,4 +121,18 @@ jobs:
       - run: yarn --cwd web test
       - run: yarn --cwd web build
       - name: web browser E2E (Playwright)
-        run: chmod +x ./scripts/run-web-e2e.sh && ./scripts/run-web-e2e.sh
+        run: |
+          chmod +x ./scripts/run-web-e2e.sh ./scripts/collect-e2e-diagnostics.sh
+          ./scripts/run-web-e2e.sh
+
+  compose-runner-e2e:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: compose-runner real acceptance
+        run: |
+          chmod +x ./scripts/verify-compose-runner-e2e.sh
+          ./scripts/verify-compose-runner-e2e.sh

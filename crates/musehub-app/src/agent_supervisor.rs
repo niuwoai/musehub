@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::lease::{finalize_agent_run_state, WorkLease};
 
 pub fn new_supervisor() -> Arc<AgentSupervisor> {
     Arc::new(AgentSupervisor::default())
@@ -53,6 +53,34 @@ pub fn kill_process_group(pid: u32) {
 #[cfg(not(unix))]
 pub fn kill_process_group(_pid: u32) {}
 
+async fn still_holds_lease(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64) -> bool {
+    matches!(
+        sqlx::query_as::<_, (i64,)>(
+            "SELECT lease_epoch FROM agent_runs WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3",
+        )
+        .bind(run_id)
+        .bind(instance_id)
+        .bind(epoch)
+        .fetch_optional(pool)
+        .await,
+        Ok(Some(_))
+    )
+}
+
+async fn fenced_fail(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64, code: &str) {
+    let _ = finalize_agent_run_state(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+        "failed",
+        Some(code),
+        None,
+        None,
+    )
+    .await;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_reference_job(
     pool: PgPool,
@@ -68,21 +96,23 @@ pub async fn run_reference_job(
     deadline: Duration,
     budget_tokens: Option<u64>,
 ) {
-    let work_lease = match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
-        Ok(lease) => lease,
-        Err(_) => {
-            let _ = sqlx::query(
-                "UPDATE agent_runs SET state = 'failed', error_code = 'lease_held_by_peer',
+    let work_lease: WorkLease =
+        match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
+            Ok(lease) => lease,
+            Err(_) => {
+                let _ = sqlx::query(
+                    "UPDATE agent_runs SET state = 'failed', error_code = 'lease_held_by_peer',
                  updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
-            )
-            .bind(run_id)
-            .execute(&pool)
-            .await;
-            return;
-        }
-    };
+                )
+                .bind(run_id)
+                .execute(&pool)
+                .await;
+                return;
+            }
+        };
+    let epoch = work_lease.epoch;
     let _renew_guard =
-        crate::lease::agent_lease_renew_guard(pool.clone(), run_id, instance_id, work_lease.epoch);
+        crate::lease::agent_lease_renew_guard(pool.clone(), run_id, instance_id, epoch);
 
     let storage_key =
         match sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE id = $1")
@@ -92,14 +122,14 @@ pub async fn run_reference_job(
         {
             Ok(Some((key,))) => key,
             _ => {
-                let _ = mark_failed(&pool, run_id, "repo_metadata_failed").await;
+                fenced_fail(&pool, run_id, instance_id, epoch, "repo_metadata_failed").await;
                 return;
             }
         };
     let work_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(_) => {
-            let _ = mark_failed(&pool, run_id, "workspace_failed").await;
+            fenced_fail(&pool, run_id, instance_id, epoch, "workspace_failed").await;
             return;
         }
     };
@@ -113,7 +143,7 @@ pub async fn run_reference_job(
         .status()
         .is_ok_and(|s| s.success())
     {
-        let _ = mark_failed(&pool, run_id, "git_clone_failed").await;
+        fenced_fail(&pool, run_id, instance_id, epoch, "git_clone_failed").await;
         return;
     }
     let _ = std::process::Command::new("git")
@@ -129,7 +159,7 @@ pub async fn run_reference_job(
     let run = match spawn_reference(&task, work_dir.path(), &reference_bin).await {
         Ok(run) => run,
         Err(_) => {
-            let _ = mark_failed(&pool, run_id, "adapter_spawn_failed").await;
+            fenced_fail(&pool, run_id, instance_id, epoch, "adapter_spawn_failed").await;
             return;
         }
     };
@@ -168,7 +198,7 @@ pub async fn run_reference_job(
     {
         Ok(outcome) => normalize_cancel_outcome(&pool, run_id, outcome).await,
         Err(_) => {
-            let _ = mark_failed(&pool, run_id, "adapter_failed").await;
+            fenced_fail(&pool, run_id, instance_id, epoch, "adapter_failed").await;
             supervisor.inner.lock().await.remove(&run_id);
             poll.abort();
             return;
@@ -180,48 +210,65 @@ pub async fn run_reference_job(
     match outcome {
         RunOutcome::Succeeded { commit, usage } => {
             if cancel_requested(&pool, run_id).await {
-                let _ = sqlx::query(
-                    "UPDATE agent_runs SET state = 'canceled', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                let _ = finalize_agent_run_state(
+                    &pool,
+                    run_id,
+                    instance_id,
+                    epoch,
+                    "canceled",
+                    None,
+                    None,
+                    Some(usage.tokens as i64),
                 )
-                .bind(run_id)
-                .bind(usage.tokens as i64)
-                .execute(&pool)
                 .await;
             } else if commit.is_some() {
-                let _ = std::process::Command::new("git")
-                    .current_dir(work_dir.path())
-                    .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
-                    .status();
-                let _ = sqlx::query(
-                    "UPDATE agent_runs SET state = 'succeeded', result_commit_oid = $2, usage_tokens = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                if still_holds_lease(&pool, run_id, instance_id, epoch).await {
+                    let _ = std::process::Command::new("git")
+                        .current_dir(work_dir.path())
+                        .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
+                        .status();
+                }
+                let _ = finalize_agent_run_state(
+                    &pool,
+                    run_id,
+                    instance_id,
+                    epoch,
+                    "succeeded",
+                    None,
+                    commit.as_deref(),
+                    Some(usage.tokens as i64),
                 )
-                .bind(run_id)
-                .bind(commit)
-                .bind(usage.tokens as i64)
-                .execute(&pool)
                 .await;
             } else {
-                let _ = sqlx::query(
-                    "UPDATE agent_runs SET state = 'succeeded', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                let _ = finalize_agent_run_state(
+                    &pool,
+                    run_id,
+                    instance_id,
+                    epoch,
+                    "succeeded",
+                    None,
+                    None,
+                    Some(usage.tokens as i64),
                 )
-                .bind(run_id)
-                .bind(usage.tokens as i64)
-                .execute(&pool)
                 .await;
             }
             let _ = repo_id;
         }
         RunOutcome::Canceled { usage } => {
-            let _ = sqlx::query(
-                "UPDATE agent_runs SET state = 'canceled', usage_tokens = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+            let _ = finalize_agent_run_state(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "canceled",
+                None,
+                None,
+                Some(usage.tokens as i64),
             )
-            .bind(run_id)
-            .bind(usage.tokens as i64)
-            .execute(&pool)
             .await;
         }
         RunOutcome::Failed { code, .. } => {
-            let _ = mark_failed(&pool, run_id, &code).await;
+            fenced_fail(&pool, run_id, instance_id, epoch, &code).await;
         }
     }
 }
@@ -262,15 +309,4 @@ async fn cancel_requested(pool: &PgPool, run_id: Uuid) -> bool {
             .await,
         Ok(Some((state,))) if state == "cancel_requested"
     )
-}
-
-async fn mark_failed(pool: &PgPool, run_id: Uuid, code: &str) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE agent_runs SET state = 'failed', error_code = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .bind(code)
-    .execute(pool)
-    .await?;
-    Ok(())
 }

@@ -80,19 +80,42 @@ pub fn validate_git_oid(oid: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Mock compose health probe only allows explicit mock scheme or loopback http(s).
+/// Mock compose health probe only allows explicit mock scheme or loopback http(s) with port.
+/// Callers cannot supply compose YAML — only a health check URL on localhost.
+/// OCI image reference must be pinned by digest (`name@sha256:64hex`).
+pub fn validate_oci_image_ref(image: &str) -> Result<(), String> {
+    let image = image.trim();
+    if image.len() > 512 {
+        return Err("oci image ref too long".to_string());
+    }
+    let Some((_, digest)) = image.split_once("@sha256:") else {
+        return Err("oci image ref must include @sha256:digest".to_string());
+    };
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("oci image digest must be 64 hex chars".to_string());
+    }
+    Ok(())
+}
+
 pub fn validate_compose_health_target(target: &str) -> Result<(), String> {
     let target = target.trim();
     if target == "mock://healthy" {
         return Ok(());
     }
-    if let Some(rest) = target.strip_prefix("http://127.0.0.1:") {
-        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
-            return Ok(());
-        }
-    }
-    if let Some(rest) = target.strip_prefix("http://localhost:") {
-        if rest.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty() {
+    for prefix in ["http://127.0.0.1:", "http://localhost:"] {
+        if let Some(rest) = target.strip_prefix(prefix) {
+            let (port, suffix) = match rest.split_once('/') {
+                Some((p, s)) => (p, Some(s)),
+                None => (rest, None),
+            };
+            if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if let Some(path) = suffix {
+                if path.contains("..") || path.contains('@') {
+                    return Err("health target not in allowlist".to_string());
+                }
+            }
             return Ok(());
         }
     }
@@ -119,5 +142,17 @@ mod tests {
     fn agent_branch_must_not_be_main() {
         assert!(validate_agent_work_branch("main", "main").is_err());
         assert!(validate_agent_work_branch("agent/run-1", "main").is_ok());
+    }
+
+    #[test]
+    fn compose_health_target_allowlist() {
+        assert!(validate_oci_image_ref(
+            "docker.io/library/nginx@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        .is_ok());
+        assert!(validate_oci_image_ref("nginx:latest").is_err());
+        assert!(validate_compose_health_target("mock://healthy").is_ok());
+        assert!(validate_compose_health_target("http://127.0.0.1:18080/").is_ok());
+        assert!(validate_compose_health_target("http://evil.example/").is_err());
     }
 }
