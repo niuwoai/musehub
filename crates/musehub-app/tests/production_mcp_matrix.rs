@@ -16,7 +16,7 @@ use rmcp::{
     transport::{
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
     },
-    ClientLifecycleMode, ClientServiceExt, ServiceExt,
+    ClientLifecycleMode, ClientServiceExt,
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener;

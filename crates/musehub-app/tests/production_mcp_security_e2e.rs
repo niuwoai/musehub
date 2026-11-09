@@ -13,7 +13,7 @@ use rmcp::{
     transport::{
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
     },
-    ClientLifecycleMode, ClientServiceExt, ServiceExt,
+    ClientLifecycleMode, ClientServiceExt,
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -59,7 +59,7 @@ async fn runner_pat_gets_403_on_mcp_http() {
     let git_root = tempfile::tempdir().unwrap();
     let bootstrap = common::bootstrap_password();
     let app = common::product_app(pool.clone(), git_root.path(), &bootstrap).await;
-    let cookie = common::login_cookie(&app, "admin", &bootstrap).await;
+    let _cookie = common::login_cookie(&app, "admin", &bootstrap).await;
     let runner_token = musehub_app::pat::generate_pat();
     sqlx::query(
         "INSERT INTO access_tokens (id, principal_id, name, token_prefix, token_hash, scopes, expires_at, org_id)
