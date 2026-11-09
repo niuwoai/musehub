@@ -1,6 +1,6 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc3`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc4`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
@@ -43,10 +43,12 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 
 ```text
 musehub/
-  VERSION                    # 单一版本源，当前 0.1.0-rc2
+  VERSION                    # 单一版本源（当前见 VERSION 文件）
   Cargo.toml                 # workspace：core、server、探针、migrate
   crates/musehub-core/       # 版本、配置与稳定错误码
-  crates/musehub-server/     # /healthz、/readyz、/version
+  crates/musehub-server/     # 健康检查 + 产品 API（登录/仓库/Git HTTP/Issue/Agent）
+  crates/musehub-app/        # 产品领域逻辑（REST）
+  crates/musehub-agent-adapter/ # Agent 适配层 + reference 二进制
   crates/musehub-migrate/    # 显式 PostgreSQL migration；Web 启动不调用
   crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
   crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
@@ -55,31 +57,40 @@ musehub/
   crates/musehub-ssh-probe/  # Colima Linux VM 内的单用户 OpenSSH forced command 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
   crates/musehub-mcp-probe/  # M0 rmcp stdio + Streamable HTTP 互操作探针；不是生产 MCP 服务
-  migrations/                # 0001 common、0002 identity；其余表尚未落地
+  migrations/                # 0001–0004（identity、repositories、issues/agent_runs）
+  docs/PROGRESS.md           # 真实 P0 进度清单
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
 ```
 
-规划中的 `application`、`store`、完整 Git 服务、`runner`、`agent`、`mcp`、`cli` 和 `deploy/` 都还没有。`migrations/` 目前只有公共函数和身份表。
+规划中的完整 `runner`、`mcp` 生产服务、`cli`、`deploy/` 流水线与追溯链仍在推进；见 `docs/PROGRESS.md`。
 
 初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
 
 ## 本地验证
 
-复制 `.env.example` 了解可选配置。服务读取 `MUSEHUB_BIND`（默认 `127.0.0.1:8080`）和可选 `DATABASE_URL`（仅 PostgreSQL）。配置数据库后，`/readyz` 通过 `SELECT 1` 检查连接；未配置或连接异常时服务仍启动并报告未就绪。服务启动不执行 migration。
+复制 `.env.example` 了解配置。产品 API 需要 **`DATABASE_URL` + `MUSEHUB_GIT_ROOT` + `MUSEHUB_SESSION_SECRET`**；一次性引导可设 `MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD`（创建 `demo` 组织与 `admin` 用户）。服务启动**不**自动 migration。
 
 ```sh
-cargo test --workspace
-# MCP 互操作（先准备 Python 依赖，见 docs/m0-rmcp-matrix.md）：
-./scripts/setup-mcp-matrix-python-deps.sh
-cargo test -p musehub-mcp-probe -- --test-threads=1
+# 数据库（示例）
+export DATABASE_URL=postgres://localhost/musehub
+export MUSEHUB_GIT_ROOT=/tmp/musehub-git
+export MUSEHUB_SESSION_SECRET=$(openssl rand -hex 32)
+export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=dev-change-me
+
+cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo run -p musehub-server
+
 yarn --cwd web install --frozen-lockfile
-yarn --cwd web test
-yarn --cwd web build
+yarn --cwd web dev   # 代理 /api 与 /git
+
+# 测试
+./scripts/cargo-test-portable.sh
+./scripts/setup-mcp-matrix-python-deps.sh   # MCP 矩阵所需
+cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 ```
 
-`/healthz` 只表示进程存活。Git 存储尚未接入，因此即使 PostgreSQL 检查通过，`/readyz` 仍返回 HTTP 503。
+`/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。
 
 ## M0 进度
 

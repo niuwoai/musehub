@@ -3,6 +3,13 @@
     "name": "MuseHub",
     "tagline": "A privately deployed development and delivery platform. This build is still an unreleased development preview, not the {{version}} release.",
     "versionLabel": "Version",
-    "switchLanguage": "Switch to Chinese"
+    "switchLanguage": "Switch to Chinese",
+    "login": "Sign in",
+    "loginHandle": "Handle",
+    "loginPassword": "Password",
+    "signedInAs": "Signed in as",
+    "createRepo": "Create repository",
+    "createIssue": "Create issue",
+    "runReferenceAgent": "Run reference agent (no model)"
   }
 }

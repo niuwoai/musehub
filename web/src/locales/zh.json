@@ -3,6 +3,13 @@
     "name": "MuseHub",
     "tagline": "私有部署的研发与交付平台；当前仍是未发布的开发版，尚未完成 {{version}} 发布。",
     "versionLabel": "版本",
-    "switchLanguage": "切换到 English"
+    "switchLanguage": "切换到 English",
+    "login": "登录",
+    "loginHandle": "账号",
+    "loginPassword": "密码",
+    "signedInAs": "已登录",
+    "createRepo": "创建仓库",
+    "createIssue": "创建 Issue",
+    "runReferenceAgent": "运行参考 Agent（无模型）"
   }
 }

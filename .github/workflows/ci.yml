@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-portable:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: musehub
+          POSTGRES_PASSWORD: musehub
+          POSTGRES_DB: musehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U musehub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
+      MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: MCP Python deps
+        run: ./scripts/setup-mcp-matrix-python-deps.sh
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: migrate
+        run: cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+      - name: portable tests
+        run: ./scripts/cargo-test-portable.sh
+      - name: product slice integration
+        run: cargo test -p musehub-app --test product_slice -- --test-threads=1
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: yarn --cwd web install --frozen-lockfile
+      - run: yarn --cwd web test
+      - run: yarn --cwd web build

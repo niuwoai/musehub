@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased] — 0.1.0-rc4
+## [Unreleased]
+
+### Added
+
+- 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
+- `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。
+- GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。
+
+## [0.1.0-rc4]
 
 ### Fixed
 
