@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::compose::resolve_compose_adapter;
 use crate::error::AppError;
-use crate::security::validate_compose_health_target;
+use crate::security::{validate_compose_health_target, validate_oci_image_ref};
 
 #[derive(Serialize)]
 pub struct DeploymentView {
@@ -103,14 +103,14 @@ pub async fn start_deployment(
     let Some((environment_id,)) = env else {
         return Err(AppError::NotFound);
     };
-    let release = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT state, manifest_sha256 FROM releases WHERE id = $1 AND repo_id = $2",
+    let release = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+        "SELECT state, manifest_sha256, oci_image_ref FROM releases WHERE id = $1 AND repo_id = $2",
     )
     .bind(body.release_id)
     .bind(repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((release_state, manifest)) = release else {
+    let Some((release_state, manifest, oci_image_ref)) = release else {
         return Err(AppError::NotFound);
     };
     if release_state != "published" {
@@ -159,6 +159,14 @@ pub async fn start_deployment(
 
     let (compose_bin, adapter_kind) =
         resolve_compose_adapter(&state.compose_adapter_bin, &state.compose_runner_bin);
+    if adapter_kind == "compose-runner" {
+        let Some(ref oci) = oci_image_ref else {
+            return Err(AppError::Validation(
+                "compose-runner deployment requires release.oci_image_ref".to_string(),
+            ));
+        };
+        validate_oci_image_ref(oci).map_err(AppError::Validation)?;
+    }
     let deployment_id = Uuid::new_v4();
     let insert = sqlx::query(
         "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id)
@@ -199,8 +207,8 @@ pub async fn start_deployment(
     insert?;
 
     let project = format!("musehub-deploy-{deployment_id}");
-    let mut child = Command::new(&compose_bin)
-        .env("MUSEHUB_DEPLOY_HEALTH_TARGET", &health_target)
+    let mut cmd = Command::new(&compose_bin);
+    cmd.env("MUSEHUB_DEPLOY_HEALTH_TARGET", &health_target)
         .env(
             "MUSEHUB_RELEASE_MANIFEST_SHA256",
             manifest.clone().unwrap_or_default(),
@@ -208,21 +216,49 @@ pub async fn start_deployment(
         .env("MUSEHUB_COMPOSE_PROJECT", &project)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(ref oci) = oci_image_ref {
+        cmd.env("MUSEHUB_OCI_IMAGE_REF", oci);
+    }
+    let child = cmd
         .spawn()
         .map_err(|e| AppError::Other(e.to_string()))?;
-    let finished = tokio::time::timeout(Duration::from_secs(120), child.wait()).await;
-    let ok = matches!(finished, Ok(Ok(status)) if status.success());
-    let capability_gap = matches!(
-        finished,
-        Ok(Ok(status)) if status.code() == Some(2)
-    );
+    let finished =
+        tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await;
+    let (ok, adapter_stdout, capability_gap) = match &finished {
+        Ok(Ok(out)) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let cap = out.status.code() == Some(2);
+            (out.status.success(), stdout, cap)
+        }
+        _ => (false, String::new(), false),
+    };
+    let applied_digest = adapter_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|v| {
+            v.get("applied_oci_digest")
+                .and_then(|d| d.as_str())
+                .map(String::from)
+        });
+    let digest_ok = if adapter_kind == "compose-runner" {
+        match (oci_image_ref.as_ref(), applied_digest.as_ref()) {
+            (Some(req), Some(app)) => req.split('@').nth(1) == Some(app.as_str()),
+            (Some(_), None) => false,
+            _ => false,
+        }
+    } else {
+        true
+    };
+    let ok = ok && digest_ok;
     let summary = if ok {
         serde_json::json!({
             "status": "healthy",
             "target": health_target,
             "adapter": adapter_kind,
             "release_manifest_sha256": manifest,
+            "release_oci_image_ref": oci_image_ref,
+            "applied_oci_digest": applied_digest,
             "compose_project": project,
         })
     } else if capability_gap {
@@ -233,9 +269,17 @@ pub async fn start_deployment(
             "compose_project": project,
         })
     } else {
+        let err = if !digest_ok {
+            "oci_digest_mismatch"
+        } else {
+            "deploy_failed"
+        };
         serde_json::json!({
             "status": "unhealthy",
             "adapter": adapter_kind,
+            "error_code": err,
+            "release_oci_image_ref": oci_image_ref,
+            "applied_oci_digest": applied_digest,
             "compose_project": project,
         })
     };

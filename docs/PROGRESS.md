@@ -17,7 +17,7 @@
 |---|---|---|
 | REC-01 | `[x]` | 启动 `boot_reconcile`；仅无有效 lease 的行；`lease_reconcile_e2e` + `multi_instance_reconcile_e2e` |
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
-| DEP-COMPOSE | `[~]` | **CI** 验收 `compose-runner` 二进制 + 生成 compose；**产品 API 部署默认 mock**，`MUSEHUB_COMPOSE_ADAPTER_MODE=runner` 未在 delivery E2E 中默认启用 |
+| DEP-COMPOSE | `[~]` | CI 验收 digest 钉死的 `compose-runner`（`MUSEHUB_OCI_IMAGE_REF` fail-closed）；publish 可写 `releases.oci_image_ref`，runner 部署回写 `applied_oci_digest`；**nginx 仅为 CI fixture**，非用户 Release 制品 OCI |
 | OPS-01 | `[x]` | backup：`main` OID + artifact SHA（`verify-backup-restore.sh`） |
 | IAM/PIPE/AGT | `[~]` | 见历史项；Codex 在线 / OCI 注册表 / 生产 MCP 仍未验证 |
 

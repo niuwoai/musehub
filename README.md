@@ -103,8 +103,8 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | 参考 Agent 端到端 | `[x]` | `product_slice`、`run-web-e2e.sh` |
 | PR / 流水线 / mock 部署 / trace | `[x]` | `pipeline_delivery_e2e` |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
-| **Compose runner 真实部署** | `[x]` CI only | GitHub Actions job `compose-runner-e2e`；本地需 Docker |
-| Compose **经产品 API** 默认路径 | `[~]` | 仍为 compose-mock；runner 需 `MUSEHUB_COMPOSE_ADAPTER_MODE=runner` |
+| **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
+| Compose **经产品 API** runner | `[~]` | publish 可附 `oci_image_ref`；runner 模式部署校验并回写 `applied_oci_digest`；默认仍 compose-mock |
 | OCI / 多环境 / 业务 MCP | `[ ]` | 未验证 |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。
