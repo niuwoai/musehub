@@ -216,9 +216,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    let expected_commit = std::env::var("MUSEHUB_RELEASE_COMMIT_OID").unwrap_or_default();
     let mut healthy = false;
+    let mut verified_source_oid = String::new();
     for _ in 0..40 {
-        if probe_http(&target) {
+        if let Some(body) = probe_http_body(&target) {
+            if !expected_commit.is_empty() && body.trim() != expected_commit {
+                rollback(&compose_path, &project);
+                emit(&format!(
+                    r#"{{"type":"error","code":"source_oid_mismatch","expected":"{expected_commit}","body":{}}}"#,
+                    serde_json::to_string(body.trim()).unwrap_or_else(|_| "\"\"".into())
+                ));
+                std::process::exit(1);
+            }
+            verified_source_oid = body.trim().to_string();
             healthy = true;
             break;
         }
@@ -226,7 +237,7 @@ fn main() {
     }
     if healthy {
         emit(&format!(
-            r#"{{"type":"health","status":"healthy","manifest_sha256":"{manifest}","adapter":"compose-runner","container_image_id":"{image_id}","oci_image_ref":"{oci_ref}","applied_oci_digest":"{applied_digest}"}}"#
+            r#"{{"type":"health","status":"healthy","manifest_sha256":"{manifest}","adapter":"compose-runner","container_image_id":"{image_id}","oci_image_ref":"{oci_ref}","applied_oci_digest":"{applied_digest}","verified_source_oid":"{verified_source_oid}"}}"#
         ));
         emit(r#"{"type":"completed","outcome":"succeeded"}"#);
         if !leave_stack {
@@ -243,17 +254,20 @@ fn main() {
     std::process::exit(1);
 }
 
-fn probe_http(target: &str) -> bool {
+fn probe_http_body(target: &str) -> Option<String> {
     if target.starts_with("mock://") {
-        return target == "mock://healthy";
+        return (target == "mock://healthy").then(|| "mock".into());
     }
-    Command::new("curl")
+    let out = Command::new("curl")
         .args(["-sf", "--max-time", "8", target])
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
 }
 
 fn uuid_simple() -> String {

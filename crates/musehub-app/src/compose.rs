@@ -32,16 +32,27 @@ pub fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
-pub fn resolve_compose_adapter(mock_bin: &Path, runner_bin: &Path) -> (PathBuf, &'static str) {
-    match compose_mode_from_env() {
+pub fn resolve_compose_adapter(
+    mock_bin: &Path,
+    runner_bin: &Path,
+    require_product_oci: bool,
+) -> Result<(PathBuf, &'static str), String> {
+    let mode = compose_mode_from_env();
+    if require_product_oci && mode == ComposeAdapterMode::Mock {
+        return Err("product OCI path forbids compose-mock adapter".into());
+    }
+    Ok(match mode {
         ComposeAdapterMode::Mock => (mock_bin.to_path_buf(), "compose-mock"),
         ComposeAdapterMode::Runner => (runner_bin.to_path_buf(), "compose-runner"),
         ComposeAdapterMode::Auto => {
-            if docker_available() {
+            if require_product_oci || docker_available() {
+                if !docker_available() {
+                    return Err("compose-runner required but docker unavailable".into());
+                }
                 (runner_bin.to_path_buf(), "compose-runner")
             } else {
                 (mock_bin.to_path_buf(), "compose-mock")
             }
         }
-    }
+    })
 }

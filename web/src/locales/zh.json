@@ -17,6 +17,7 @@
     "createPullRequest": "创建 Pull Request",
     "deliveryTitle": "交付链",
     "deliveryMockNote": "部署仅使用 compose-mock（非真实 OCI/Docker）。",
+    "deliveryModeNote": "部署遵循服务端策略：MUSEHUB_REQUIRE_PIPELINE_OCI=1 时为流水线构建 OCI + compose-runner；否则本地开发使用 compose-mock。",
     "runPipelineOnMain": "在已合并 main 提交上运行流水线",
     "releaseAndDeployMock": "发布 + mock 部署",
     "viewTrace": "查看部署追溯",

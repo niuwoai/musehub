@@ -440,9 +440,9 @@ async fn run_pipeline_job(
         }
     };
     let _ = sqlx::query(
-        "INSERT INTO artifacts (id, org_id, repo_id, pipeline_run_id, name, sha256, byte_length,
+        "INSERT INTO artifacts (id, org_id, repo_id, pipeline_run_id, name, kind, sha256, byte_length,
          storage_path, state)
-         VALUES ($1,$2,$3,$4,$5,'',0,$6,'uploading')",
+         VALUES ($1,$2,$3,$4,$5,'file','',0,$6,'uploading')",
     )
     .bind(artifact_id)
     .bind(org_id)
@@ -459,11 +459,16 @@ async fn run_pipeline_job(
         .env("MUSEHUB_PIPELINE_ARTIFACT_PATH", &file_path)
         .env("MUSEHUB_PIPELINE_BARE_GIT", bare.to_str().unwrap_or("."))
         .env("MUSEHUB_PIPELINE_RUN_KIND", &run_kind)
-        .stdin(Stdio::null())
+        .env("MUSEHUB_PIPELINE_RUN_ID", run_id.to_string())
+        .env("MUSEHUB_PIPELINE_REPO_ID", repo_id.to_string());
+    if let Ok(reg) = std::env::var("MUSEHUB_OCI_REGISTRY") {
+        cmd.env("MUSEHUB_OCI_REGISTRY", reg);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_child_process_group(&mut cmd);
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(child) => child,
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
@@ -475,32 +480,31 @@ async fn run_pipeline_job(
         supervisor.register(run_id, pid).await;
     }
 
-    let deadline = Duration::from_secs(120);
-    let finished = tokio::time::timeout(deadline, child.wait()).await;
-    if cancel_flag(&pool, run_id).await {
-        let _ = supervisor.cancel(run_id).await;
-        let _ = child.kill().await;
-        let _ = quarantine_artifact(&pool, artifact_id).await;
-        mark_canceled(&pool, run_id, job_id).await;
-        supervisor.finish(run_id).await;
-        return;
-    }
-    let status = match finished {
-        Ok(Ok(status)) => status,
+    let deadline = Duration::from_secs(300);
+    let finished = tokio::time::timeout(deadline, child.wait_with_output()).await;
+    let output = match finished {
+        Ok(Ok(out)) => out,
         _ => {
             let _ = supervisor.cancel(run_id).await;
-            let _ = child.kill().await;
             let _ = quarantine_artifact(&pool, artifact_id).await;
             mark_failed(&pool, run_id, job_id, "pipeline_timeout").await;
             supervisor.finish(run_id).await;
             return;
         }
     };
-    if !status.success() {
+    if cancel_flag(&pool, run_id).await {
+        let _ = supervisor.cancel(run_id).await;
+        let _ = quarantine_artifact(&pool, artifact_id).await;
+        mark_canceled(&pool, run_id, job_id).await;
+        supervisor.finish(run_id).await;
+        return;
+    }
+    if !output.status.success() {
         let _ = quarantine_artifact(&pool, artifact_id).await;
         mark_failed(&pool, run_id, job_id, "pipeline_adapter_failed").await;
         return;
     }
+    let oci_from_adapter = parse_pipeline_stdout(&output.stdout);
     match artifacts::sha256_file(&file_path) {
         Ok((sha, len)) => {
             if finalize_artifact(&pool, artifact_id, &sha, len as i64)
@@ -518,6 +522,53 @@ async fn run_pipeline_job(
             mark_failed(&pool, run_id, job_id, "artifact_verify_failed").await;
             return;
         }
+    }
+    if crate::require_pipeline_oci_from_env()
+        && run_kind == KIND_RELEASE
+        && oci_from_adapter.is_none()
+    {
+        mark_failed(&pool, run_id, job_id, "pipeline_oci_missing").await;
+        return;
+    }
+    if let Some(oci_ref) = oci_from_adapter {
+        let oci_path = match safe_join(&dir, artifacts::ARTIFACT_OCI_REF_NAME) {
+            Ok(p) => p,
+            Err(_) => {
+                mark_failed(&pool, run_id, job_id, "oci_artifact_path_failed").await;
+                return;
+            }
+        };
+        if !oci_path.is_file() {
+            let _ = std::fs::write(&oci_path, &oci_ref);
+        }
+        if crate::security::validate_oci_image_ref(&oci_ref).is_err() {
+            mark_failed(&pool, run_id, job_id, "pipeline_oci_invalid").await;
+            return;
+        }
+        let oci_id = Uuid::new_v4();
+        let (sha, len) = match artifacts::sha256_file(&oci_path) {
+            Ok(v) => v,
+            Err(_) => {
+                mark_failed(&pool, run_id, job_id, "oci_artifact_verify_failed").await;
+                return;
+            }
+        };
+        let _ = sqlx::query(
+            "INSERT INTO artifacts (id, org_id, repo_id, pipeline_run_id, name, kind, sha256, byte_length,
+             storage_path, state, oci_image_ref)
+             VALUES ($1,$2,$3,$4,$5,'oci_image',$6,$7,$8,'ready',$9)",
+        )
+        .bind(oci_id)
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(run_id)
+        .bind(artifacts::ARTIFACT_OCI_REF_NAME)
+        .bind(&sha)
+        .bind(len as i64)
+        .bind(dir.to_string_lossy().as_ref())
+        .bind(&oci_ref)
+        .execute(&pool)
+        .await;
     }
     let _ = sqlx::query(
         "UPDATE pipeline_jobs SET state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
@@ -558,6 +609,24 @@ async fn mark_failed(pool: &PgPool, run_id: Uuid, job_id: Uuid, code: &str) {
     .bind(code)
     .execute(pool)
     .await;
+}
+
+fn parse_pipeline_stdout(stdout: &[u8]) -> Option<String> {
+    for line in stdout.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) == Some("oci_image") {
+            return v
+                .get("oci_image_ref")
+                .and_then(|x| x.as_str())
+                .map(String::from);
+        }
+    }
+    None
 }
 
 async fn mark_canceled(pool: &PgPool, run_id: Uuid, job_id: Uuid) {

@@ -20,7 +20,8 @@ test.describe('delivery chain browser flow', () => {
   test('login → agent PR → second user gates → pipeline → mock deploy → trace', async ({
     page,
   }) => {
-    test.setTimeout(300_000)
+    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
+    test.setTimeout(productOci ? 600_000 : 300_000)
     const reviewerPass = 'E2e-Reviewer-Delivery-12!'
     const ciPass = 'E2e-Ci-Delivery-12!'
 
@@ -144,16 +145,28 @@ test.describe('delivery chain browser flow', () => {
     await expect(deliveryPanel).toBeVisible()
     await expect(deliveryPanel).toContainText(/main @/, { timeout: 15_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
+    const pipelineTimeout = productOci ? 300_000 : 120_000
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
-      timeout: 120_000,
+      timeout: pipelineTimeout,
     })
     const releaseDeploy = page.getByRole('button', { name: /release.*mock|mock 部署/i })
     await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
     await releaseDeploy.click()
-    await expect(page.getByTestId('delivery-trace')).toBeVisible({ timeout: 90_000 })
-    await expect(page.getByTestId('delivery-trace')).toContainText(/compose-mock/, {
-      timeout: 60_000,
+    await expect(page.getByTestId('delivery-trace')).toBeVisible({
+      timeout: productOci ? 240_000 : 90_000,
     })
-    await expect(page.getByTestId('delivery-trace')).toContainText(/"mock": true/)
+    if (productOci) {
+      await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
+        timeout: 120_000,
+      })
+      await expect(page.getByTestId('delivery-trace')).toContainText(/applied_oci_digest/)
+      await expect(page.getByTestId('delivery-trace')).toContainText(/verified_source_oid/)
+      await expect(page.getByTestId('delivery-trace')).not.toContainText(/"mock": true/)
+    } else {
+      await expect(page.getByTestId('delivery-trace')).toContainText(/compose-mock/, {
+        timeout: 60_000,
+      })
+      await expect(page.getByTestId('delivery-trace')).toContainText(/"mock": true/)
+    }
   })
 })

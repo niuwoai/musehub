@@ -69,15 +69,40 @@ pub async fn verify_ready_artifacts_for_pipeline(
     pool: &PgPool,
     pipeline_run_id: Uuid,
 ) -> Result<(), AppError> {
-    let rows = sqlx::query_as::<_, (String, String, i64, String)>(
-        "SELECT name, sha256, byte_length, storage_path FROM artifacts
+    let rows = sqlx::query_as::<_, (String, String, i64, String, String, Option<String>)>(
+        "SELECT name, sha256, byte_length, storage_path, kind, oci_image_ref FROM artifacts
          WHERE pipeline_run_id = $1 AND state = 'ready'",
     )
     .bind(pipeline_run_id)
     .fetch_all(pool)
     .await?;
-    for (name, expected_sha, expected_len, storage_path) in rows {
+    for (name, expected_sha, expected_len, storage_path, kind, oci_col) in rows {
         let path = safe_join(std::path::Path::new(&storage_path), &name)?;
+        if kind == ARTIFACT_KIND_OCI {
+            let on_disk =
+                std::fs::read_to_string(&path).map_err(|e| AppError::Other(e.to_string()))?;
+            let on_disk = on_disk.trim();
+            let (sha, len) = sha256_file(&path)?;
+            if sha != expected_sha || len as i64 != expected_len {
+                sqlx::query(
+                    "UPDATE artifacts SET state = 'quarantined', updated_at = CURRENT_TIMESTAMP WHERE pipeline_run_id = $1 AND name = $2",
+                )
+                .bind(pipeline_run_id)
+                .bind(&name)
+                .execute(pool)
+                .await?;
+                return Err(AppError::Validation(format!(
+                    "artifact digest mismatch for {name}"
+                )));
+            }
+            if oci_col.as_deref().unwrap_or("") != on_disk {
+                return Err(AppError::Validation(
+                    "oci_image_ref column mismatch".to_string(),
+                ));
+            }
+            crate::security::validate_oci_image_ref(on_disk).map_err(AppError::Validation)?;
+            continue;
+        }
         let (sha, len) = sha256_file(&path)?;
         if sha != expected_sha || len as i64 != expected_len {
             sqlx::query(
@@ -93,6 +118,36 @@ pub async fn verify_ready_artifacts_for_pipeline(
         }
     }
     Ok(())
+}
+
+pub const ARTIFACT_KIND_OCI: &str = "oci_image";
+pub const ARTIFACT_OCI_REF_NAME: &str = "oci-image.ref";
+
+pub async fn pipeline_bound_oci_image_ref(
+    pool: &PgPool,
+    pipeline_run_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT oci_image_ref FROM artifacts
+         WHERE pipeline_run_id = $1 AND kind = 'oci_image' AND state = 'ready'
+         AND oci_image_ref IS NOT NULL
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(pipeline_run_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(r,)| r))
+}
+
+pub async fn require_pipeline_oci_artifact(
+    pool: &PgPool,
+    pipeline_run_id: Uuid,
+) -> Result<String, AppError> {
+    pipeline_bound_oci_image_ref(pool, pipeline_run_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::Validation("pipeline missing ready oci_image artifact".to_string())
+        })
 }
 
 pub async fn quarantine_artifact(pool: &PgPool, artifact_id: Uuid) -> Result<(), AppError> {

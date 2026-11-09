@@ -61,6 +61,9 @@ export type DeploymentTrace = {
   agent_run_id?: string | null
   deployment_adapter: string
   adapter_is_mock: boolean
+  release_oci_image_ref?: string | null
+  applied_oci_digest?: string | null
+  verified_source_oid?: string | null
   artifacts: { name: string; sha256: string; byte_length: number }[]
   gaps: string[]
 }
@@ -267,12 +270,18 @@ export async function publishRelease(org: string, repo: string, releaseId: strin
   })
 }
 
-export async function startDeployment(org: string, repo: string, releaseId: string) {
+export async function startDeployment(
+  org: string,
+  repo: string,
+  releaseId: string,
+  healthTarget?: string,
+) {
+  const body: { release_id: string; health_target?: string } = { release_id: releaseId }
+  if (healthTarget) {
+    body.health_target = healthTarget
+  }
   return api<Deployment>(`/api/v1/orgs/${org}/repos/${repo}/deployments`, {
     method: 'POST',
-    body: JSON.stringify({
-      release_id: releaseId,
-      health_target: 'mock://healthy',
-    }),
+    body: JSON.stringify(body),
   })
 }

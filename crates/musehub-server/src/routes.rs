@@ -191,5 +191,6 @@ pub async fn build_product_state(
         instance_id,
         supervisor: Arc::new(musehub_app::agent_supervisor::AgentSupervisor::default()),
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
+        require_pipeline_oci: musehub_app::require_pipeline_oci_from_env(),
     }))
 }
