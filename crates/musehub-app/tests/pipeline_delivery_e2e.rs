@@ -422,4 +422,10 @@ async fn merge_then_pipeline_release_deploy_trace() {
     assert_eq!(trace["commit_oid"].as_str().unwrap(), merge_commit);
     assert!(trace["artifacts"].as_array().is_some_and(|a| !a.is_empty()));
     assert_eq!(trace["agent_run_id"].as_str().unwrap(), run_id);
+    assert_eq!(trace["adapter_is_mock"].as_bool(), Some(true));
+    assert_eq!(trace["pr_number"].as_i64(), Some(pr_number));
+    assert_eq!(trace["merged_oid"].as_str(), Some(merge_commit));
+    assert_eq!(trace["plan_accepted"].as_bool(), Some(true));
+    let gaps = trace["gaps"].as_array().unwrap();
+    assert!(gaps.is_empty(), "unexpected trace gaps: {gaps:?}");
 }

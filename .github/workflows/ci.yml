@@ -72,6 +72,7 @@ jobs:
           cargo test -p musehub-app --test agent_budget -- --test-threads=1
           cargo test -p musehub-app --test pat_scope -- --test-threads=1
           cargo test -p musehub-app --test pipeline_delivery_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_security_e2e -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest

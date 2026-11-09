@@ -64,14 +64,23 @@ pub async fn create_release(
         ));
     }
     let artifact_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM artifacts WHERE pipeline_run_id = $1 AND state = 'ready'",
+        "SELECT COUNT(*) FROM artifacts WHERE pipeline_run_id = $1 AND state = 'ready'
+         AND length(sha256) = 64 AND byte_length > 0",
     )
     .bind(body.pipeline_run_id)
     .fetch_one(&state.pool)
     .await?;
     if artifact_count.0 == 0 {
         return Err(AppError::Validation(
-            "release requires ready artifacts".to_string(),
+            "release requires verified ready artifacts".to_string(),
+        ));
+    }
+    if matches!(
+        pipe_state.as_str(),
+        "failed" | "canceled" | "cancel_requested"
+    ) {
+        return Err(AppError::Validation(
+            "release blocked: pipeline did not succeed".to_string(),
         ));
     }
     let release_id = Uuid::new_v4();

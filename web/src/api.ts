@@ -51,8 +51,35 @@ export type DeploymentTrace = {
   release_id: string
   pipeline_run_id: string
   commit_oid: string
+  pr_id?: string | null
+  pr_number?: number | null
+  merged_oid?: string | null
+  issue_id?: string | null
+  issue_number?: number | null
+  issue_revision_id?: string | null
+  plan_accepted?: boolean | null
   agent_run_id?: string | null
+  deployment_adapter: string
+  adapter_is_mock: boolean
   artifacts: { name: string; sha256: string; byte_length: number }[]
+  gaps: string[]
+}
+
+export type Release = {
+  id: string
+  version: string
+  tag_name: string
+  commit_oid: string
+  pipeline_run_id: string
+  state: string
+}
+
+export type Deployment = {
+  id: string
+  environment_slug: string
+  release_id: string
+  state: string
+  adapter_kind: string
 }
 
 export async function login(handle: string, password: string) {
@@ -157,4 +184,93 @@ export async function getDeploymentTrace(
   return api<DeploymentTrace>(
     `/api/v1/orgs/${org}/repos/${repo}/trace/deployments/${deploymentId}`,
   )
+}
+
+export async function submitReview(
+  org: string,
+  repo: string,
+  prNumber: number,
+  decision: 'approve' | 'request_changes',
+) {
+  return api<void>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/reviews`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ decision }),
+    },
+  )
+}
+
+export async function setPullRequestCheck(
+  org: string,
+  repo: string,
+  prNumber: number,
+  checkName: string,
+  state: 'success' | 'failure',
+  attemptId: string,
+) {
+  return api<void>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/checks/${checkName}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ state, attempt_id: attemptId }),
+    },
+  )
+}
+
+export async function mergePullRequest(org: string, repo: string, prNumber: number) {
+  return api<{ head_oid: string }>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/merge`,
+    { method: 'POST' },
+  )
+}
+
+export async function pollPipeline(
+  org: string,
+  repo: string,
+  runId: string,
+  timeoutMs = 120_000,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const run = await getPipeline(org, repo, runId)
+    if (run.state === 'succeeded' || run.state === 'failed' || run.state === 'canceled') {
+      return run
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  throw new Error('pipeline timeout')
+}
+
+export async function createRelease(
+  org: string,
+  repo: string,
+  body: {
+    version: string
+    tag_name: string
+    commit_oid: string
+    pipeline_run_id: string
+    pr_id?: string
+  },
+) {
+  return api<Release>(`/api/v1/orgs/${org}/repos/${repo}/releases`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function publishRelease(org: string, repo: string, releaseId: string) {
+  return api<void>(`/api/v1/orgs/${org}/repos/${repo}/releases/${releaseId}/publish`, {
+    method: 'POST',
+  })
+}
+
+export async function startDeployment(org: string, repo: string, releaseId: string) {
+  return api<Deployment>(`/api/v1/orgs/${org}/repos/${repo}/deployments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      release_id: releaseId,
+      health_target: 'mock://healthy',
+    }),
+  })
 }

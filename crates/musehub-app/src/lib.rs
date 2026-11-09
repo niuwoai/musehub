@@ -15,6 +15,7 @@ mod hooks;
 mod members;
 pub mod pat;
 mod pat_auth;
+mod pat_policy;
 mod pipeline;
 mod pr;
 mod release;
@@ -702,8 +703,30 @@ async fn create_pat_handler(
         None
     };
     let (id, token) = if let Some(scopes) = &body.scopes {
+        pat_policy::validate_scope_issuance(scopes)?;
+        let token_owner = if scopes.iter().any(|s| s == "checks:write") {
+            let org = org_id.ok_or_else(|| {
+                AppError::Validation("checks:write tokens require org binding".to_string())
+            })?;
+            pat_policy::require_org_admin_to_issue_runner_token(
+                &state.pool,
+                org,
+                principal_id,
+                scopes,
+            )
+            .await?;
+            let handle = body.runner_handle.as_deref().ok_or_else(|| {
+                AppError::Validation(
+                    "checks:write tokens require runner_handle for the delegated runner principal"
+                        .to_string(),
+                )
+            })?;
+            pat_policy::resolve_runner_token_principal(&state.pool, org, handle).await?
+        } else {
+            principal_id
+        };
         let refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        pat::create_pat_with_scopes(&state.pool, principal_id, org_id, &body.name, &refs).await?
+        pat::create_pat_with_scopes(&state.pool, token_owner, org_id, &body.name, &refs).await?
     } else {
         pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?
     };
@@ -719,6 +742,8 @@ struct CreatePatRequest {
     name: String,
     org: Option<String>,
     scopes: Option<Vec<String>>,
+    /// Required when issuing `checks:write`: non-admin member who will use the token.
+    runner_handle: Option<String>,
 }
 
 #[derive(Serialize)]

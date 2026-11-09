@@ -506,7 +506,19 @@ pub async fn runner_report_check(
     if !super::pat_auth::scope_allows(&pat_ctx.scopes, "checks:write") {
         return Err(AppError::Forbidden);
     }
+    if !super::pat_policy::is_runner_only_pat(&pat_ctx.scopes) {
+        return Err(AppError::Forbidden);
+    }
     let org_id = super::org_id_for_member(&state.pool, &org, pat_ctx.principal_id).await?;
+    if super::pat_policy::principal_is_privileged_org_member(
+        &state.pool,
+        org_id,
+        pat_ctx.principal_id,
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
     if !super::pat_auth::pat_org_allowed(pat_ctx.org_id, org_id) {
         return Err(AppError::Forbidden);
     }
@@ -521,16 +533,25 @@ pub async fn runner_report_check(
     let Some((repo_id, storage_key)) = row else {
         return Err(AppError::NotFound);
     };
-    let pipe = sqlx::query_as::<_, (String, Uuid)>(
-        "SELECT state, run_attempt_id FROM pipeline_runs WHERE id = $1 AND repo_id = $2",
+    let pipe = sqlx::query_as::<_, (String, Uuid, String, Uuid)>(
+        "SELECT state, run_attempt_id, source_oid, org_id FROM pipeline_runs
+         WHERE id = $1 AND repo_id = $2",
     )
     .bind(body.pipeline_run_id)
     .bind(repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pipe_state, run_attempt)) = pipe else {
+    let Some((pipe_state, run_attempt, pipe_source, pipe_org)) = pipe else {
         return Err(AppError::NotFound);
     };
+    if pipe_org != org_id {
+        return Err(AppError::Forbidden);
+    }
+    if pipe_source != body.head_oid {
+        return Err(AppError::Validation(
+            "head_oid must match pipeline source_oid".to_string(),
+        ));
+    }
     if pipe_state != "succeeded" {
         return Err(AppError::Validation(
             "pipeline must succeed before check report".to_string(),
@@ -568,6 +589,41 @@ pub async fn runner_report_check(
             "head_oid does not match current source branch".to_string(),
         ));
     }
+    let used: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM runner_check_receipts WHERE attempt_id = $1")
+            .bind(body.attempt_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if used.0 > 0 {
+        return Err(AppError::Validation(
+            "attempt_id already consumed".to_string(),
+        ));
+    }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO runner_check_receipts (id, org_id, repo_id, pipeline_run_id, attempt_id,
+         pr_id, check_name, head_oid, reported_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(body.pipeline_run_id)
+    .bind(body.attempt_id)
+    .bind(pr_id)
+    .bind(&body.check_name)
+    .bind(&body.head_oid)
+    .bind(pat_ctx.principal_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(db) = &e {
+            if db.constraint().is_some() {
+                return AppError::Validation("attempt_id already consumed".to_string());
+            }
+        }
+        AppError::Database(e)
+    })?;
     let updated = sqlx::query(
         "UPDATE pr_check_runs SET state = $4, reported_by = $5, attempt_id = $6,
          expires_at = CURRENT_TIMESTAMP + INTERVAL '7 days', updated_at = CURRENT_TIMESTAMP
@@ -579,13 +635,15 @@ pub async fn runner_report_check(
     .bind(&state_name)
     .bind(pat_ctx.principal_id)
     .bind(body.attempt_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
+        tx.rollback().await.ok();
         return Err(AppError::Validation(
             "check run missing for current head (sync PR first)".to_string(),
         ));
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

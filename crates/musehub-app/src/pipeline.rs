@@ -78,6 +78,28 @@ pub async fn start_pipeline_run(
             "source_oid must match current main tip".to_string(),
         ));
     }
+    let merged = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<Uuid>)>(
+        "SELECT id, issue_id, agent_run_id FROM pull_requests
+         WHERE repo_id = $1 AND state = 'merged' AND merged_oid = $2
+         ORDER BY merged_at DESC NULLS LAST LIMIT 1",
+    )
+    .bind(repo_id)
+    .bind(&body.source_oid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((merged_pr_id, issue_id, agent_run_id)) = merged else {
+        return Err(AppError::Validation(
+            "source_oid must be a merged pull request commit on this repository".to_string(),
+        ));
+    };
+    let pr_id = body.pr_id.unwrap_or(merged_pr_id);
+    if pr_id != merged_pr_id {
+        return Err(AppError::Validation(
+            "pr_id does not match merge record for source_oid".to_string(),
+        ));
+    }
+    let issue_id = body.issue_id.or(issue_id);
+    let agent_run_id = body.agent_run_id.or(agent_run_id);
     let workflow = body
         .workflow_name
         .clone()
@@ -98,9 +120,9 @@ pub async fn start_pipeline_run(
     .bind(&workflow)
     .bind(principal_id)
     .bind(attempt_id)
-    .bind(body.pr_id)
-    .bind(body.issue_id)
-    .bind(body.agent_run_id)
+    .bind(pr_id)
+    .bind(issue_id)
+    .bind(agent_run_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(

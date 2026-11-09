@@ -13,6 +13,14 @@
     "runReferenceAgent": "运行参考 Agent（无模型）",
     "acceptPlan": "接受计划",
     "cancelAgent": "取消 Agent",
-    "createPullRequest": "创建 Pull Request"
+    "createPullRequest": "创建 Pull Request",
+    "deliveryTitle": "交付链",
+    "deliveryMockNote": "部署仅使用 compose-mock（非真实 OCI/Docker）。",
+    "runPipelineOnMain": "在已合并 main 提交上运行流水线",
+    "releaseAndDeployMock": "发布 + mock 部署",
+    "viewTrace": "查看部署追溯",
+    "mergeShortcut": "批准、检查、合并（演示；真实门禁需 CI 汇报账号）",
+    "noMergedPr": "尚无已合并 PR — 请先完成评审与检查合并。",
+    "traceGaps": "追溯缺口（不编造）"
   }
 }
