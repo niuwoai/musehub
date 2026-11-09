@@ -41,7 +41,8 @@ resolve_oci_image_ref() {
   printf '%s' "$ref"
 }
 
-NGINX_TAG="${MUSEHUB_NGINX_IMAGE_TAG:-nginx:1.27.3}"
+# Unprivileged nginx listens on 8080 — required when cap_drop ALL (no CAP_NET_BIND_SERVICE on :80).
+NGINX_TAG="${MUSEHUB_NGINX_IMAGE_TAG:-nginxinc/nginx-unprivileged:1.27-alpine}"
 echo "=== docker pull $NGINX_TAG ==="
 OCI_REF=$(resolve_oci_image_ref "$NGINX_TAG")
 echo "oci_image_ref=$OCI_REF"

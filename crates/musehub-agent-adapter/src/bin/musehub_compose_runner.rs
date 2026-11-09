@@ -92,7 +92,7 @@ fn main() {
   web:
     image: {oci_ref}
     ports:
-      - "127.0.0.1:{publish_port}:80"
+      - "127.0.0.1:{publish_port}:8080"
     read_only: true
     tmpfs:
       - /var/cache/nginx:size=8m
