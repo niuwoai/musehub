@@ -114,6 +114,7 @@ api POST "/api/v1/orgs/demo/repos/stack-slice/issues/${issue_n}/plans" '{"body":
 echo "step=accept_plan"
 api PATCH "/api/v1/orgs/demo/repos/stack-slice/issues/${issue_n}/plans"
 
+echo "step=agent_run"
 agent=$(api POST /api/v1/orgs/demo/repos/stack-slice/agent-runs \
   "$(jq -n --arg id "$issue_id" '{issue_id:$id,message:"stack agent"}')")
 run_id=$(echo "$agent" | jq -r .id)
@@ -129,6 +130,7 @@ done
 merge_commit=$(echo "$st" | jq -r .result_commit_oid)
 [[ ${#merge_commit} -eq 40 ]]
 
+echo "step=seed_members"
 api POST /api/v1/orgs/demo/members \
   "$(jq -n --arg p 'Stack-Reviewer-12345678' '{handle:"stack-rev",password:$p,role:"member"}')" >/dev/null
 api POST /api/v1/orgs/demo/members \
@@ -143,24 +145,35 @@ curl -fsS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h stack-ci --arg p 'StackCiReporter12345678' '{handle:$h,password:$p}')" \
   "$BASE/api/v1/auth/login" >/dev/null
 
+echo "step=pr_collaborator"
+api POST /api/v1/orgs/demo/repos/stack-slice/collaborators \
+  '{"handle":"stack-rev","role":"maintainer"}' >/dev/null
+
 branch="agent/${run_id}"
-pr=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg t "stack pr" --arg sb "$branch" --arg iid "$issue_id" --arg ar "$run_id" \
-    '{title:$t,source_branch:$sb,issue_id:$iid,agent_run_id:$ar}')" \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests")
+echo "step=open_pr"
+pr=$(api POST /api/v1/orgs/demo/repos/stack-slice/pull-requests \
+  "$(jq -n --arg t "stack pr" --arg sb "$branch" --arg iid "$issue_id" --arg ar "$run_id" \
+    '{title:$t,source_branch:$sb,issue_id:$iid,agent_run_id:$ar}')")
 pr_n=$(echo "$pr" | jq -r .number)
 pr_id=$(echo "$pr" | jq -r .id)
 
-curl -fsS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
+echo "step=review_pr"
+curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
   -d '{"decision":"approve"}' \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/reviews" >/dev/null
+  -o /dev/null -w "%{http_code}" \
+  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/reviews" | grep -q '^20'
+
 attempt_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
-curl -fsS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
+curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg a "$attempt_id" '{state:"success",attempt_id:$a}')" \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/checks/product-ci" >/dev/null
-merged=$(curl -fsS -c "$REV_JAR" -b "$REV_JAR" -X POST \
+  -o /dev/null -w "%{http_code}" \
+  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/checks/product-ci" | grep -q '^20'
+
+echo "step=merge_pr"
+merged=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -X POST -o /tmp/merge.json -w "%{http_code}" \
   "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/merge")
-merge_oid=$(echo "$merged" | jq -r .head_oid)
+[[ "$merged" == 2* ]] || { cat /tmp/merge.json >&2; exit 1; }
+merge_oid=$(jq -r .head_oid /tmp/merge.json)
 
 pipe=$(api POST /api/v1/orgs/demo/repos/stack-slice/pipeline-runs \
   "$(jq -n --arg o "$merge_oid" --arg p "$pr_id" --arg i "$issue_id" --arg a "$run_id" \
@@ -176,8 +189,7 @@ rel=$(api POST /api/v1/orgs/demo/repos/stack-slice/releases \
   "$(jq -n --arg o "$merge_oid" --arg p "$pipe_id" --arg pr "$pr_id" \
     '{version:"0.0.0-stack",tag_name:"v0.0.0-stack",commit_oid:$o,pipeline_run_id:$p,pr_id:$pr}')")
 rel_id=$(echo "$rel" | jq -r .id)
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/releases/${rel_id}/publish" >/dev/null
+api POST "/api/v1/orgs/demo/repos/stack-slice/releases/${rel_id}/publish"
 dep=$(api POST /api/v1/orgs/demo/repos/stack-slice/deployments \
   "$(jq -n --arg r "$rel_id" '{release_id:$r,health_target:"mock://healthy"}')")
 [[ "$(echo "$dep" | jq -r .state)" == "succeeded" ]]
