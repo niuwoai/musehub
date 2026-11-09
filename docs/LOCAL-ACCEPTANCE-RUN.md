@@ -29,6 +29,9 @@
 | 5 | `./scripts/run-ci-security-integration-local.sh` | 0 | 首跑 127（env 引号）；修复脚本后 `ci_security_integration_local=ok` | `1b77a60`+ |
 | 6 | `./scripts/verify-backup-restore.sh` | 0 | `backup_restore_verify=ok` | `1b77a60` |
 | 7 | `./scripts/verify-remote-runner-e2e.sh` | 0 | `remote_runner_subprocess_e2e=ok` | `1b77a60` |
+| 7b | `./scripts/verify-remote-deployment-e2e.sh` | 0 | `remote_deployment_subprocess_e2e=ok`；API `202` + worker claim | 本 commit |
+| 7c | `cargo test -p musehub-app --test remote_deployment_runner_e2e` | 0 | in-process claim + `execute_deployment_job` | 本 commit |
+| 7d | `./scripts/verify-product-production-stack-e2e.sh` | `[~]` | 拓扑（无 API docker.sock）+ capabilities；全链 agent/OCI/deploy 见工单 follow-up | 本 commit |
 | 8 | `./scripts/verify-runner-cancel-subprocess-e2e.sh` | 0 | cancel + 无 ready artifact | `1b77a60` |
 | 9 | `./scripts/verify-runner-kill-reclaim-e2e.sh` | 0 | SIGKILL + `runner_reclaim_build_e2e` | `1b77a60` |
 | 10 | `./scripts/verify-runner-cross-container-e2e.sh` | 0 | `runner_cross_container_e2e=ok`；**非**真实双主机 | `e15554f` |

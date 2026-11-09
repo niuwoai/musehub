@@ -30,6 +30,13 @@ pub fn agent_executor_remote() -> bool {
     )
 }
 
+pub fn deploy_executor_remote() -> bool {
+    matches!(
+        std::env::var("MUSEHUB_DEPLOY_EXECUTOR").as_deref(),
+        Ok("remote")
+    )
+}
+
 fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -88,10 +95,30 @@ async fn require_agent_runner_pat(
     Ok(pat)
 }
 
+async fn require_deploy_runner_pat(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<PatContext, AppError> {
+    let token = bearer_token(headers)?;
+    let pat = pat_auth::authenticate_pat_context(&state.pool, token).await?;
+    if !pat_auth::scope_allows(&pat.scopes, "deploy:execute")
+        && !pat_auth::scope_allows(&pat.scopes, "pipeline:execute")
+    {
+        return Err(AppError::Forbidden);
+    }
+    if pat.org_id.is_none() {
+        return Err(AppError::Validation(
+            "runner tokens require org binding".to_string(),
+        ));
+    }
+    Ok(pat)
+}
+
 #[derive(Serialize)]
 pub struct RunnerCapabilities {
     pub pipeline_executor: &'static str,
     pub agent_executor: &'static str,
+    pub deploy_executor: &'static str,
     pub lease_seconds: i64,
     pub scopes_accepted: &'static [&'static str],
     pub note: &'static str,
@@ -109,8 +136,18 @@ pub async fn capabilities() -> Json<RunnerCapabilities> {
         } else {
             "inprocess"
         },
+        deploy_executor: if deploy_executor_remote() {
+            "remote"
+        } else {
+            "inprocess"
+        },
         lease_seconds: lease::lease_secs(),
-        scopes_accepted: &["pipeline:execute", "agent:execute", "checks:write"],
+        scopes_accepted: &[
+            "pipeline:execute",
+            "agent:execute",
+            "deploy:execute",
+            "checks:write",
+        ],
         note: "Control plane does not mount a Docker socket; workers execute adapters locally.",
     })
 }
@@ -338,6 +375,99 @@ pub async fn renew_agent_lease(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct ClaimedDeployment {
+    pub deployment_id: Uuid,
+    pub org_id: Uuid,
+    pub repo_id: Uuid,
+    pub release_id: Uuid,
+    pub lease_epoch: i64,
+}
+
+pub async fn claim_deployment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ClaimedDeployment>), AppError> {
+    if !deploy_executor_remote() {
+        return Err(AppError::Conflict(
+            "deploy executor is in-process on this server".to_string(),
+        ));
+    }
+    let pat = require_deploy_runner_pat(&state, &headers).await?;
+    let instance_id = runner_instance_id(&headers)?;
+    let org_id = pat.org_id.unwrap();
+    let candidate = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT id FROM deployments
+         WHERE org_id = $1 AND state = 'queued'
+           AND (lease_holder IS NULL OR lease_until < CURRENT_TIMESTAMP)
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((deployment_id,)) = candidate else {
+        return Err(AppError::NotFound);
+    };
+    let row = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT repo_id, release_id FROM deployments WHERE id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_one(&state.pool)
+    .await?;
+    grants::ensure_pat_repo_access(&state.pool, &pat, org_id, row.0).await?;
+    let epoch_row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE deployments SET
+           state = 'running',
+           lease_holder = $2,
+           lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval,
+           lease_epoch = deployments.lease_epoch + 1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND state = 'queued'
+           AND (lease_holder IS NULL OR lease_holder = $2 OR lease_until < CURRENT_TIMESTAMP)
+         RETURNING lease_epoch",
+    )
+    .bind(deployment_id)
+    .bind(instance_id)
+    .bind(lease::lease_secs())
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((lease_epoch,)) = epoch_row else {
+        return Err(AppError::Conflict("deployment already claimed".into()));
+    };
+    Ok((
+        StatusCode::OK,
+        Json(ClaimedDeployment {
+            deployment_id,
+            org_id,
+            repo_id: row.0,
+            release_id: row.1,
+            lease_epoch,
+        }),
+    ))
+}
+
+pub async fn renew_deployment_lease(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(deployment_id): Path<Uuid>,
+    Json(body): Json<RenewBody>,
+) -> Result<StatusCode, AppError> {
+    let pat = require_deploy_runner_pat(&state, &headers).await?;
+    let row =
+        sqlx::query_as::<_, (Uuid, Uuid)>("SELECT org_id, repo_id FROM deployments WHERE id = $1")
+            .bind(deployment_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((org_id, repo_id)) = row else {
+        return Err(AppError::NotFound);
+    };
+    grants::ensure_pat_repo_access(&state.pool, &pat, org_id, repo_id).await?;
+    let instance_id = runner_instance_id(&headers)?;
+    lease::renew_deployment_work_lease(&state.pool, deployment_id, instance_id, body.lease_epoch)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn list_runner_tokens_masked(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -354,7 +484,8 @@ pub async fn list_runner_tokens_masked(
          WHERE org_id = $1 AND revoked_at IS NULL
            AND (scopes @> ARRAY['checks:write']::text[]
              OR scopes @> ARRAY['pipeline:execute']::text[]
-             OR scopes @> ARRAY['agent:execute']::text[])
+             OR scopes @> ARRAY['agent:execute']::text[]
+             OR scopes @> ARRAY['deploy:execute']::text[])
          ORDER BY created_at DESC",
     )
     .bind(org_id)

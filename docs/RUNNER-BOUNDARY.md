@@ -5,6 +5,7 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 | 组件 | 实际形态 | 隔离证据 |
 |------|----------|----------|
 | Agent 执行 | `MUSEHUB_AGENT_EXECUTOR=remote` 时 API 仅入队；`musehub-runnerd` claim + 本地适配器（reference / codex-sim / `MUSEHUB_AGENT_CODEX_BIN` live） | `remote_agent_runner_e2e`、`verify-remote-agent-e2e.sh`；demo 镜像默认 in-process |
+| Deploy 执行 | `MUSEHUB_DEPLOY_EXECUTOR=remote` 时 API 写入 `queued` + `launch_payload`；worker `claim` + `execute_deployment_job`（compose-mock/runner）；API 容器无 `docker.sock` | `remote_deployment_runner_e2e`、`verify-remote-deployment-e2e.sh`；production profile 强制三者皆 remote |
 | Pipeline | 进程内 `PipelineSupervisor` + `musehub-pipeline-*` 子进程 | `pipeline_*_e2e` |
 | 部署 | `compose-mock` / `compose-runner` **子进程**（可配置二进制路径） | `compose-runner-e2e`（需 Docker）；产品栈镜像默认 **mock** |
 | `musehub-runner-probe` | 本地进程超时/取消探针 | `SCOPE=local_process_only`；**非** rootless/OCI 证明 |

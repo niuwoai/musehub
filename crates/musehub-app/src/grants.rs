@@ -88,7 +88,8 @@ pub async fn ensure_pat_repo_access(
     }
     if pat.scope_mode == "all_accessible"
         && (crate::pat_auth::scope_allows(&pat.scopes, "pipeline:execute")
-            || crate::pat_auth::scope_allows(&pat.scopes, "agent:execute"))
+            || crate::pat_auth::scope_allows(&pat.scopes, "agent:execute")
+            || crate::pat_auth::scope_allows(&pat.scopes, "deploy:execute"))
     {
         return Ok(());
     }

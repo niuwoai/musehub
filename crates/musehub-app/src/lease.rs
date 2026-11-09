@@ -303,6 +303,31 @@ pub async fn renew_agent_work_lease(
     Ok(())
 }
 
+pub async fn renew_deployment_work_lease(
+    pool: &PgPool,
+    deployment_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> Result<(), AppError> {
+    let updated = sqlx::query(
+        "UPDATE deployments SET lease_until = CURRENT_TIMESTAMP + ($4::text || ' seconds')::interval
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
+           AND state IN ('queued','running')",
+    )
+    .bind(deployment_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(lease_secs())
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "deployment lease renew rejected (fencing)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn renew_pipeline_work_lease(
     pool: &PgPool,
     run_id: Uuid,

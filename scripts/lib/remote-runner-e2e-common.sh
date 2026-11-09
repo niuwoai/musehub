@@ -76,6 +76,12 @@ remote_runner_start_server() {
   if [[ -n "${MUSEHUB_AGENT_EXECUTOR:-}" ]]; then
     server_env+=(MUSEHUB_AGENT_EXECUTOR="$MUSEHUB_AGENT_EXECUTOR")
   fi
+  if [[ -n "${MUSEHUB_DEPLOY_EXECUTOR:-}" ]]; then
+    server_env+=(MUSEHUB_DEPLOY_EXECUTOR="$MUSEHUB_DEPLOY_EXECUTOR")
+  fi
+  if [[ -n "${MUSEHUB_COMPOSE_ADAPTER_MODE:-}" ]]; then
+    server_env+=(MUSEHUB_COMPOSE_ADAPTER_MODE="$MUSEHUB_COMPOSE_ADAPTER_MODE")
+  fi
   if [[ -n "${MUSEHUB_PIPELINE_EXECUTOR:-}" ]]; then
     server_env+=(MUSEHUB_PIPELINE_EXECUTOR="$MUSEHUB_PIPELINE_EXECUTOR")
   fi
@@ -151,6 +157,13 @@ remote_runner_start_runnerd() {
   )
   if [[ -n "${MUSEHUB_RUNNER_WORK_KINDS:-}" ]]; then
     runner_env+=(MUSEHUB_RUNNER_WORK_KINDS="$MUSEHUB_RUNNER_WORK_KINDS")
+  fi
+  if [[ -n "${MUSEHUB_COMPOSE_RUNNER_BIN:-}" ]]; then
+    runner_env+=(MUSEHUB_COMPOSE_RUNNER_BIN="$MUSEHUB_COMPOSE_RUNNER_BIN")
+    runner_env+=(MUSEHUB_COMPOSE_ADAPTER_BIN="${MUSEHUB_COMPOSE_ADAPTER_BIN:-$MUSEHUB_COMPOSE_RUNNER_BIN}")
+  fi
+  if [[ -n "${MUSEHUB_REQUIRE_PIPELINE_OCI:-}" ]]; then
+    runner_env+=(MUSEHUB_REQUIRE_PIPELINE_OCI="$MUSEHUB_REQUIRE_PIPELINE_OCI")
   fi
   if [[ -n "${MUSEHUB_PIPELINE_HOLD_SECS:-}" ]]; then
     runner_env+=(MUSEHUB_PIPELINE_HOLD_SECS="$MUSEHUB_PIPELINE_HOLD_SECS")

@@ -31,6 +31,7 @@ mod recovery;
 pub mod runner_api;
 pub use agent_supervisor::run_agent_job as execute_agent_job;
 pub use artifacts::sha256_file as artifact_sha256_file;
+pub use deployment::execute_deployment_job;
 pub use pipeline::{
     execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
 };
@@ -133,6 +134,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/runner/agent-runs/{run_id}/lease/renew",
             post(runner_api::renew_agent_lease),
+        )
+        .route(
+            "/api/v1/runner/deployments/claim",
+            post(runner_api::claim_deployment),
+        )
+        .route(
+            "/api/v1/runner/deployments/{deployment_id}/lease/renew",
+            post(runner_api::renew_deployment_lease),
         )
         .route(
             "/api/v1/orgs/{org}/repos",

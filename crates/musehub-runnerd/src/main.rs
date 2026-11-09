@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use musehub_app::agent_supervisor::AgentSupervisor;
 use musehub_app::execute_agent_job;
+use musehub_app::execute_deployment_job;
 use musehub_app::execute_pipeline_job;
 use musehub_app::pipeline_supervisor::PipelineSupervisor;
-use musehub_app::runner_api::{ClaimedAgentRun, ClaimedPipelineRun};
+use musehub_app::runner_api::{ClaimedAgentRun, ClaimedDeployment, ClaimedPipelineRun};
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -22,6 +23,9 @@ struct Config {
     artifact_root: PathBuf,
     pipeline_bin: PathBuf,
     reference_adapter_bin: PathBuf,
+    compose_mock_bin: PathBuf,
+    compose_runner_bin: PathBuf,
+    require_pipeline_oci: bool,
     poll_secs: u64,
     work_kinds: WorkKinds,
 }
@@ -31,6 +35,7 @@ enum WorkKinds {
     PipelineOnly,
     AgentOnly,
     Both,
+    All,
 }
 
 #[tokio::main]
@@ -72,7 +77,10 @@ async fn main() {
             break;
         }
         let mut claimed_work = false;
-        if matches!(cfg.work_kinds, WorkKinds::Both | WorkKinds::PipelineOnly) {
+        if matches!(
+            cfg.work_kinds,
+            WorkKinds::Both | WorkKinds::PipelineOnly | WorkKinds::All
+        ) {
             match claim_pipeline(&client, &cfg).await {
                 Ok(Some(claimed)) => {
                     claimed_work = true;
@@ -87,7 +95,12 @@ async fn main() {
                 Err(err) => tracing::warn!(error = %err, "pipeline claim failed"),
             }
         }
-        if !claimed_work && matches!(cfg.work_kinds, WorkKinds::Both | WorkKinds::AgentOnly) {
+        if !claimed_work
+            && matches!(
+                cfg.work_kinds,
+                WorkKinds::Both | WorkKinds::AgentOnly | WorkKinds::All
+            )
+        {
             match claim_agent(&client, &cfg).await {
                 Ok(Some(claimed)) => {
                     claimed_work = true;
@@ -100,6 +113,19 @@ async fn main() {
                 }
                 Ok(None) => {}
                 Err(err) => tracing::warn!(error = %err, "agent claim failed"),
+            }
+        }
+        if !claimed_work && matches!(cfg.work_kinds, WorkKinds::All) {
+            match claim_deployment(&client, &cfg).await {
+                Ok(Some(claimed)) => {
+                    claimed_work = true;
+                    tracing::info!(deployment_id = %claimed.deployment_id, "claimed deployment");
+                    if let Err(err) = run_deployment(&client, &cfg, &pool, claimed).await {
+                        tracing::warn!(error = %err, "deployment failed");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(error = %err, "deployment claim failed"),
             }
         }
         if !claimed_work {
@@ -124,6 +150,16 @@ fn load_config() -> Result<Config, String> {
     let reference_adapter_bin = std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
         .map(PathBuf::from)
         .map_err(|_| "MUSEHUB_REFERENCE_ADAPTER_BIN required for agent work".to_string())?;
+    let compose_runner_bin = std::env::var("MUSEHUB_COMPOSE_RUNNER_BIN")
+        .map(PathBuf::from)
+        .map_err(|_| "MUSEHUB_COMPOSE_RUNNER_BIN required for deploy work".to_string())?;
+    let compose_mock_bin = std::env::var("MUSEHUB_COMPOSE_ADAPTER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-mock"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| compose_runner_bin.clone());
+    let require_pipeline_oci = std::env::var("MUSEHUB_REQUIRE_PIPELINE_OCI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let poll_secs = std::env::var("MUSEHUB_RUNNER_POLL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -135,6 +171,7 @@ fn load_config() -> Result<Config, String> {
     {
         "pipeline" => WorkKinds::PipelineOnly,
         "agent" => WorkKinds::AgentOnly,
+        "all" => WorkKinds::All,
         _ => WorkKinds::Both,
     };
     Ok(Config {
@@ -145,6 +182,9 @@ fn load_config() -> Result<Config, String> {
         artifact_root,
         pipeline_bin,
         reference_adapter_bin,
+        compose_mock_bin,
+        compose_runner_bin,
+        require_pipeline_oci,
         poll_secs,
         work_kinds,
     })
@@ -163,6 +203,14 @@ async fn claim_agent(
     cfg: &Config,
 ) -> Result<Option<ClaimedAgentRun>, String> {
     let url = format!("{}/api/v1/runner/agent-runs/claim", cfg.api_base);
+    claim_json(client, cfg, &url).await
+}
+
+async fn claim_deployment(
+    client: &reqwest::Client,
+    cfg: &Config,
+) -> Result<Option<ClaimedDeployment>, String> {
+    let url = format!("{}/api/v1/runner/deployments/claim", cfg.api_base);
     claim_json(client, cfg, &url).await
 }
 
@@ -259,6 +307,35 @@ async fn run_agent(
     Ok(())
 }
 
+async fn run_deployment(
+    client: &reqwest::Client,
+    cfg: &Config,
+    pool: &sqlx::PgPool,
+    claimed: ClaimedDeployment,
+) -> Result<(), String> {
+    let renew = spawn_renew(
+        client.clone(),
+        cfg.clone(),
+        "deployment",
+        claimed.deployment_id,
+        claimed.lease_epoch,
+    );
+    execute_deployment_job(
+        pool,
+        claimed.deployment_id,
+        cfg.instance_id,
+        claimed.lease_epoch,
+        cfg.compose_mock_bin.clone(),
+        cfg.compose_runner_bin.clone(),
+        cfg.require_pipeline_oci,
+        claimed.release_id,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    renew.abort();
+    Ok(())
+}
+
 fn spawn_renew(
     client: reqwest::Client,
     cfg: Config,
@@ -270,6 +347,7 @@ fn spawn_renew(
         let interval = Duration::from_secs(runner_lease_renew_interval_secs());
         let path = match kind {
             "agent" => format!("/api/v1/runner/agent-runs/{run_id}/lease/renew"),
+            "deployment" => format!("/api/v1/runner/deployments/{run_id}/lease/renew"),
             _ => format!("/api/v1/runner/pipeline-runs/{run_id}/lease/renew"),
         };
         loop {

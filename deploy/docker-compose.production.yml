@@ -12,6 +12,7 @@ services:
       MUSEHUB_COMPOSE_ADAPTER_BIN: /opt/musehub/bin/musehub-compose-runner
       MUSEHUB_COMPOSE_RUNNER_BIN: /opt/musehub/bin/musehub-compose-runner
       MUSEHUB_PIPELINE_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-oci
+      MUSEHUB_DEPLOY_EXECUTOR: remote
 
   musehub-runner:
     image: musehub-runner:local
@@ -21,6 +22,7 @@ services:
       target: runner-runtime
     environment:
       DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@postgres:5432/musehub?sslmode=disable
+      MUSEHUB_DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@postgres:5432/musehub?sslmode=disable
       MUSEHUB_API_BASE: http://musehub-server:8080
       MUSEHUB_RUNNER_PAT: ${MUSEHUB_RUNNER_PAT:?set MUSEHUB_RUNNER_PAT for production worker}
       MUSEHUB_GIT_ROOT: /var/lib/musehub/git
@@ -29,7 +31,11 @@ services:
       MUSEHUB_REFERENCE_ADAPTER_BIN: /opt/musehub/bin/musehub-agent-reference
       MUSEHUB_AGENT_CODEX_SIM_BIN: /opt/musehub/bin/musehub-agent-codex-sim
       MUSEHUB_RUNNER_POLL_SECS: 2
-      MUSEHUB_RUNNER_WORK_KINDS: both
+      MUSEHUB_RUNNER_WORK_KINDS: all
+      MUSEHUB_COMPOSE_ADAPTER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_COMPOSE_RUNNER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_REQUIRE_PIPELINE_OCI: ${MUSEHUB_REQUIRE_PIPELINE_OCI:-1}
+      MUSEHUB_OCI_REGISTRY: ${MUSEHUB_OCI_REGISTRY:-host.docker.internal:5000}
     volumes:
       - gitdata:/var/lib/musehub/git
       - artifacts:/var/lib/musehub/artifacts

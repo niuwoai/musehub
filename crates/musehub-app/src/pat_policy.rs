@@ -10,6 +10,7 @@ const RUNNER_ALLOWED: &[&str] = &[
     "repo:read",
     "pipeline:execute",
     "agent:execute",
+    "deploy:execute",
 ];
 
 pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
@@ -18,9 +19,12 @@ pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
             return Err(AppError::Validation("invalid scope".to_string()));
         }
     }
-    let runner_scoped = scopes
-        .iter()
-        .any(|s| s == "checks:write" || s == "pipeline:execute" || s == "agent:execute");
+    let runner_scoped = scopes.iter().any(|s| {
+        s == "checks:write"
+            || s == "pipeline:execute"
+            || s == "agent:execute"
+            || s == "deploy:execute"
+    });
     if runner_scoped {
         if scopes
             .iter()
@@ -48,10 +52,12 @@ pub async fn require_org_admin_to_issue_runner_token(
     principal_id: Uuid,
     scopes: &[String],
 ) -> Result<(), AppError> {
-    if !scopes
-        .iter()
-        .any(|s| s == "checks:write" || s == "pipeline:execute" || s == "agent:execute")
-    {
+    if !scopes.iter().any(|s| {
+        s == "checks:write"
+            || s == "pipeline:execute"
+            || s == "agent:execute"
+            || s == "deploy:execute"
+    }) {
         return Ok(());
     }
     let row = sqlx::query_as::<_, (String,)>(

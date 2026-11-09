@@ -12,8 +12,11 @@ use sqlx::PgPool;
 use tokio::process::Command;
 use uuid::Uuid;
 
+use std::path::PathBuf;
+
 use crate::compose::resolve_compose_adapter;
 use crate::error::AppError;
+use crate::runner_api;
 use crate::security::{validate_compose_health_target, validate_oci_image_ref};
 
 #[derive(Serialize)]
@@ -54,6 +57,24 @@ struct DeploymentLaunch {
     rollback_of_id: Option<Uuid>,
     rollback_reason: Option<String>,
     audit_action: &'static str,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DeploymentLaunchPayload {
+    pub health_target: String,
+    pub publish_port: u32,
+    pub project: String,
+    pub teardown_project: Option<String>,
+    pub product_runner: bool,
+    pub release_commit_oid: String,
+    pub manifest: Option<String>,
+    pub oci_image_ref: Option<String>,
+    pub adapter_kind: String,
+    pub rollback_of_id: Option<Uuid>,
+    pub rollback_reason: Option<String>,
+    pub audit_action: String,
+    pub environment_slug: String,
+    pub actor_id: Option<String>,
 }
 
 async fn fetch_by_attempt(
@@ -339,20 +360,81 @@ async fn launch_deployment(
         };
         validate_oci_image_ref(oci).map_err(AppError::Validation)?;
     }
-    let insert = sqlx::query(
-        "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id)
-         VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8)",
-    )
-    .bind(deployment_id)
-    .bind(org_id)
-    .bind(repo_id)
-    .bind(environment_id)
-    .bind(launch.release_id)
-    .bind(adapter_kind)
-    .bind(attempt_id)
-    .bind(launch.rollback_of_id)
-    .execute(&state.pool)
-    .await;
+    let product_runner = state.require_pipeline_oci && adapter_kind == "compose-runner";
+    let teardown_project: Option<String> = if product_runner || launch.rollback_of_id.is_some() {
+        sqlx::query_scalar(
+            "SELECT d.health_summary->>'compose_project' FROM deployments d
+             WHERE d.repo_id = $1 AND d.environment_id = $2 AND d.state = 'succeeded' AND d.id != $3
+             ORDER BY d.updated_at DESC NULLS LAST LIMIT 1",
+        )
+        .bind(repo_id)
+        .bind(environment_id)
+        .bind(deployment_id)
+        .fetch_optional(&state.pool)
+        .await?
+    } else {
+        None
+    };
+    let remote_deploy = runner_api::deploy_executor_remote();
+    let payload = DeploymentLaunchPayload {
+        health_target: health_target.clone(),
+        publish_port,
+        project: String::new(),
+        teardown_project: None,
+        product_runner,
+        release_commit_oid: release_commit_oid.clone(),
+        manifest: manifest.clone(),
+        oci_image_ref: oci_image_ref.clone(),
+        adapter_kind: adapter_kind.to_string(),
+        rollback_of_id: launch.rollback_of_id,
+        rollback_reason: launch.rollback_reason.clone(),
+        audit_action: launch.audit_action.to_string(),
+        environment_slug: env_slug.clone(),
+        actor_id: actor_id.map(|u| u.to_string()),
+    };
+    let mut payload = payload;
+    payload.project = if product_runner || launch.rollback_of_id.is_some() {
+        format!("musehub-env-{environment_id}")
+    } else {
+        format!("musehub-deploy-{deployment_id}")
+    };
+    if let Some(ref prev) = teardown_project {
+        payload.teardown_project = Some(prev.clone());
+    }
+    let initial_state = if remote_deploy { "queued" } else { "running" };
+    let insert = if remote_deploy {
+        sqlx::query(
+            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id, launch_payload)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        )
+        .bind(deployment_id)
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(environment_id)
+        .bind(launch.release_id)
+        .bind(adapter_kind)
+        .bind(initial_state)
+        .bind(attempt_id)
+        .bind(launch.rollback_of_id)
+        .bind(serde_json::to_value(&payload).map_err(|e| AppError::Other(e.to_string()))?)
+        .execute(&state.pool)
+        .await
+    } else {
+        sqlx::query(
+            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id)
+             VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8)",
+        )
+        .bind(deployment_id)
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(environment_id)
+        .bind(launch.release_id)
+        .bind(adapter_kind)
+        .bind(attempt_id)
+        .bind(launch.rollback_of_id)
+        .execute(&state.pool)
+        .await
+    };
 
     if let Err(sqlx::Error::Database(db_err)) = &insert {
         if db_err.code().as_deref() == Some("23505") {
@@ -381,26 +463,20 @@ async fn launch_deployment(
     }
     insert?;
 
-    let product_runner = state.require_pipeline_oci && adapter_kind == "compose-runner";
-    let teardown_project: Option<String> = if product_runner || launch.rollback_of_id.is_some() {
-        sqlx::query_scalar(
-            "SELECT d.health_summary->>'compose_project' FROM deployments d
-             WHERE d.repo_id = $1 AND d.environment_id = $2 AND d.state = 'succeeded' AND d.id != $3
-             ORDER BY d.updated_at DESC NULLS LAST LIMIT 1",
-        )
-        .bind(repo_id)
-        .bind(environment_id)
-        .bind(deployment_id)
-        .fetch_optional(&state.pool)
-        .await?
-    } else {
-        None
-    };
-    let project = if product_runner || launch.rollback_of_id.is_some() {
-        format!("musehub-env-{environment_id}")
-    } else {
-        format!("musehub-deploy-{deployment_id}")
-    };
+    if remote_deploy {
+        return Ok(row_to_view(
+            deployment_id,
+            launch.release_id,
+            &env_slug,
+            "queued".to_string(),
+            adapter_kind.to_string(),
+            None,
+            attempt_id,
+            StatusCode::ACCEPTED,
+        ));
+    }
+
+    let project = payload.project.clone();
     let mut cmd = Command::new(&compose_bin);
     cmd.env("MUSEHUB_DEPLOY_HEALTH_TARGET", &health_target)
         .env(
@@ -599,4 +675,187 @@ pub async fn rollback_deployment(
         crate::audit::request_id_from_headers(&headers),
     )
     .await
+}
+
+/// Worker-side compose deploy (used when `MUSEHUB_DEPLOY_EXECUTOR=remote`).
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_deployment_job(
+    pool: &PgPool,
+    deployment_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    compose_mock_bin: PathBuf,
+    compose_runner_bin: PathBuf,
+    require_pipeline_oci: bool,
+    release_id: Uuid,
+) -> Result<(), AppError> {
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, Option<serde_json::Value>)>(
+        "SELECT org_id, repo_id, state, launch_payload FROM deployments WHERE id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((org_id, repo_id, state, payload_json)) = row else {
+        return Err(AppError::NotFound);
+    };
+    if state != "running" {
+        return Ok(());
+    }
+    let holder = sqlx::query_as::<_, (Option<Uuid>, i64)>(
+        "SELECT lease_holder, lease_epoch FROM deployments WHERE id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_one(pool)
+    .await?;
+    if holder.0 != Some(instance_id) || holder.1 != epoch {
+        return Err(AppError::Conflict("deployment lease fenced".into()));
+    }
+    let payload: DeploymentLaunchPayload =
+        serde_json::from_value(payload_json.unwrap_or(serde_json::json!({})))
+            .map_err(|e| AppError::Other(e.to_string()))?;
+    let (compose_bin, adapter_kind) =
+        resolve_compose_adapter(&compose_mock_bin, &compose_runner_bin, require_pipeline_oci)
+            .map_err(AppError::Validation)?;
+    if adapter_kind != payload.adapter_kind.as_str() {
+        return Err(AppError::Validation("adapter kind mismatch".into()));
+    }
+    let mut cmd = Command::new(&compose_bin);
+    cmd.env("MUSEHUB_DEPLOY_HEALTH_TARGET", &payload.health_target)
+        .env(
+            "MUSEHUB_RELEASE_MANIFEST_SHA256",
+            payload.manifest.clone().unwrap_or_default(),
+        )
+        .env("MUSEHUB_COMPOSE_PROJECT", &payload.project)
+        .env(
+            "MUSEHUB_COMPOSE_PUBLISH_PORT",
+            payload.publish_port.to_string(),
+        )
+        .env("MUSEHUB_RELEASE_COMMIT_OID", &payload.release_commit_oid)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(ref oci) = payload.oci_image_ref {
+        cmd.env("MUSEHUB_OCI_IMAGE_REF", oci);
+    }
+    if let Some(ref prev) = payload.teardown_project {
+        cmd.env("MUSEHUB_COMPOSE_TEARDOWN_PROJECT", prev);
+    }
+    if payload.product_runner
+        || (payload.rollback_of_id.is_some() && adapter_kind == "compose-runner")
+    {
+        cmd.env("MUSEHUB_COMPOSE_LEAVE_STACK", "1");
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| AppError::Other(format!("spawn compose adapter: {e}")))?;
+    let finished = tokio::time::timeout(Duration::from_secs(300), child.wait_with_output()).await;
+    let (ok, adapter_stdout, capability_gap) = match &finished {
+        Ok(Ok(out)) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let cap = out.status.code() == Some(2);
+            (out.status.success(), stdout, cap)
+        }
+        _ => (false, String::new(), true),
+    };
+    let applied_digest = adapter_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|v| {
+            v.get("applied_oci_digest")
+                .and_then(|d| d.as_str())
+                .map(String::from)
+        });
+    let verified_source_oid = adapter_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|v| {
+            v.get("verified_source_oid")
+                .and_then(|d| d.as_str())
+                .map(String::from)
+        });
+    let digest_ok = if adapter_kind == "compose-runner" {
+        match (payload.oci_image_ref.as_ref(), applied_digest.as_ref()) {
+            (Some(req), Some(app)) => req.split('@').nth(1) == Some(app.as_str()),
+            (Some(_), None) => false,
+            _ => false,
+        }
+    } else {
+        true
+    };
+    let source_ok = if adapter_kind == "compose-runner" {
+        verified_source_oid.as_deref() == Some(payload.release_commit_oid.as_str())
+    } else {
+        true
+    };
+    let deploy_ok = ok && digest_ok && source_ok;
+    let mut summary = if deploy_ok {
+        serde_json::json!({
+            "status": "healthy",
+            "target": payload.health_target,
+            "adapter": adapter_kind,
+            "release_manifest_sha256": payload.manifest,
+            "release_oci_image_ref": payload.oci_image_ref,
+            "applied_oci_digest": applied_digest,
+            "verified_source_oid": verified_source_oid,
+            "pipeline_source_oid": payload.release_commit_oid,
+            "compose_project": payload.project,
+        })
+    } else if capability_gap {
+        serde_json::json!({
+            "status": "unhealthy",
+            "adapter": adapter_kind,
+            "error_code": "docker_unavailable",
+            "compose_project": payload.project,
+        })
+    } else {
+        serde_json::json!({
+            "status": "unhealthy",
+            "adapter": adapter_kind,
+            "error_code": "deploy_failed",
+            "compose_project": payload.project,
+        })
+    };
+    if let Some(obj) = summary.as_object_mut() {
+        if let Some(target_id) = payload.rollback_of_id {
+            obj.insert("rollback".into(), serde_json::json!(true));
+            obj.insert(
+                "restored_from".into(),
+                serde_json::json!(target_id.to_string()),
+            );
+        }
+    }
+    let state_name = if deploy_ok { "succeeded" } else { "failed" };
+    sqlx::query(
+        "UPDATE deployments SET state = $2, health_summary = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $4 AND lease_epoch = $5",
+    )
+    .bind(deployment_id)
+    .bind(state_name)
+    .bind(summary)
+    .bind(instance_id)
+    .bind(epoch)
+    .execute(pool)
+    .await?;
+    if let Some(actor_str) = payload.actor_id.as_ref() {
+        if let Ok(actor) = Uuid::parse_str(actor_str) {
+            let _ = crate::audit::record(
+                pool,
+                Some(org_id),
+                Some(repo_id),
+                actor,
+                None,
+                &payload.audit_action,
+                "deployment",
+                deployment_id,
+                None,
+                if deploy_ok { "allow" } else { "deny" },
+                serde_json::json!({
+                    "state": state_name,
+                    "release_id": release_id.to_string(),
+                }),
+            )
+            .await;
+        }
+    }
+    Ok(())
 }

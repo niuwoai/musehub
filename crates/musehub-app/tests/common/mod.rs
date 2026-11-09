@@ -46,6 +46,25 @@ pub fn reference_adapter_bin() -> PathBuf {
         })
 }
 
+pub fn compose_mock_bin() -> PathBuf {
+    std::env::var("CARGO_BIN_EXE_musehub-compose-mock")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/musehub-compose-mock")
+        })
+}
+
+pub fn compose_runner_bin() -> PathBuf {
+    std::env::var("CARGO_BIN_EXE_musehub_compose_runner")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-runner"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/musehub-compose-runner")
+        })
+}
+
 pub async fn product_app(
     pool: PgPool,
     git_root: &std::path::Path,
