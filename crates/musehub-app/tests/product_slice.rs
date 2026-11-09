@@ -115,6 +115,36 @@ async fn login_create_repo_issue_reference_agent() {
         serde_json::from_slice(&issue_resp.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
 
+    let issue_number = issue_json["number"].as_i64().unwrap();
+    let plan_body = serde_json::json!({"body": "slice plan v1"});
+    let plan_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::from(plan_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("plan");
+    assert_eq!(plan_resp.status(), StatusCode::CREATED);
+    let accept = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/hello/issues/{issue_number}/plans"))
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("accept plan");
+    assert_eq!(accept.status(), StatusCode::NO_CONTENT);
+
     let agent_body = serde_json::json!({
         "issue_id": issue_json["id"],
         "message": "implement slice"

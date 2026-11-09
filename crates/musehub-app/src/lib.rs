@@ -372,6 +372,19 @@ async fn start_agent_run(
     if issue.is_none() {
         return Err(AppError::NotFound);
     }
+    let plan_ok = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM implementation_plans p
+         JOIN issue_revisions r ON r.issue_id = $1
+         WHERE p.issue_revision_id = r.id AND p.state = 'accepted'",
+    )
+    .bind(body.issue_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if plan_ok.0 == 0 {
+        return Err(AppError::Validation(
+            "agent run requires an accepted implementation plan".to_string(),
+        ));
+    }
     let run_id = Uuid::new_v4();
     let branch = format!("agent/{run_id}");
     let default_branch: (String,) =
