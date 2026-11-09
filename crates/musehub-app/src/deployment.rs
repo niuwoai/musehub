@@ -89,7 +89,7 @@ pub async fn start_deployment(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    start_deployment_inner(&state, org_id, repo_id, body).await
+    start_deployment_inner(&state, org_id, repo_id, Some(principal_id), body).await
 }
 
 pub(crate) async fn mcp_start_deployment(
@@ -115,7 +115,10 @@ pub(crate) async fn mcp_start_deployment(
         environment_slug: Some(env_slug),
         health_target: None,
     };
-    let (status, Json(view)) = start_deployment_inner(state, org_id, repo_id, body).await?;
+    let pat = state.mcp_pat_slot.read().await;
+    let actor = pat.as_ref().map(|p| p.principal_id);
+    drop(pat);
+    let (status, Json(view)) = start_deployment_inner(state, org_id, repo_id, actor, body).await?;
     Ok(serde_json::json!({
         "id": view.id.to_string(),
         "release_id": view.release_id.to_string(),
@@ -131,6 +134,7 @@ async fn start_deployment_inner(
     state: &Arc<crate::AppState>,
     org_id: Uuid,
     repo_id: Uuid,
+    actor_id: Option<Uuid>,
     body: StartDeploymentRequest,
 ) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
     let env_slug = body
@@ -368,12 +372,151 @@ async fn start_deployment_inner(
     .execute(&state.pool)
     .await?;
 
+    if let Some(actor) = actor_id {
+        let _ = crate::audit::record(
+            &state.pool,
+            Some(org_id),
+            Some(repo_id),
+            actor,
+            None,
+            "deployment.start",
+            "deployment",
+            deployment_id,
+            None,
+            if ok { "allow" } else { "deny" },
+            serde_json::json!({
+                "state": state_name,
+                "adapter_kind": adapter_kind,
+                "release_id": body.release_id.to_string(),
+            }),
+        )
+        .await;
+    }
+
     Ok(row_to_view(
         deployment_id,
         body.release_id,
         &env_slug,
         state_name.to_string(),
         adapter_kind.to_string(),
+        Some(summary),
+        attempt_id,
+        StatusCode::CREATED,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct RollbackDeploymentRequest {
+    pub target_deployment_id: Uuid,
+    pub attempt_id: Option<Uuid>,
+    pub reason: Option<String>,
+}
+
+/// Restore environment to a prior **succeeded** deployment (compose-mock copies health evidence; compose-runner not re-invoked here).
+pub async fn rollback_deployment(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo)): AxumPath<(String, String)>,
+    Json(body): Json<RollbackDeploymentRequest>,
+) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let attempt_id = body.attempt_id.unwrap_or_else(Uuid::new_v4);
+    if let Some(row) = fetch_by_attempt(&state.pool, repo_id, attempt_id).await? {
+        let (id, rel_id, _env, dep_state, adapter_kind, health_summary) = row;
+        let env_slug: (String,) = sqlx::query_as(
+            "SELECT e.slug FROM deployments d JOIN environments e ON e.id = d.environment_id WHERE d.id = $1",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+        return Ok(row_to_view(
+            id,
+            rel_id,
+            &env_slug.0,
+            dep_state,
+            adapter_kind,
+            health_summary,
+            attempt_id,
+            StatusCode::OK,
+        ));
+    }
+    let target =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, String, Option<serde_json::Value>)>(
+            "SELECT d.id, d.environment_id, d.release_id, d.adapter_kind, d.state, d.health_summary
+         FROM deployments d WHERE d.id = $1 AND d.repo_id = $2",
+        )
+        .bind(body.target_deployment_id)
+        .bind(repo_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some((target_id, environment_id, release_id, adapter_kind, dep_state, health_summary)) =
+        target
+    else {
+        return Err(AppError::NotFound);
+    };
+    if dep_state != "succeeded" {
+        return Err(AppError::Validation(
+            "rollback target must be a succeeded deployment".to_string(),
+        ));
+    }
+    let env_slug: (String,) =
+        sqlx::query_as("SELECT slug FROM environments WHERE id = $1 AND repo_id = $2")
+            .bind(environment_id)
+            .bind(repo_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let rollback_id = Uuid::new_v4();
+    let mut summary = health_summary.unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = summary.as_object_mut() {
+        obj.insert("rollback".into(), serde_json::json!(true));
+        obj.insert(
+            "restored_from".into(),
+            serde_json::json!(target_id.to_string()),
+        );
+        if let Some(reason) = body.reason.as_ref() {
+            obj.insert("reason".into(), serde_json::json!(reason));
+        }
+    }
+    sqlx::query(
+        "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, health_summary, attempt_id, rollback_of_id)
+         VALUES ($1,$2,$3,$4,$5,$6,'succeeded',$7,$8,$9)",
+    )
+    .bind(rollback_id)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(environment_id)
+    .bind(release_id)
+    .bind(&adapter_kind)
+    .bind(summary.clone())
+    .bind(attempt_id)
+    .bind(target_id)
+    .execute(&state.pool)
+    .await?;
+    let _ = crate::audit::record(
+        &state.pool,
+        Some(org_id),
+        Some(repo_id),
+        principal_id,
+        None,
+        "deployment.rollback",
+        "deployment",
+        rollback_id,
+        crate::audit::request_id_from_headers(&headers),
+        "allow",
+        serde_json::json!({
+            "target_deployment_id": target_id.to_string(),
+            "reason": body.reason,
+        }),
+    )
+    .await;
+    Ok(row_to_view(
+        rollback_id,
+        release_id,
+        &env_slug.0,
+        "succeeded".to_string(),
+        adapter_kind,
         Some(summary),
         attempt_id,
         StatusCode::CREATED,

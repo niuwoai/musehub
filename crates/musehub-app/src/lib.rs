@@ -7,6 +7,7 @@ pub mod agent_supervisor;
 pub mod pipeline_supervisor;
 pub use git_http::{bare_repo_path, init_bare_repository};
 mod artifacts;
+mod audit;
 mod auth;
 mod bootstrap;
 mod codex;
@@ -162,6 +163,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(deployment::start_deployment),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/deployments/rollback",
+            post(deployment::rollback_deployment),
+        )
+        .route(
+            "/api/v1/orgs/{org}/audit/events",
+            get(audit::list_org_audit),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/trace/deployments/{deployment_id}",
             get(trace::get_deployment_trace),
         )
@@ -227,9 +236,31 @@ struct PrincipalView {
 
 async fn login_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Response, AppError> {
-    let (_id, token) = login(&state.pool, &body.handle, &body.password).await?;
+    let (principal_id, token) = login(&state.pool, &body.handle, &body.password).await?;
+    let request_id = audit::request_id_from_headers(&headers);
+    if let Ok(Some((org_id,))) =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug_normalized = 'demo'")
+            .fetch_optional(&state.pool)
+            .await
+    {
+        let _ = audit::record(
+            &state.pool,
+            Some(org_id),
+            None,
+            principal_id,
+            None,
+            "auth.login",
+            "principal",
+            principal_id,
+            request_id,
+            "allow",
+            serde_json::json!({ "handle": body.handle }),
+        )
+        .await;
+    }
     let mut response = Json(serde_json::json!({ "ok": true })).into_response();
     response.headers_mut().append(
         header::SET_COOKIE,
