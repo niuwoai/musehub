@@ -604,21 +604,29 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         });
         tokio::time::sleep(Duration::from_millis(80)).await;
         let url = format!("http://{py_addr}/mcp");
-        let out = std::process::Command::new("python3")
-            .env("PYTHONPATH", &pydeps)
-            .arg(&script)
-            .arg("--url")
-            .arg(&url)
-            .arg("--bearer")
-            .arg(mcp_token)
-            .arg("--org-id")
-            .arg(org_uuid.0.to_string())
-            .arg("--repository-id")
-            .arg(repo_uuid.0.to_string())
-            .arg("--deployment-id")
-            .arg(deployment_id)
-            .output()
-            .expect("python oci mcp");
+        let mcp_token_own = mcp_token.to_string();
+        let deployment_id_own = deployment_id.to_string();
+        let org_s = org_uuid.0.to_string();
+        let repo_s = repo_uuid.0.to_string();
+        let out = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python3")
+                .env("PYTHONPATH", &pydeps)
+                .arg(&script)
+                .arg("--url")
+                .arg(&url)
+                .arg("--bearer")
+                .arg(&mcp_token_own)
+                .arg("--org-id")
+                .arg(org_s)
+                .arg("--repository-id")
+                .arg(repo_s)
+                .arg("--deployment-id")
+                .arg(&deployment_id_own)
+                .output()
+        })
+        .await
+        .expect("join python oci")
+        .expect("python oci mcp");
         assert!(
             out.status.success(),
             "python oci write: stderr={} stdout={}",

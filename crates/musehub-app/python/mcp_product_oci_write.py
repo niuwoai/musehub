@@ -9,6 +9,8 @@ import json
 import sys
 from typing import Any
 
+PYTHON_HTTP_CLIENT_MODE = "auto"
+
 
 async def _main() -> None:
     parser = argparse.ArgumentParser()
@@ -28,7 +30,7 @@ async def _main() -> None:
         timeout=httpx2.Timeout(30.0, read=300.0),
     ) as http_client:
         transport = streamable_http_client(args.url, http_client=http_client)
-        async with Client(transport, mode="auto") as client:
+        async with Client(transport, mode=PYTHON_HTTP_CLIENT_MODE) as client:
             trace = await client.call_tool(
                 "musehub_deployment_trace",
                 {
@@ -56,4 +58,4 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    asyncio.run(asyncio.wait_for(_main(), timeout=120))
