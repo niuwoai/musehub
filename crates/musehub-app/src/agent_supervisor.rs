@@ -68,20 +68,21 @@ pub async fn run_reference_job(
     deadline: Duration,
     budget_tokens: Option<u64>,
 ) {
-    if crate::lease::claim_agent_run_lease(&pool, run_id, instance_id)
-        .await
-        .is_err()
-    {
-        let _ = mark_failed(&pool, run_id, "lease_held_by_peer").await;
-        return;
-    }
-
-    let _ = sqlx::query(
-        "UPDATE agent_runs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(&pool)
-    .await;
+    let work_lease = match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
+        Ok(lease) => lease,
+        Err(_) => {
+            let _ = sqlx::query(
+                "UPDATE agent_runs SET state = 'failed', error_code = 'lease_held_by_peer',
+                 updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
+            )
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+            return;
+        }
+    };
+    let _renew_guard =
+        crate::lease::agent_lease_renew_guard(pool.clone(), run_id, instance_id, work_lease.epoch);
 
     let storage_key =
         match sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE id = $1")

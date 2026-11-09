@@ -4,7 +4,7 @@
 
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
-pub use git_http::bare_repo_path;
+pub use git_http::{bare_repo_path, init_bare_repository};
 mod artifacts;
 mod auth;
 mod bootstrap;
@@ -53,7 +53,7 @@ use crate::auth::{
 };
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
-use crate::git_http::{git_clone_url, git_http_backend, init_bare_repository};
+use crate::git_http::{git_clone_url, git_http_backend};
 
 /// Application state for product routes.
 #[derive(Clone)]
@@ -301,7 +301,7 @@ async fn create_repo(
     let slug = normalize_slug(&body.slug)?;
     let storage_key = Uuid::new_v4();
     let repo_id = Uuid::new_v4();
-    init_bare_repository(&state.git_root, &storage_key)?;
+    git_http::init_bare_repository(&state.git_root, &storage_key)?;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO repositories (id, org_id, slug, slug_normalized, description, storage_key, state)
@@ -507,7 +507,7 @@ async fn start_agent_run(
     sqlx::query(
         "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, lease_holder, lease_until)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9,
-           CURRENT_TIMESTAMP + INTERVAL '120 seconds')",
+           CURRENT_TIMESTAMP + ($10::text || ' seconds')::interval)",
     )
     .bind(run_id)
     .bind(org_id)
@@ -518,6 +518,7 @@ async fn start_agent_run(
     .bind(&branch)
     .bind(body.budget_tokens.map(|limit| limit as i64))
     .bind(instance_id)
+    .bind(crate::lease::LEASE_SECS)
     .execute(&state.pool)
     .await?;
     let supervisor = state.supervisor.clone();
