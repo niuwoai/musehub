@@ -220,11 +220,8 @@ pub async fn start_deployment(
     if let Some(ref oci) = oci_image_ref {
         cmd.env("MUSEHUB_OCI_IMAGE_REF", oci);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    let finished =
-        tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await;
+    let child = cmd.spawn().map_err(|e| AppError::Other(e.to_string()))?;
+    let finished = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await;
     let (ok, adapter_stdout, capability_gap) = match &finished {
         Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

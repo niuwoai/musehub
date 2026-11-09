@@ -146,7 +146,13 @@ fn main() {
         .unwrap_or_default();
 
     let mut applied_digest = Command::new("docker")
-        .args(["image", "inspect", &oci_ref, "--format", "{{index .RepoDigests 0}}"])
+        .args([
+            "image",
+            "inspect",
+            &oci_ref,
+            "--format",
+            "{{index .RepoDigests 0}}",
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -181,11 +187,7 @@ fn main() {
             .unwrap_or_default();
     }
 
-    let requested_digest = oci_ref
-        .split('@')
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let requested_digest = oci_ref.split('@').nth(1).unwrap_or("").to_string();
     if applied_digest.is_empty() {
         rollback(&compose_path, &project);
         emit(r#"{"type":"error","code":"oci_digest_unresolved"}"#);

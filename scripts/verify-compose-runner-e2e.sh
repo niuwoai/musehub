@@ -14,23 +14,27 @@ resolve_oci_image_ref() {
   local pull_out
   pull_out=$(docker pull "$tag" 2>&1)
   echo "$pull_out" >&2
-  local ref
-  ref=$(docker inspect "$tag" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
+  local ref digest repo
+  ref=$(docker image inspect "$tag" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
   ref=$(echo "$ref" | tr -d '[:space:]')
-  if [[ -z "$ref" || "$ref" != *"@sha256:"* ]]; then
-    ref=$(echo "$pull_out" | grep -oE '[[:alnum:]._-]+@sha256:[a-f0-9]{64}' | head -1 || true)
-  fi
-  if [[ -z "$ref" || "$ref" != *"@sha256:"* ]]; then
-    local digest
-    digest=$(echo "$pull_out" | sed -n 's/^Digest: //p' | head -1 | tr -d '[:space:]')
-    if [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-      echo "compose_runner_e2e=fail could not form repo digest ref from pull (digest=$digest)" >&2
+  digest=$(echo "$pull_out" | sed -n 's/^Digest: //p' | head -1 | tr -d '[:space:]')
+  if [[ -z "$ref" || "$ref" != *"/"* ]]; then
+    [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+      echo "compose_runner_e2e=fail empty RepoDigests and no Digest line for tag=$tag" >&2
       exit 1
+    }
+  if [[ "$tag" == */* ]]; then
+      repo="${tag%%@*}"
+      repo="${repo%%:*}"
+      if [[ "$repo" != *.*/* ]]; then
+        repo="docker.io/$repo"
+      fi
+    else
+      repo="docker.io/library/${tag%%:*}"
     fi
-    echo "compose_runner_e2e=fail empty RepoDigests after pull tag=$tag" >&2
-    exit 1
+    ref="${repo}@${digest}"
   fi
-  if [[ ! "$ref" =~ @sha256:[a-f0-9]{64}$ ]]; then
+  if [[ ! "$ref" =~ @sha256:[a-f0-9]{64}$ ]] || [[ "$ref" != *"/"* ]]; then
     echo "compose_runner_e2e=fail invalid oci ref: $ref" >&2
     exit 1
   fi
