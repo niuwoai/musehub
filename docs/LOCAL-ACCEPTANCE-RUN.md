@@ -9,7 +9,7 @@
 
 | 类别 | Exit | 备注 |
 |------|------|------|
-| fmt / clippy / portable | 待提交后重记 SHA | clippy `-D warnings` 已绿（含 readyz 字段 + 测试卫生修复） |
+| fmt / clippy / portable | 0 | `@e15554f`：`cargo fmt --all --check` + clippy `-D warnings` + `cargo-test-portable.sh` |
 | product acceptance | 0 | `acceptance=ok`（含 `pipeline_runner_pat_e2e` 修复后） |
 | CI security 镜像 | 0 | `ci_security_integration_local=ok`（~30 suite，单线程 DB） |
 | backup / stack / compose / OCI | 0 | 见下表 #6–#13 |
@@ -22,8 +22,8 @@
 
 | # | 命令 | Exit | 测试/备注 | SHA |
 |---|------|------|-----------|-----|
-| 1 | `cargo fmt --all --check` | 0 | 首跑 @ `6f35842`；收口轮 `cargo fmt --all` 已应用 | 见提交 |
-| 2 | `cargo clippy --workspace --all-targets -D warnings` | 0 | 收口轮 | 见提交 |
+| 1 | `cargo fmt --all --check` | 0 | 首跑 @ `6f35842`；收口 @ `e15554f` | `e15554f` |
+| 2 | `cargo clippy --workspace --all-targets -D warnings` | 0 | 收口 @ `e15554f` | `e15554f` |
 | 3 | `./scripts/cargo-test-portable.sh` | 0 | workspace 便携单测 | `6f35842` / 见提交 |
 | 4 | `./scripts/verify-product-acceptance.sh` | 0 | 首跑 pat 失败后 `1b77a60` 修复；收口轮 `acceptance=ok` | `1b77a60`+ |
 | 5 | `./scripts/run-ci-security-integration-local.sh` | 0 | 首跑 127（env 引号）；修复脚本后 `ci_security_integration_local=ok` | `1b77a60`+ |
@@ -31,7 +31,7 @@
 | 7 | `./scripts/verify-remote-runner-e2e.sh` | 0 | `remote_runner_subprocess_e2e=ok` | `1b77a60` |
 | 8 | `./scripts/verify-runner-cancel-subprocess-e2e.sh` | 0 | cancel + 无 ready artifact | `1b77a60` |
 | 9 | `./scripts/verify-runner-kill-reclaim-e2e.sh` | 0 | SIGKILL + `runner_reclaim_build_e2e` | `1b77a60` |
-| 10 | `./scripts/verify-runner-cross-container-e2e.sh` | 0 | `runner_cross_container_e2e=ok`；**非**真实双主机 | 见提交 |
+| 10 | `./scripts/verify-runner-cross-container-e2e.sh` | 0 | `runner_cross_container_e2e=ok`；**非**真实双主机 | `e15554f` |
 | 11 | `./scripts/verify-compose-runner-e2e.sh` | 0 | digest 校验 compose | `1b77a60` |
 | 12 | `./scripts/verify-pipeline-oci-product-e2e.sh` | 0 | Python full 写链 + 双 digest + HTTP/mock 回滚 | `1b77a60` |
 | 13 | `./scripts/verify-product-stack-e2e.sh` | 0 | `product_stack_e2e=ok` | `1b77a60` |
