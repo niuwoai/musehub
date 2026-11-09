@@ -18,7 +18,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use musehub_agent_adapter::{spawn_reference, AgentTask, RunOutcome, REFERENCE_ADAPTER};
