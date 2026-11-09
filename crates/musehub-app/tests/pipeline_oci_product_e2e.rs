@@ -451,10 +451,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     assert_eq!(trace["agent_run_id"].as_str().unwrap(), run_id);
     assert_eq!(trace["adapter_is_mock"].as_bool(), Some(false));
     assert_eq!(trace["deployment_adapter"], "compose-runner");
-    assert_eq!(
-        trace["verified_source_oid"].as_str(),
-        Some(merge_commit.as_str())
-    );
+    assert_eq!(trace["verified_source_oid"].as_str().unwrap(), merge_commit);
     assert!(trace["release_oci_image_ref"]
         .as_str()
         .is_some_and(|r| r.contains("@sha256:")));
