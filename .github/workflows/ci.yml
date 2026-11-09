@@ -82,6 +82,9 @@ jobs:
           cargo test -p musehub-app --test pipeline_cancel_e2e -- --test-threads=1
           cargo test -p musehub-app --test pipeline_oci_negative_e2e -- --test-threads=1
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_e2e -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_security_e2e -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_matrix -- --test-threads=1
+          cargo test -p musehub-mcp-probe --test matrix python_mcp_sdk_streamable_http python_mcp_sdk_stdio -- --test-threads=1
 
   pipeline-oci-product:
     runs-on: ubuntu-latest

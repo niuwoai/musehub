@@ -182,7 +182,6 @@ pub async fn get_deployment_trace(
             }
         }
     }
-    gaps.push("mcp_production_not_wired".to_string());
     Ok(Json(TraceView {
         deployment_id,
         release_id,

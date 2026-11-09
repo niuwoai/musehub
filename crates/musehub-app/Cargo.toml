@@ -39,3 +39,4 @@ tokio-util = { workspace = true }
 tower = { workspace = true }
 http-body-util = { workspace = true }
 musehub-migrate = { path = "../musehub-migrate" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

@@ -119,7 +119,11 @@ pub async fn plan_create(
     }))
 }
 
-pub async fn plan_accept(state: &Arc<AppState>, access: &RepoAccess, plan_id: Uuid) -> Result<Value, AppError> {
+pub async fn plan_accept(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    plan_id: Uuid,
+) -> Result<Value, AppError> {
     let row = sqlx::query_as::<_, (Uuid,)>(
         "SELECT p.issue_revision_id FROM implementation_plans p
          WHERE p.id = $1 AND p.repo_id = $2 AND p.state = 'draft'",
@@ -162,11 +166,12 @@ pub async fn agent_run_start(
     message: &str,
     budget_tokens: Option<u64>,
 ) -> Result<Value, AppError> {
-    let issue = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
-        .bind(issue_id)
-        .bind(access.repo_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let issue =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
+            .bind(issue_id)
+            .bind(access.repo_id)
+            .fetch_optional(&state.pool)
+            .await?;
     if issue.is_none() {
         return Err(AppError::NotFound);
     }

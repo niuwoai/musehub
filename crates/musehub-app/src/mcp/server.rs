@@ -50,6 +50,7 @@ impl ProductionMcpServer {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PageInput {
     #[serde(default)]
+    #[allow(dead_code)]
     cursor: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
@@ -191,7 +192,10 @@ fn app_error_to_mcp(err: AppError) -> ErrorData {
 
 fn parse_uuid(field: &str, raw: &str) -> Result<Uuid, ErrorData> {
     raw.parse::<Uuid>().map_err(|_| {
-        ErrorData::invalid_params(format!("invalid UUID for {field}"), Some(json!({ "field": field })))
+        ErrorData::invalid_params(
+            format!("invalid UUID for {field}"),
+            Some(json!({ "field": field })),
+        )
     })
 }
 
@@ -319,13 +323,12 @@ impl ProductionMcpServer {
         if member.is_none() {
             return Ok(domain_err(AppError::Forbidden));
         }
-        let org_slug: (String,) =
-            sqlx::query_as("SELECT slug FROM organizations WHERE id = $1")
-                .bind(org_id)
-                .fetch_optional(&self.state.pool)
-                .await
-                .map_err(|e| app_error_to_mcp(e.into()))?
-                .ok_or_else(|| app_error_to_mcp(AppError::NotFound))?;
+        let org_slug: (String,) = sqlx::query_as("SELECT slug FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .fetch_optional(&self.state.pool)
+            .await
+            .map_err(|e| app_error_to_mcp(e.into()))?
+            .ok_or_else(|| app_error_to_mcp(AppError::NotFound))?;
         let limit = page_limit(input.page.limit);
         let rows = sqlx::query_as::<_, (Uuid, String, String)>(
             "SELECT r.id, r.slug, r.state FROM repositories r
@@ -376,13 +379,15 @@ impl ProductionMcpServer {
         let Some((slug, description, state)) = row else {
             return Ok(domain_err(AppError::NotFound));
         };
-        let mut data =
-            repo_summary_json(&self.state.bind_display, &access.org_slug, access.repo_id, &slug, &state);
+        let mut data = repo_summary_json(
+            &self.state.bind_display,
+            &access.org_slug,
+            access.repo_id,
+            &slug,
+            &state,
+        );
         if let Some(map) = data.as_object_mut() {
-            map.insert(
-                "description".into(),
-                json!(description.unwrap_or_default()),
-            );
+            map.insert("description".into(), json!(description.unwrap_or_default()));
             map.insert("org_id".into(), json!(access.org_id.to_string()));
         }
         Ok(domain_ok(data))
@@ -507,7 +512,7 @@ impl ProductionMcpServer {
             &canonical_json,
         )
         .await
-        .map_err(|e| app_error_to_mcp(e))?;
+        .map_err(app_error_to_mcp)?;
         if let IdempotencyAction::Replay(stored) = action {
             return Ok(CallToolResult::structured(stored));
         }
@@ -700,7 +705,19 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let pr_id = parse_uuid("pr_id", &input.pr_id)?;
-        let row = sqlx::query_as::<_, (Uuid, i64, String, String, String, String, Option<String>, Option<String>)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                i64,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             "SELECT id, number, title, source_branch, target_branch, state, head_oid, base_oid
              FROM pull_requests WHERE id = $1 AND repo_id = $2",
         )
@@ -709,7 +726,8 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, number, title, source_branch, target_branch, state, head_oid, base_oid)) = row
+        let Some((id, number, title, source_branch, target_branch, state, head_oid, base_oid)) =
+            row
         else {
             return Ok(domain_err(AppError::NotFound));
         };
@@ -826,7 +844,18 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let run_id = parse_uuid("agent_run_id", &input.agent_run_id)?;
-        let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, i64, Option<String>, Uuid)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                String,
+                Option<String>,
+                i64,
+                Option<String>,
+                Uuid,
+            ),
+        >(
             "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens, error_code, issue_id
              FROM agent_runs WHERE id = $1 AND repo_id = $2",
         )
@@ -907,13 +936,9 @@ impl ProductionMcpServer {
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<Uuid>().ok());
                 let stored = envelope_value(&ToolEnvelope::success(data));
-                let _ = complete_idempotent_write(
-                    &self.state.pool,
-                    record_id,
-                    &stored,
-                    resource_id,
-                )
-                .await;
+                let _ =
+                    complete_idempotent_write(&self.state.pool, record_id, &stored, resource_id)
+                        .await;
                 Ok(CallToolResult::structured(stored))
             }
             Err(e) => {
@@ -966,7 +991,9 @@ impl ProductionMcpServer {
         match agent_run_cancel(&self.state, pat.principal_id, run_id, access.repo_id).await {
             Ok(data) => {
                 let stored = envelope_value(&ToolEnvelope::success(data));
-                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, Some(run_id)).await;
+                let _ =
+                    complete_idempotent_write(&self.state.pool, record_id, &stored, Some(run_id))
+                        .await;
                 Ok(CallToolResult::structured(stored))
             }
             Err(e) => {
@@ -1003,8 +1030,16 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, version, tag_name, commit_oid, pipeline_run_id, state, manifest_sha256, oci_image_ref)) =
-            row
+        let Some((
+            id,
+            version,
+            tag_name,
+            commit_oid,
+            pipeline_run_id,
+            state,
+            manifest_sha256,
+            oci_image_ref,
+        )) = row
         else {
             return Ok(domain_err(AppError::NotFound));
         };
@@ -1049,7 +1084,8 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, release_id, state, adapter_kind, health_summary, environment_slug)) = row else {
+        let Some((id, release_id, state, adapter_kind, health_summary, environment_slug)) = row
+        else {
             return Ok(domain_err(AppError::NotFound));
         };
         Ok(domain_ok(json!({

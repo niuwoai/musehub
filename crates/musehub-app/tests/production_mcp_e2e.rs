@@ -112,7 +112,14 @@ async fn production_mcp_pat_repository_list() {
         data.get("mcp_scope").and_then(Value::as_str),
         Some(PRODUCTION_SCOPE)
     );
-    assert_eq!(data.get("production_claim"), Some(&json!(true)));
+    assert_eq!(
+        data.get("maturity").and_then(Value::as_str),
+        Some("partial_implementation")
+    );
+    assert!(data
+        .get("implemented_tools")
+        .and_then(Value::as_array)
+        .is_some());
 
     let list = client
         .call_tool(

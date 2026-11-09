@@ -20,7 +20,7 @@
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
 | DEP-COMPOSE | `[x]` 产品路径 | `musehub-pipeline-oci` → `artifacts.oci_image_ref` 自动绑定 publish → API `compose-runner` 校验 `verified_source_oid`/`applied_oci_digest`；`verify-pipeline-oci-product-e2e.sh` 双 digest；`compose-runner-e2e` 仍为 runner 隔离探针 |
 | OPS-01 | `[x]` | backup：`main` OID + artifact SHA（`verify-backup-restore.sh`） |
-| IAM/PIPE/AGT | `[~]` | 生产 MCP：`MUSEHUB_MCP_PRODUCT=1` 时 `/mcp` PAT + `musehub_repository_list`（`production_mcp_e2e`）；Codex 在线仍无 CI 凭据证据 |
+| IAM/PIPE/AGT | `[~]` | 生产 MCP：`m1_product_mcp` 部分工具 + `mcp_idempotency_records` 写幂等（`production_mcp_*`）；V1 **PAT Bearer**（`remote_oauth_v1: false`）；Codex：`/adapters/codex/{status,task}` sim/可选 live（`online_verified` 无 CI 证据） |
 
 ## 未验证边界
 

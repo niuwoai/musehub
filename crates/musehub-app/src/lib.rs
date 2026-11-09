@@ -178,6 +178,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             get(codex::codex_status_handler),
         )
         .route(
+            "/api/v1/adapters/codex/task",
+            post(codex::codex_task_handler),
+        )
+        .route(
             "/git/{org}/{repo_git}/{*git_path}",
             axum::routing::any(git_smart_http),
         )
