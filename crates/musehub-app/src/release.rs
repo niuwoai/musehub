@@ -183,7 +183,7 @@ pub async fn publish_release(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (_, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let draft = sqlx::query_as::<_, (Uuid, String, String)>(
+    let draft = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
         "SELECT pipeline_run_id, commit_oid, manifest_sha256 FROM releases
          WHERE id = $1 AND repo_id = $2 AND state = 'draft'",
     )

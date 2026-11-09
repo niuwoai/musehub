@@ -64,7 +64,11 @@ pub async fn product_app(
         git_root: git_root.to_path_buf(),
         artifact_root: git_root.join("artifacts"),
         bind_display: "127.0.0.1".to_string(),
-        reference_adapter_bin: reference_adapter_bin(),
+        reference_adapter_bin: std::env::var("CARGO_BIN_EXE_musehub_agent_reference")
+            .map(PathBuf::from)
+            .ok()
+            .filter(|p| p.is_file())
+            .unwrap_or_else(reference_adapter_bin),
         pipeline_adapter_bin: std::env::var("MUSEHUB_PIPELINE_ADAPTER_BIN")
             .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-pipeline-oci"))
             .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference"))
@@ -79,7 +83,8 @@ pub async fn product_app(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../../target/debug/musehub-compose-mock")
             }),
-        compose_runner_bin: std::env::var("CARGO_BIN_EXE_musehub-compose-runner")
+        compose_runner_bin: std::env::var("CARGO_BIN_EXE_musehub_compose_runner")
+            .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-runner"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -65,9 +65,10 @@ echo "digest1=$REF1"
 echo "digest2=$REF2 oid1=$OID1 oid2=$OID2"
 
 export MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-oci"
-export CARGO_BIN_EXE_musehub-agent-reference="$PWD/target/debug/musehub-agent-reference"
-export CARGO_BIN_EXE_musehub-compose-runner="$PWD/target/debug/musehub-compose-runner"
-export CARGO_BIN_EXE_musehub-compose-mock="$PWD/target/debug/musehub-compose-mock"
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
-cargo test -p musehub-app --test pipeline_oci_product_e2e -- --test-threads=1
+env \
+  CARGO_BIN_EXE_musehub_agent_reference="$PWD/target/debug/musehub-agent-reference" \
+  CARGO_BIN_EXE_musehub_compose_runner="$PWD/target/debug/musehub-compose-runner" \
+  CARGO_BIN_EXE_musehub_compose_mock="$PWD/target/debug/musehub-compose-mock" \
+  cargo test -p musehub-app --test pipeline_oci_product_e2e -- --test-threads=1
 echo "pipeline_oci_product=ok"
