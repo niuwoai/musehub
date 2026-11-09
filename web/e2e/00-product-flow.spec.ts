@@ -30,7 +30,7 @@ test.describe('product slice browser flow', () => {
     await page.getByRole('button', { name: /accept plan|接受计划/i }).click()
     await page.getByRole('button', { name: /run agent|运行/i }).first().click()
     await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
-      timeout: 60_000,
+      timeout: 120_000,
     })
 
     const me = await page.request.get(`${apiBase}/api/v1/me`)

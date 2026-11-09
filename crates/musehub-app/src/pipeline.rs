@@ -249,11 +249,13 @@ async fn spawn_pipeline_run(
     let run_id = Uuid::new_v4();
     let attempt_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
+    let instance_id = state.instance_id;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
-         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind)
-         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11)",
+         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind, lease_holder, lease_until)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11,$12,
+           CURRENT_TIMESTAMP + INTERVAL '120 seconds')",
     )
     .bind(run_id)
     .bind(org_id)
@@ -266,6 +268,7 @@ async fn spawn_pipeline_run(
     .bind(issue_id)
     .bind(agent_run_id)
     .bind(run_kind)
+    .bind(instance_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
