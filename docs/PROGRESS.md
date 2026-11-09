@@ -27,6 +27,7 @@
 | PIPE-01 | `[~]` | 参考 pipeline/制品/Release/**compose-mock** 部署/trace；`pipeline_delivery_e2e` + `pipeline_security_e2e`（PAT 签发委托 runner、合并提交门禁、发布拒绝失败流水线）；仍 **mock 部署非 OCI**；trace 显式 `gaps`（隔离 Compose/OCI/备份/MCP） |
 | OPS-01 | `[~]` | `scripts/backup-musehub-state.sh` / `restore-musehub-state.sh` / `verify-backup-restore.sh`（pg_dump + tar）；**非** continuous backup / PITR |
 | DEP-01 | `[x]` | 部署 `attempt_id` 幂等重放（`deployment_idempotency_e2e`）；仍单环境 **compose-mock** |
+| REC-01 | `[x]` | 启动 `prepare` 调用 `reconcile_orphaned_work`（queued/running→failed；cancel_requested→canceled，`orphaned_after_restart`）；`startup_reconcile_e2e` |
 | AGT-02 | `[~]` | `budget_tokens` 接线 + `agent_budget`；取消竞态写前检查 |
 | IAM-02 | `[~]` | PAT revoke/scope/org + `pat_scope` |
 | CI/REL/DEP/MCP-01/UI-01 | `[ ]` | 流水线/制品/Compose/追溯、业务 MCP、PR Web |

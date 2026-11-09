@@ -18,7 +18,9 @@ pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
+mod recovery;
 pub use pipeline::seed_repo_environment;
+pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod pr;
 mod release;
 mod security;
@@ -178,6 +180,7 @@ pub async fn prepare(
     fs::create_dir_all(&git_root)
         .await
         .map_err(|error| AppError::Other(error.to_string()))?;
+    reconcile_orphaned_work(&pool).await?;
     Ok(())
 }
 
