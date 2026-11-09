@@ -111,8 +111,12 @@ pub async fn claim_pipeline_run(
     let org_id = pat.org_id.unwrap();
     let candidate = sqlx::query_as::<_, (Uuid,)>(
         "SELECT pr.id FROM pipeline_runs pr
-         WHERE pr.org_id = $1 AND pr.state = 'queued'
-           AND (pr.lease_holder IS NULL OR pr.lease_until < CURRENT_TIMESTAMP)
+         WHERE pr.org_id = $1 AND (
+           (pr.state = 'queued'
+             AND (pr.lease_holder IS NULL OR pr.lease_until < CURRENT_TIMESTAMP))
+           OR (pr.state IN ('running','cancel_requested')
+             AND pr.lease_until < CURRENT_TIMESTAMP)
+         )
          ORDER BY pr.created_at
          LIMIT 1",
     )
@@ -173,7 +177,23 @@ pub async fn renew_pipeline_lease(
     Path(run_id): Path<Uuid>,
     Json(body): Json<RenewBody>,
 ) -> Result<StatusCode, AppError> {
-    let _pat = require_runner_pat(&state, &headers).await?;
+    let pat = require_runner_pat(&state, &headers).await?;
+    let row = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT repo_id FROM pipeline_runs WHERE id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((repo_id,)) = row {
+        let org_id = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT org_id FROM pipeline_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?
+        .0;
+        grants::ensure_pat_repo_access(&state.pool, &pat, org_id, repo_id).await?;
+    }
     let instance_id = runner_instance_id(&headers)?;
     lease::renew_pipeline_work_lease(&state.pool, run_id, instance_id, body.lease_epoch).await?;
     Ok(StatusCode::NO_CONTENT)

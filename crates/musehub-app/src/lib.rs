@@ -28,7 +28,9 @@ mod pat_policy;
 mod pipeline;
 mod recovery;
 pub use artifacts::sha256_file as artifact_sha256_file;
-pub use pipeline::{execute_pipeline_job, seed_repo_environment};
+pub use pipeline::{
+    execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
+};
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod pr;
 mod release;

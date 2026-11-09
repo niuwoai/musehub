@@ -464,20 +464,20 @@ pub async fn execute_pipeline_job(
     .await;
 
     if cancel_flag(&pool, run_id).await {
-        mark_canceled(&pool, run_id, job_id).await;
+        let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
         return;
     }
 
     let artifact_id = Uuid::new_v4();
     let dir = artifact_storage_dir(&artifact_root, org_id, repo_id, artifact_id);
     if std::fs::create_dir_all(&dir).is_err() {
-        mark_failed(&pool, run_id, job_id, "artifact_dir_failed").await;
+        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_dir_failed").await;
         return;
     }
     let file_path = match safe_join(&dir, ARTIFACT_NAME) {
         Ok(path) => path,
         Err(_) => {
-            mark_failed(&pool, run_id, job_id, "artifact_path_failed").await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_path_failed").await;
             return;
         }
     };
@@ -514,7 +514,7 @@ pub async fn execute_pipeline_job(
         Ok(child) => child,
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            mark_failed(&pool, run_id, job_id, "adapter_spawn_failed").await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "adapter_spawn_failed").await;
             return;
         }
     };
@@ -529,7 +529,7 @@ pub async fn execute_pipeline_job(
         _ => {
             let _ = supervisor.cancel(run_id).await;
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            mark_failed(&pool, run_id, job_id, "pipeline_timeout").await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_timeout").await;
             supervisor.finish(run_id).await;
             return;
         }
@@ -537,13 +537,13 @@ pub async fn execute_pipeline_job(
     if cancel_flag(&pool, run_id).await {
         let _ = supervisor.cancel(run_id).await;
         let _ = quarantine_artifact(&pool, artifact_id).await;
-        mark_canceled(&pool, run_id, job_id).await;
+        let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
         supervisor.finish(run_id).await;
         return;
     }
     if !output.status.success() {
         let _ = quarantine_artifact(&pool, artifact_id).await;
-        mark_failed(&pool, run_id, job_id, "pipeline_adapter_failed").await;
+        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_adapter_failed").await;
         return;
     }
     let oci_from_adapter = parse_pipeline_stdout(&output.stdout);
@@ -554,14 +554,14 @@ pub async fn execute_pipeline_job(
                 .is_err()
             {
                 let _ = std::fs::remove_file(&file_path);
-                mark_failed(&pool, run_id, job_id, "artifact_db_finalize_failed").await;
+                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_db_finalize_failed").await;
                 return;
             }
         }
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
             let _ = std::fs::remove_file(&file_path);
-            mark_failed(&pool, run_id, job_id, "artifact_verify_failed").await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_verify_failed").await;
             return;
         }
     }
@@ -569,14 +569,14 @@ pub async fn execute_pipeline_job(
         && run_kind == KIND_RELEASE
         && oci_from_adapter.is_none()
     {
-        mark_failed(&pool, run_id, job_id, "pipeline_oci_missing").await;
+        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_oci_missing").await;
         return;
     }
     if let Some(oci_ref) = oci_from_adapter {
         let oci_path = match safe_join(&dir, artifacts::ARTIFACT_OCI_REF_NAME) {
             Ok(p) => p,
             Err(_) => {
-                mark_failed(&pool, run_id, job_id, "oci_artifact_path_failed").await;
+                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "oci_artifact_path_failed").await;
                 return;
             }
         };
@@ -584,14 +584,14 @@ pub async fn execute_pipeline_job(
             let _ = std::fs::write(&oci_path, &oci_ref);
         }
         if crate::security::validate_oci_image_ref(&oci_ref).is_err() {
-            mark_failed(&pool, run_id, job_id, "pipeline_oci_invalid").await;
+            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_oci_invalid").await;
             return;
         }
         let oci_id = Uuid::new_v4();
         let (sha, len) = match artifacts::sha256_file(&oci_path) {
             Ok(v) => v,
             Err(_) => {
-                mark_failed(&pool, run_id, job_id, "oci_artifact_verify_failed").await;
+                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "oci_artifact_verify_failed").await;
                 return;
             }
         };
@@ -612,18 +612,24 @@ pub async fn execute_pipeline_job(
         .execute(&pool)
         .await;
     }
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    let job_ok =
+        crate::lease::finalize_pipeline_job_state(&pool, job_id, run_id, instance_id, work_lease.epoch, "succeeded")
+            .await
+            .unwrap_or(false);
+    let run_ok = crate::lease::finalize_pipeline_run_state(
+        &pool,
+        run_id,
+        instance_id,
+        work_lease.epoch,
+        "succeeded",
+        None,
     )
-    .bind(job_id)
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(&pool)
-    .await;
+    .await
+    .unwrap_or(false);
+    if !job_ok || !run_ok {
+        let _ = quarantine_artifact(&pool, artifact_id).await;
+        let _ = std::fs::remove_file(&file_path);
+    }
     supervisor.finish(run_id).await;
 }
 
@@ -637,20 +643,44 @@ async fn cancel_flag(pool: &PgPool, run_id: Uuid) -> bool {
     )
 }
 
-async fn mark_failed(pool: &PgPool, run_id: Uuid, job_id: Uuid, code: &str) {
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+async fn mark_failed(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    code: &str,
+) -> bool {
+    let _ = crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "failed")
+        .await;
+    crate::lease::finalize_pipeline_run_state(pool, run_id, instance_id, epoch, "failed", Some(code))
+        .await
+        .unwrap_or(false)
+}
+
+async fn mark_succeeded_stale_blocked(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    let run_ok = crate::lease::finalize_pipeline_run_state(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+        "succeeded",
+        None,
     )
-    .bind(job_id)
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'failed', error_code = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .bind(code)
-    .execute(pool)
-    .await;
+    .await
+    .unwrap_or(false);
+    if !run_ok {
+        return false;
+    }
+    crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "succeeded")
+        .await
+        .unwrap_or(false)
 }
 
 fn parse_pipeline_stdout(stdout: &[u8]) -> Option<String> {
@@ -671,17 +701,26 @@ fn parse_pipeline_stdout(stdout: &[u8]) -> Option<String> {
     None
 }
 
-async fn mark_canceled(pool: &PgPool, run_id: Uuid, job_id: Uuid) {
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'canceled', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(job_id)
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'canceled', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await;
+async fn mark_canceled(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    let _ = crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "canceled")
+        .await;
+    crate::lease::finalize_pipeline_run_state(pool, run_id, instance_id, epoch, "canceled", None)
+        .await
+        .unwrap_or(false)
+}
+
+pub async fn try_publish_stale_pipeline_success_for_test(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    mark_succeeded_stale_blocked(pool, run_id, job_id, instance_id, epoch).await
 }

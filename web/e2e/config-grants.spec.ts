@@ -6,6 +6,28 @@ const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 test.describe('org config and grants UI', () => {
   test.skip(!password, 'requires bootstrap password and API on :8080')
 
+  test('non-admin cannot patch org settings via API', async ({ request }) => {
+    const handle = `cfg-member-${Date.now()}`
+    const memberPass = 'Config-Member-E2E-Strong-1!'
+    const adminLogin = await request.post(`${apiBase}/api/v1/auth/login`, {
+      data: { handle: 'admin', password: password! },
+    })
+    expect(adminLogin.ok(), `admin login: ${adminLogin.status()}`).toBeTruthy()
+    const invite = await request.post(`${apiBase}/api/v1/orgs/demo/members`, {
+      data: { handle, password: memberPass, role: 'member' },
+    })
+    expect(invite.ok()).toBeTruthy()
+  await request.post(`${apiBase}/api/v1/auth/logout`)
+    const memberLogin = await request.post(`${apiBase}/api/v1/auth/login`, {
+      data: { handle, password: memberPass },
+    })
+    expect(memberLogin.ok()).toBeTruthy()
+    const patch = await request.patch(`${apiBase}/api/v1/orgs/demo/settings`, {
+      data: { display_name: 'hijacked' },
+    })
+    expect(patch.status()).toBe(403)
+  })
+
   test('persist org display name without echoing secrets', async ({ page }) => {
     await page.goto('/')
     await page.getByLabel(/password|密码/i).fill(password!)

@@ -27,6 +27,8 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 
 诚实边界：runner 与 API 可分机部署，但 V1 仍共享 DB 与（通常）共享 `MUSEHUB_GIT_ROOT`/`MUSEHUB_ARTIFACT_ROOT` 挂载；非完全零信任 multi-tenant worker。
 
+恢复/重试语义见 [RUNNER-RECOVERY.md](RUNNER-RECOVERY.md)（租约 TTL 重认领、epoch 围栏、reconcile 与重试边界）。
+
 ## MCP / 写路径诚实性
 
 - **Rust rmcp** 在 `pipeline-oci-product` job 内验收 `pipeline_run` / `deployment_start` 写路径。

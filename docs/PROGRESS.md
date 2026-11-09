@@ -32,7 +32,7 @@
 | 干净机器一键安装/启动 | `[~]` | `deploy/docker-compose.yml` + `deploy/RUNBOOK.md` + CI `product-stack`；无 systemd |
 | 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例；CI 经 HTTP 网关验路径 |
 | DB 迁移升级 Runbook | `[~]` | 入口 migrate + RUNBOOK；CI 证明 idempotent migrate + 镜像 recreate 保数据 |
-| 最小 RBAC / PAT scope / 审计 | `[~]` | `repository_grants` + `token_repository_grants` + REST/MCP/Git 强制；`scope_mode=selected` 需 `repo_ids`；Web 仓库 grants 读写（密钥不回显） |
+| 最小 RBAC / PAT scope / 审计 | `[~]` | `selected` PAT **不**因 owner/admin 绕过选仓；`production_mcp_selected_repo_e2e`；grant 审计 + 禁自授 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[~]` | `musehub-runnerd` + `runner_daemon_acceptance_e2e` + `verify-remote-runner-e2e.sh`（**共享 DB + git/artifact 卷**）；非零依赖多租户 production-ready |
 | 部署回滚操作 | `[~]` | REST + **`musehub_deployment_rollback` MCP** 经 compose 真实 runner（`deployment_rollback_runner_e2e` 在 VM 已跑通）；远端 Docker CI 未统一验收 |

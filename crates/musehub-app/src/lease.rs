@@ -48,6 +48,17 @@ pub async fn try_begin_pipeline_work(
     run_id: Uuid,
     instance_id: Uuid,
 ) -> Result<WorkLease, AppError> {
+    if let Some(lease) = try_claim_queued_pipeline(pool, run_id, instance_id).await? {
+        return Ok(lease);
+    }
+    try_reclaim_expired_pipeline(pool, run_id, instance_id).await
+}
+
+async fn try_claim_queued_pipeline(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Result<Option<WorkLease>, AppError> {
     let row = sqlx::query_as::<_, (i64,)>(
         "UPDATE pipeline_runs SET
            state = 'running',
@@ -64,9 +75,95 @@ pub async fn try_begin_pipeline_work(
     .bind(LEASE_SECS)
     .fetch_optional(pool)
     .await?;
+    Ok(row.map(|(epoch,)| WorkLease { epoch }))
+}
+
+/// After worker loss or lease TTL, a new instance may reclaim the same run id (epoch bumps).
+pub async fn try_reclaim_expired_pipeline(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Result<WorkLease, AppError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE pipeline_runs SET
+           state = 'running',
+           lease_holder = $2,
+           lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval,
+           lease_epoch = pipeline_runs.lease_epoch + 1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND state IN ('running', 'cancel_requested')
+           AND lease_until < CURRENT_TIMESTAMP
+         RETURNING lease_epoch",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(LEASE_SECS)
+    .fetch_optional(pool)
+    .await?;
     row.map(|(epoch,)| WorkLease { epoch }).ok_or_else(|| {
         AppError::Conflict("pipeline run already claimed or lease held by peer".to_string())
     })
+}
+
+pub async fn finalize_pipeline_run_state(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    state: &str,
+    error_code: Option<&str>,
+) -> Result<bool, AppError> {
+    let updated = sqlx::query(
+        "UPDATE pipeline_runs SET state = $4, error_code = COALESCE($5, error_code),
+         updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
+           AND state IN ('running', 'cancel_requested')",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(state)
+    .bind(error_code)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() == 1)
+}
+
+pub async fn finalize_pipeline_job_state(
+    pool: &PgPool,
+    job_id: Uuid,
+    run_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    state: &str,
+) -> Result<bool, AppError> {
+    let updated = sqlx::query(
+        "UPDATE pipeline_jobs SET state = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+           AND EXISTS (
+             SELECT 1 FROM pipeline_runs
+             WHERE id = $2 AND lease_holder = $3 AND lease_epoch = $5
+           )",
+    )
+    .bind(job_id)
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(state)
+    .bind(epoch)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() == 1)
+}
+
+pub async fn bump_pipeline_run_epoch_for_test(pool: &PgPool, run_id: Uuid) -> Result<i64, AppError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE pipeline_runs SET lease_epoch = lease_epoch + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 RETURNING lease_epoch",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
 }
 
 pub async fn renew_agent_work_lease(

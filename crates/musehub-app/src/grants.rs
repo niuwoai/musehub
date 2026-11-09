@@ -84,6 +84,7 @@ pub async fn ensure_pat_repo_access(
         if row.0 == 0 {
             return Err(AppError::Forbidden);
         }
+        return Ok(());
     }
     ensure_principal_repo_access(pool, org_id, repo_id, pat.principal_id).await?;
     Ok(())
