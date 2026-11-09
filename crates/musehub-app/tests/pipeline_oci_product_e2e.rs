@@ -620,5 +620,4 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     } else {
         eprintln!("skip python oci mcp: SDK or script missing");
     }
-    mcp_client.cancel().await.ok();
 }
