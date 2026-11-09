@@ -3,6 +3,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod agent_supervisor;
+pub mod pipeline_supervisor;
 pub use git_http::bare_repo_path;
 mod artifacts;
 mod auth;
@@ -39,6 +40,7 @@ use tokio::fs;
 use uuid::Uuid;
 
 use crate::agent_supervisor::AgentSupervisor;
+use crate::pipeline_supervisor::PipelineSupervisor;
 
 use crate::auth::{
     clear_session_cookie, cookie_name, login, logout, principal_from_session, session_cookie,
@@ -59,6 +61,7 @@ pub struct AppState {
     pub pipeline_adapter_bin: PathBuf,
     pub compose_adapter_bin: PathBuf,
     pub supervisor: Arc<AgentSupervisor>,
+    pub pipeline_supervisor: Arc<PipelineSupervisor>,
 }
 
 pub fn product_router(state: Arc<AppState>) -> Router {
@@ -110,6 +113,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/checks/{check_name}",
             patch(pr::set_pull_request_check),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/validation-runs",
+            post(pipeline::start_pr_validation_run),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs",

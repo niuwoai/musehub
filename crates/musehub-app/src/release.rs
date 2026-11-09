@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::artifacts;
 use crate::error::AppError;
 use crate::security::validate_git_oid;
 
@@ -73,6 +74,17 @@ pub async fn create_release(
     if artifact_count.0 == 0 {
         return Err(AppError::Validation(
             "release requires verified ready artifacts".to_string(),
+        ));
+    }
+    artifacts::verify_ready_artifacts_for_pipeline(&state.pool, body.pipeline_run_id).await?;
+    let release_kind: (String,) =
+        sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
+            .bind(body.pipeline_run_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if release_kind.0 != "release_build" {
+        return Err(AppError::Validation(
+            "release requires a release_build pipeline run".to_string(),
         ));
     }
     if matches!(

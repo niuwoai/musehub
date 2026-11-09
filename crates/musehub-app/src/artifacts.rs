@@ -64,6 +64,37 @@ pub async fn finalize_artifact(
     Ok(())
 }
 
+/// Re-reads on-disk bytes and rejects tampered or quarantined artifacts.
+pub async fn verify_ready_artifacts_for_pipeline(
+    pool: &PgPool,
+    pipeline_run_id: Uuid,
+) -> Result<(), AppError> {
+    let rows = sqlx::query_as::<_, (String, String, i64, String)>(
+        "SELECT name, sha256, byte_length, storage_path FROM artifacts
+         WHERE pipeline_run_id = $1 AND state = 'ready'",
+    )
+    .bind(pipeline_run_id)
+    .fetch_all(pool)
+    .await?;
+    for (name, expected_sha, expected_len, storage_path) in rows {
+        let path = safe_join(std::path::Path::new(&storage_path), &name)?;
+        let (sha, len) = sha256_file(&path)?;
+        if sha != expected_sha || len as i64 != expected_len {
+            sqlx::query(
+                "UPDATE artifacts SET state = 'quarantined', updated_at = CURRENT_TIMESTAMP WHERE pipeline_run_id = $1 AND name = $2",
+            )
+            .bind(pipeline_run_id)
+            .bind(&name)
+            .execute(pool)
+            .await?;
+            return Err(AppError::Validation(format!(
+                "artifact digest mismatch for {name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn quarantine_artifact(pool: &PgPool, artifact_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE artifacts SET state = 'quarantined', updated_at = CURRENT_TIMESTAMP WHERE id = $1",

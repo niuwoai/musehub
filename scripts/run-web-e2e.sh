@@ -13,13 +13,21 @@ mkdir -p "$MUSEHUB_GIT_ROOT"
 
 cargo run -p musehub-migrate -- down migrations "$DATABASE_URL" || true
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
 cargo build -p musehub-server -q
+
+export MUSEHUB_ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-/tmp/musehub-e2e-artifacts}"
+mkdir -p "$MUSEHUB_ARTIFACT_ROOT"
+# musehub-server falls back to target/debug/* when run from repo root (no hyphenated env exports).
 
 SESSION_NAME="musehub-e2e-server"
 tmux -f /exec-daemon/tmux.portal.conf kill-session -t "=$SESSION_NAME" 2>/dev/null || true
 tmux -f /exec-daemon/tmux.portal.conf new-session -d -s "$SESSION_NAME" -c "$PWD" -- \
   env DATABASE_URL="$DATABASE_URL" \
   MUSEHUB_GIT_ROOT="$MUSEHUB_GIT_ROOT" \
+  MUSEHUB_ARTIFACT_ROOT="$MUSEHUB_ARTIFACT_ROOT" \
   MUSEHUB_SESSION_SECRET="$MUSEHUB_SESSION_SECRET" \
   MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD" \
   RUST_LOG=info \

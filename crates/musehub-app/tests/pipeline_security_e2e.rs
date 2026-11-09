@@ -250,20 +250,18 @@ async fn release_blocked_when_pipeline_failed() {
     .await
     .unwrap()
     .0;
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM organizations WHERE slug_normalized = 'demo'",
-    )
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
-    let admin_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM principals WHERE handle_normalized = 'admin'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug_normalized = 'demo'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
+    let admin_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM principals WHERE handle_normalized = 'admin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     let run_id = Uuid::new_v4();
     let attempt = Uuid::new_v4();
     let oid = "a".repeat(40);

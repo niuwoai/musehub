@@ -72,6 +72,7 @@ async fn login_create_repo_issue_reference_agent() {
                     .join("../../target/debug/musehub-compose-mock")
             }),
         supervisor: new_supervisor(),
+        pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
     });
     let app = product_router(state);
 

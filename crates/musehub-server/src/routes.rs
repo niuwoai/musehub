@@ -175,5 +175,6 @@ pub async fn build_product_state(
         pipeline_adapter_bin,
         compose_adapter_bin,
         supervisor: Arc::new(musehub_app::agent_supervisor::AgentSupervisor::default()),
+        pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
     }))
 }

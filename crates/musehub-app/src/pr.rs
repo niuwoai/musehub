@@ -533,17 +533,23 @@ pub async fn runner_report_check(
     let Some((repo_id, storage_key)) = row else {
         return Err(AppError::NotFound);
     };
-    let pipe = sqlx::query_as::<_, (String, Uuid, String, Uuid)>(
-        "SELECT state, run_attempt_id, source_oid, org_id FROM pipeline_runs
+    let pipe = sqlx::query_as::<_, (String, Uuid, String, Uuid, String)>(
+        "SELECT state, run_attempt_id, source_oid, org_id, run_kind FROM pipeline_runs
          WHERE id = $1 AND repo_id = $2",
     )
     .bind(body.pipeline_run_id)
     .bind(repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pipe_state, run_attempt, pipe_source, pipe_org)) = pipe else {
+    let Some((pipe_state, run_attempt, pipe_source, pipe_org, run_kind)) = pipe else {
         return Err(AppError::NotFound);
     };
+    if run_kind != "pr_validation" {
+        return Err(AppError::Validation(
+            "check reports must reference a pr_validation pipeline run (not release_build)"
+                .to_string(),
+        ));
+    }
     if pipe_org != org_id {
         return Err(AppError::Forbidden);
     }

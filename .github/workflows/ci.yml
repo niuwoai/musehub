@@ -73,6 +73,8 @@ jobs:
           cargo test -p musehub-app --test pat_scope -- --test-threads=1
           cargo test -p musehub-app --test pipeline_delivery_e2e -- --test-threads=1
           cargo test -p musehub-app --test pipeline_security_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_runner_pat_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_cancel_e2e -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
@@ -105,6 +107,12 @@ jobs:
       - run: yarn --cwd web install --frozen-lockfile
       - name: install Playwright Chromium (with OS deps)
         run: yarn --cwd web exec playwright install --with-deps chromium
+      - name: build adapter binaries for server E2E
+        run: |
+          cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
+          cargo build -p musehub-server -q
       - run: yarn --cwd web test
       - run: yarn --cwd web build
       - name: web browser E2E (Playwright)

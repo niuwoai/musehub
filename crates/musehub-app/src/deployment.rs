@@ -69,6 +69,11 @@ pub async fn start_deployment(
             "deployment requires published release".to_string(),
         ));
     }
+    let pipeline_id: (Uuid,) = sqlx::query_as("SELECT pipeline_run_id FROM releases WHERE id = $1")
+        .bind(body.release_id)
+        .fetch_one(&state.pool)
+        .await?;
+    crate::artifacts::verify_ready_artifacts_for_pipeline(&state.pool, pipeline_id.0).await?;
     let health_target = body
         .health_target
         .clone()
