@@ -46,6 +46,33 @@ pub struct ReviewPullRequestRequest {
 #[derive(Deserialize)]
 pub struct SetCheckRequest {
     pub state: String,
+    /// Unique attempt id from the CI system reporting this result (required for success/failure).
+    pub attempt_id: Option<Uuid>,
+}
+
+async fn require_check_reporter(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    principal_id: Uuid,
+    author_id: Uuid,
+) -> Result<(), AppError> {
+    if principal_id == author_id {
+        return Err(AppError::Forbidden);
+    }
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+    )
+    .bind(org_id)
+    .bind(principal_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((role,)) = row else {
+        return Err(AppError::Forbidden);
+    };
+    if role == "owner" || role == "admin" {
+        return Ok(());
+    }
+    Err(AppError::Forbidden)
 }
 
 pub async fn seed_repo_required_checks(pool: &sqlx::PgPool, repo_id: Uuid) -> Result<(), AppError> {
@@ -384,35 +411,55 @@ pub async fn set_pull_request_check(
     Json(body): Json<SetCheckRequest>,
 ) -> Result<StatusCode, AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
-    let (_, repo_id, storage_key) =
-        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let org_id = super::org_id_for_member(&state.pool, &org, principal_id).await?;
+    let row = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT r.id, r.storage_key FROM repositories r
+         WHERE r.org_id = $1 AND r.slug_normalized = $2",
+    )
+    .bind(org_id)
+    .bind(repo.to_lowercase())
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((repo_id, storage_key)) = row else {
+        return Err(AppError::NotFound);
+    };
     let state_name = body.state.to_lowercase();
     if !matches!(state_name.as_str(), "pending" | "success" | "failure") {
         return Err(AppError::Validation("invalid check state".to_string()));
     }
-    let pr = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, source_branch, state FROM pull_requests WHERE repo_id = $1 AND number = $2",
+    if matches!(state_name.as_str(), "success" | "failure") && body.attempt_id.is_none() {
+        return Err(AppError::Validation(
+            "attempt_id required for success or failure".to_string(),
+        ));
+    }
+    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        "SELECT id, author_id, source_branch, state FROM pull_requests WHERE repo_id = $1 AND number = $2",
     )
     .bind(repo_id)
     .bind(number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, source_branch, pr_state)) = pr else {
+    let Some((pr_id, author_id, source_branch, pr_state)) = pr else {
         return Err(AppError::NotFound);
     };
     if pr_state != "open" {
         return Err(AppError::Validation("pull request is not open".to_string()));
     }
+    require_check_reporter(&state.pool, org_id, principal_id, author_id).await?;
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let head_oid = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
+    let attempt_id = body.attempt_id.unwrap_or_else(Uuid::new_v4);
     let updated = sqlx::query(
-        "UPDATE pr_check_runs SET state = $4, updated_at = CURRENT_TIMESTAMP
+        "UPDATE pr_check_runs SET state = $4, reported_by = $5, attempt_id = $6,
+         expires_at = CURRENT_TIMESTAMP + INTERVAL '7 days', updated_at = CURRENT_TIMESTAMP
          WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3",
     )
     .bind(pr_id)
     .bind(&check_name)
     .bind(&head_oid)
     .bind(&state_name)
+    .bind(principal_id)
+    .bind(attempt_id)
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
@@ -457,7 +504,9 @@ async fn merge_preconditions(
             "SELECT COUNT(*) FROM repo_required_checks r
              JOIN pull_requests p ON p.id = $1
              JOIN pr_check_runs c ON c.pr_id = p.id AND c.check_name = r.check_name
-             WHERE c.head_oid = $2 AND c.state = 'success'",
+             WHERE c.head_oid = $2 AND c.state = 'success'
+               AND c.reported_by IS NOT NULL AND c.reported_by <> p.author_id
+               AND (c.expires_at IS NULL OR c.expires_at > CURRENT_TIMESTAMP)",
         )
         .bind(pr_id)
         .bind(head_oid)
@@ -619,32 +668,70 @@ fn merge_with_cas(
             "target CAS precheck failed (expected {expected_target_oid}, found {now})"
         )));
     }
-    let hook = bare.join("hooks/pre-receive");
-    let hook_backup = bare.join("hooks/pre-receive.musehub-merge-bak");
-    let hook_waived = if hook.is_file() {
-        std::fs::rename(&hook, &hook_backup).is_ok()
-    } else {
-        false
-    };
-    let push = Command::new("git")
+    let head_out = Command::new("git")
         .current_dir(work)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| AppError::Other(error.to_string()))?;
+    if !head_out.status.success() {
+        return Err(AppError::Other(
+            "rev-parse HEAD after merge failed".to_string(),
+        ));
+    }
+    let merged_oid = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+    if !bare.join("hooks/pre-receive").is_file() {
+        return Err(AppError::Other(
+            "pre-receive hook missing on bare repository".to_string(),
+        ));
+    }
+    let staging_ref = format!("refs/musehub/merge-staging/{}", Uuid::new_v4().simple());
+    let fetch = Command::new("git")
         .args([
-            "push",
+            "--git-dir",
             bare.to_str().expect("bare"),
-            &format!("HEAD:refs/heads/{target_branch}"),
+            "fetch",
+            "-q",
+            work.to_str().expect("work"),
+            &format!("+HEAD:{staging_ref}"),
         ])
         .output()
         .map_err(|error| AppError::Other(error.to_string()))?;
-    if hook_waived {
-        let _ = std::fs::rename(&hook_backup, &hook);
+    if !fetch.status.success() {
+        return Err(AppError::Other(format!(
+            "merge object fetch failed: {}",
+            String::from_utf8_lossy(&fetch.stderr)
+        )));
     }
-    if !push.status.success() {
+    let cas = Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str().expect("bare"),
+            "update-ref",
+            &format!("refs/heads/{target_branch}"),
+            &merged_oid,
+            expected_target_oid,
+        ])
+        .output()
+        .map_err(|error| AppError::Other(error.to_string()))?;
+    let _ = Command::new("git").args([
+        "--git-dir",
+        bare.to_str().expect("bare"),
+        "update-ref",
+        "-d",
+        &staging_ref,
+    ]);
+    if !cas.status.success() {
         return Err(AppError::Validation(format!(
-            "merge push rejected: {}",
-            String::from_utf8_lossy(&push.stderr)
+            "merge CAS update-ref failed: {}",
+            String::from_utf8_lossy(&cas.stderr)
         )));
     }
     let new_tip = git_rev_parse(bare, &format!("refs/heads/{target_branch}"))?;
+    if new_tip != merged_oid {
+        return Err(AppError::Validation(
+            "merge CAS result mismatch after update-ref".to_string(),
+        ));
+    }
     let parent_output = Command::new("git")
         .args([
             "--git-dir",

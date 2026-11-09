@@ -6,6 +6,9 @@ use std::process::Command;
 use crate::error::AppError;
 
 /// Installs a `pre-receive` hook denying direct pushes to the default branch.
+///
+/// Git runs `pre-receive` only for `git-receive-pack` (client `git push` over smart HTTP/SSH).
+/// Server-side `git update-ref` and `git fetch` into the bare repo do not invoke this hook.
 pub fn install_pre_receive_hook(bare: &Path, default_branch: &str) -> Result<(), AppError> {
     let hooks = bare.join("hooks");
     fs::create_dir_all(&hooks).map_err(|e| AppError::Other(e.to_string()))?;

@@ -127,7 +127,7 @@ async fn budget_limit_fails_without_commit_on_branch() {
 }
 
 #[tokio::test]
-async fn unknown_budget_does_not_block_success() {
+async fn unknown_budget_with_limit_fails_instead_of_unbounded_success() {
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().expect("git");
     let bootstrap = common::bootstrap_password();
@@ -228,12 +228,11 @@ async fn unknown_budget_does_not_block_success() {
             .unwrap();
         let run: serde_json::Value =
             serde_json::from_slice(&get.into_body().collect().await.unwrap().to_bytes()).unwrap();
-        if run["state"] == "succeeded" {
-            assert!(run["result_commit_oid"]
-                .as_str()
-                .is_some_and(|c| c.len() == 40));
+        if run["state"] == "failed" || run["state"] == "succeeded" {
+            assert_eq!(run["state"], "failed");
+            assert_eq!(run["error_code"].as_str(), Some("agent_budget_unknown"));
             return;
         }
     }
-    panic!("agent did not succeed");
+    panic!("agent did not finish");
 }

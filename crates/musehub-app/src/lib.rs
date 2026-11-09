@@ -397,6 +397,7 @@ struct AgentRunView {
     result_commit_oid: Option<String>,
     usage_tokens: u64,
     budget_unknown: bool,
+    error_code: Option<String>,
 }
 
 async fn start_agent_run(
@@ -484,6 +485,7 @@ async fn start_agent_run(
         result_commit_oid: None,
         usage_tokens: 0,
         budget_unknown: true,
+        error_code: None,
     }))
 }
 
@@ -493,15 +495,15 @@ async fn get_agent_run(
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<AgentRunView>, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
-    let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, i64)>(
-        "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens
+    let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, i64, Option<String>)>(
+        "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens, error_code
          FROM agent_runs WHERE id = $1 AND requested_by = $2",
     )
     .bind(run_id)
     .bind(principal_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((id, adapter_kind, run_state, commit, tokens)) = row else {
+    let Some((id, adapter_kind, run_state, commit, tokens, error_code)) = row else {
         return Err(AppError::NotFound);
     };
     Ok(Json(AgentRunView {
@@ -511,6 +513,7 @@ async fn get_agent_run(
         result_commit_oid: commit,
         usage_tokens: tokens as u64,
         budget_unknown: true,
+        error_code,
     }))
 }
 
@@ -797,7 +800,7 @@ async fn org_id_from_slug(pool: &PgPool, org_slug: &str) -> Result<Uuid, AppErro
     row.map(|(id,)| id).ok_or(AppError::NotFound)
 }
 
-async fn org_id_for_member(
+pub(crate) async fn org_id_for_member(
     pool: &PgPool,
     org_slug: &str,
     principal_id: Uuid,

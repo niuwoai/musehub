@@ -8,7 +8,7 @@ use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use musehub_app::agent_supervisor::new_supervisor;
 use musehub_app::{prepare, product_router, AppState};
-use musehub_migrate::{load_migrations, migrate_up};
+use musehub_migrate::{load_migrations, migrate_down, migrate_up};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -24,6 +24,7 @@ pub async fn migrated_pool() -> PgPool {
     let migrations =
         load_migrations(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations"))
             .expect("migrations");
+    let _ = migrate_down(&pool, &migrations).await;
     let _ = migrate_up(&pool, &migrations).await.expect("migrate");
     pool
 }

@@ -65,16 +65,42 @@ jobs:
           cargo test -p musehub-app --test auth_matrix -- --test-threads=1
           cargo test -p musehub-app --test plan_immutable -- --test-threads=1
           cargo test -p musehub-app --test pr_gates_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pr_security_e2e -- --test-threads=1
           cargo test -p musehub-app --test agent_budget -- --test-threads=1
           cargo test -p musehub-app --test pat_scope -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: musehub
+          POSTGRES_PASSWORD: musehub
+          POSTGRES_DB: musehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U musehub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_GIT_ROOT: /tmp/musehub-web-e2e-git
+      MUSEHUB_SESSION_SECRET: ci-web-e2e-session-secret-32chars
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Web-E2E-Strong!2026'
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: install Playwright OS deps
+        run: yarn --cwd web exec playwright install-deps chromium
       - run: yarn --cwd web install --frozen-lockfile
       - run: yarn --cwd web test
       - run: yarn --cwd web build
+      - name: web browser E2E (Playwright)
+        run: chmod +x ./scripts/run-web-e2e.sh && ./scripts/run-web-e2e.sh

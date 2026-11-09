@@ -59,7 +59,7 @@ pub async fn run_reference_job(
     supervisor: Arc<AgentSupervisor>,
     run_id: Uuid,
     repo_id: Uuid,
-    storage_key: Uuid,
+    _storage_key: Uuid,
     git_root: PathBuf,
     reference_bin: PathBuf,
     branch: String,
@@ -74,6 +74,18 @@ pub async fn run_reference_job(
     .execute(&pool)
     .await;
 
+    let storage_key =
+        match sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE id = $1")
+            .bind(repo_id)
+            .fetch_optional(&pool)
+            .await
+        {
+            Ok(Some((key,))) => key,
+            _ => {
+                let _ = mark_failed(&pool, run_id, "repo_metadata_failed").await;
+                return;
+            }
+        };
     let work_dir = match tempfile::tempdir() {
         Ok(dir) => dir,
         Err(_) => {

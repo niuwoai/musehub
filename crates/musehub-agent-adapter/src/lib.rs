@@ -261,6 +261,12 @@ pub async fn finish_run(
         });
     }
     let summary = parse_stream_summary(&buffer)?;
+    if budget_tokens.is_some() && summary.usage.budget_unknown {
+        return Ok(RunOutcome::Failed {
+            code: "agent_budget_unknown".to_string(),
+            detail: "budget limit set but adapter reported budget_unknown usage".to_string(),
+        });
+    }
     Ok(RunOutcome::Succeeded {
         commit: summary.commit,
         usage: summary.usage,

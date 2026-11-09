@@ -14,6 +14,7 @@ const DEFAULT_REPO_CHECK: &str = "product-ci";
 use tower::ServiceExt;
 
 const REVIEWER_PASS: &str = "Reviewer-Strong-Pass-12!";
+const CI_REPORTER_PASS: &str = "Ci-Reporter-Strong-12!";
 
 #[tokio::test]
 async fn pr_merge_gates_two_users_full_chain() {
@@ -42,6 +43,26 @@ async fn pr_merge_gates_two_users_full_chain() {
         )
         .await
         .expect("invite");
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/members")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "handle": "ci-reporter",
+                        "password": CI_REPORTER_PASS,
+                        "role": "admin"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("invite ci");
+    let ci_cookie = common::login_cookie(&app, "ci-reporter", CI_REPORTER_PASS).await;
 
     // repo + agent branch
     app.clone()
@@ -252,7 +273,7 @@ async fn pr_merge_gates_two_users_full_chain() {
         .unwrap();
     assert_eq!(merge_no_check.status(), StatusCode::BAD_REQUEST);
 
-    let check_ok = app
+    let forged_check = app
         .clone()
         .oneshot(
             Request::builder()
@@ -262,7 +283,36 @@ async fn pr_merge_gates_two_users_full_chain() {
                 ))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &reviewer_cookie)
-                .body(Body::from(r#"{"state":"success"}"#))
+                .body(Body::from(
+                    serde_json::json!({
+                        "state": "success",
+                        "attempt_id": uuid::Uuid::new_v4()
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forged_check.status(), StatusCode::FORBIDDEN);
+
+    let check_ok = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/pr-gates/pull-requests/{pr_number}/checks/{DEFAULT_REPO_CHECK}"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &ci_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "state": "success",
+                        "attempt_id": uuid::Uuid::new_v4()
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -337,6 +387,26 @@ async fn stale_approval_after_new_commit_requires_resync() {
         )
         .await
         .unwrap();
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/members")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "handle": "ci-reporter",
+                        "password": CI_REPORTER_PASS,
+                        "role": "admin"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ci_cookie = common::login_cookie(&app, "ci-reporter", CI_REPORTER_PASS).await;
     app.clone()
         .oneshot(
             Request::builder()
@@ -448,8 +518,14 @@ async fn stale_approval_after_new_commit_requires_resync() {
                     "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/checks/{DEFAULT_REPO_CHECK}"
                 ))
                 .header(header::CONTENT_TYPE, "application/json")
-                .header(header::COOKIE, &rev_cookie)
-                .body(Body::from(r#"{"state":"success"}"#))
+                .header(header::COOKIE, &ci_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "state": "success",
+                        "attempt_id": uuid::Uuid::new_v4()
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -532,8 +608,14 @@ async fn stale_approval_after_new_commit_requires_resync() {
                     "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/checks/{DEFAULT_REPO_CHECK}"
                 ))
                 .header(header::CONTENT_TYPE, "application/json")
-                .header(header::COOKIE, &rev_cookie)
-                .body(Body::from(r#"{"state":"success"}"#))
+                .header(header::COOKIE, &ci_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "state": "success",
+                        "attempt_id": uuid::Uuid::new_v4()
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await

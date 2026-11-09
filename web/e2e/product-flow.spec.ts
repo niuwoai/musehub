@@ -28,7 +28,9 @@ test.describe('product slice browser flow', () => {
     expect(repoSlug).toBeTruthy()
     await page.locator('ul li button').first().click()
 
-    await page.getByRole('button', { name: /create issue|创建/i }).click()
+    await page
+      .getByRole('button', { name: /create issue|创建 issue/i })
+      .click()
     await page.getByRole('button', { name: /accept plan|接受计划/i }).click()
     await page.getByRole('button', { name: /run agent|运行/i }).first().click()
     await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
