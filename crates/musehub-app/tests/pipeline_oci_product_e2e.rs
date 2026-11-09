@@ -583,6 +583,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     assert!(!prompts.prompts.is_empty());
     let resources = mcp_client.list_resources(None).await.expect("resources");
     assert!(!resources.resources.is_empty());
+    mcp_client.cancel().await.ok();
 
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("python/mcp_product_oci_write.py");
@@ -595,7 +596,14 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         .map(|s| s.success())
         .unwrap_or(false);
     if py_ok && script.is_file() {
-        let url = format!("http://{mcp_addr}/mcp");
+        let py_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let py_addr = py_listener.local_addr().unwrap();
+        let py_router = app.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(py_listener, py_router).await;
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let url = format!("http://{py_addr}/mcp");
         let out = std::process::Command::new("python3")
             .env("PYTHONPATH", &pydeps)
             .arg(&script)
