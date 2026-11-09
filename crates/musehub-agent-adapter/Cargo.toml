@@ -21,6 +21,10 @@ name = "musehub-agent-codex-sim"
 path = "src/bin/musehub_agent_codex_sim.rs"
 
 [[bin]]
+name = "musehub-agent-codex-fixture"
+path = "src/bin/musehub_agent_codex_fixture.rs"
+
+[[bin]]
 name = "musehub-pipeline-reference"
 path = "src/bin/musehub_pipeline_reference.rs"
 

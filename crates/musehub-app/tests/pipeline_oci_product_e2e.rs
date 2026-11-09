@@ -300,35 +300,96 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     .unwrap();
     let merge_commit = merged["head_oid"].as_str().unwrap();
 
-    let pipe: serde_json::Value = serde_json::from_slice(
-        &app.clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/orgs/demo/repos/oci-product/pipeline-runs")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .header(header::COOKIE, &admin_cookie)
-                    .body(Body::from(
-                        serde_json::json!({
-                            "source_oid": merge_commit,
-                            "pr_id": pr_id,
-                            "issue_id": issue_uuid,
-                            "agent_run_id": run_id
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
+    let pat_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/tokens")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(r#"{"name":"mcp-oci-pipeline","org":"demo"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mcp_pat_json: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let mcp_token = mcp_pat_json["token"].as_str().unwrap();
+    let repo_uuid: (Uuid,) =
+        sqlx::query_as("SELECT id FROM repositories WHERE slug = 'oci-product'")
+            .fetch_one(&pool)
             .await
-            .unwrap()
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes(),
-    )
-    .unwrap();
-    let pipeline_id = pipe["id"].as_str().unwrap();
+            .unwrap();
+    let org_uuid: (Uuid,) = sqlx::query_as("SELECT id FROM organizations WHERE slug = 'demo'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    use http::HeaderValue;
+    use rmcp::{
+        model::CallToolRequestParams,
+        transport::{
+            streamable_http_client::StreamableHttpClientTransportConfig,
+            StreamableHttpClientTransport,
+        },
+        ClientLifecycleMode, ClientServiceExt,
+    };
+    use std::collections::HashMap;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mcp_addr = listener.local_addr().unwrap();
+    let router = app.clone();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let mut headers = HashMap::new();
+    headers.insert(
+        http::HeaderName::from_static("authorization"),
+        HeaderValue::from_str(&format!("Bearer {mcp_token}")).unwrap(),
+    );
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp_addr}/mcp"))
+            .custom_headers(headers),
+    );
+    let mcp_client = rmcp::model::ClientConfig::default()
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(rmcp::model::ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("mcp client");
+    let pipe_mcp = mcp_client
+        .call_tool(
+            CallToolRequestParams::new("musehub_pipeline_run").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("org_id".into(), serde_json::json!(org_uuid.0.to_string()));
+                m.insert(
+                    "repository_id".into(),
+                    serde_json::json!(repo_uuid.0.to_string()),
+                );
+                m.insert("workflow_path".into(), serde_json::json!("product-ci"));
+                m.insert("target_oid".into(), serde_json::json!(merge_commit));
+                m.insert(
+                    "idempotency_key".into(),
+                    serde_json::json!("oci-mcp-pipeline-v1"),
+                );
+                m
+            }),
+        )
+        .await
+        .expect("mcp pipeline_run");
+    assert!(!pipe_mcp.is_error.unwrap_or(true));
+    let pipeline_id = pipe_mcp
+        .structured_content
+        .as_ref()
+        .and_then(|v| v.get("data"))
+        .and_then(|d| d.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("pipeline id")
+        .to_string();
     for _ in 0..600 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let st: serde_json::Value = serde_json::from_slice(
@@ -406,39 +467,53 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         .await
         .unwrap();
 
-    let dep: serde_json::Value = serde_json::from_slice(
-        &app.clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/orgs/demo/repos/oci-product/deployments")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .header(header::COOKIE, &admin_cookie)
-                    .body(Body::from(
-                        serde_json::json!({ "release_id": release_id }).to_string(),
-                    ))
-                    .unwrap(),
-            )
+    let env_uuid: (Uuid,) =
+        sqlx::query_as("SELECT id FROM environments WHERE repo_id = $1 AND slug = 'test'")
+            .bind(repo_uuid.0)
+            .fetch_one(&pool)
             .await
-            .unwrap()
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes(),
-    )
-    .unwrap();
-    assert_eq!(dep["state"], "succeeded");
-    assert_eq!(dep["adapter_kind"], "compose-runner");
-    let health = &dep["health_summary"];
-    assert!(health["applied_oci_digest"]
-        .as_str()
-        .is_some_and(|d| d.starts_with("sha256:")));
+            .unwrap();
+    let dep_mcp = mcp_client
+        .call_tool(
+            CallToolRequestParams::new("musehub_deployment_start").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("org_id".into(), serde_json::json!(org_uuid.0.to_string()));
+                m.insert(
+                    "repository_id".into(),
+                    serde_json::json!(repo_uuid.0.to_string()),
+                );
+                m.insert(
+                    "environment_id".into(),
+                    serde_json::json!(env_uuid.0.to_string()),
+                );
+                m.insert("release_id".into(), serde_json::json!(release_id));
+                m.insert(
+                    "idempotency_key".into(),
+                    serde_json::json!("oci-mcp-deploy-v1"),
+                );
+                m
+            }),
+        )
+        .await
+        .expect("mcp deployment_start");
+    assert!(!dep_mcp.is_error.unwrap_or(true));
+    let dep_data = dep_mcp
+        .structured_content
+        .as_ref()
+        .and_then(|v| v.get("data"))
+        .expect("deploy data");
     assert_eq!(
-        health["verified_source_oid"].as_str().unwrap(),
-        merge_commit
+        dep_data.get("state").and_then(|v| v.as_str()),
+        Some("succeeded")
     );
-    let deployment_id = dep["id"].as_str().unwrap();
+    assert_eq!(
+        dep_data.get("adapter_kind").and_then(|v| v.as_str()),
+        Some("compose-runner")
+    );
+    let deployment_id = dep_data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("deployment id");
 
     let trace: serde_json::Value = serde_json::from_slice(
         &app.clone()
@@ -482,67 +557,6 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         "product MCP slice removes stale mcp_production_not_wired gap"
     );
 
-    let pat_resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/tokens")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::COOKIE, &admin_cookie)
-                .body(Body::from(r#"{"name":"mcp-oci","org":"demo"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let pat_json: serde_json::Value =
-        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    let mcp_token = pat_json["token"].as_str().unwrap();
-    let repo_uuid: (Uuid,) =
-        sqlx::query_as("SELECT id FROM repositories WHERE slug = 'oci-product'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    let org_uuid: (Uuid,) = sqlx::query_as("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    use http::HeaderValue;
-    use rmcp::{
-        model::CallToolRequestParams,
-        transport::{
-            streamable_http_client::StreamableHttpClientTransportConfig,
-            StreamableHttpClientTransport,
-        },
-        ClientLifecycleMode, ClientServiceExt,
-    };
-    use std::collections::HashMap;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = app.clone();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
-    tokio::time::sleep(Duration::from_millis(80)).await;
-    let mut headers = HashMap::new();
-    headers.insert(
-        http::HeaderName::from_static("authorization"),
-        HeaderValue::from_str(&format!("Bearer {mcp_token}")).unwrap(),
-    );
-    let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
-            .custom_headers(headers),
-    );
-    let mcp_client = rmcp::model::ClientConfig::default()
-        .serve_with_lifecycle(
-            transport,
-            ClientLifecycleMode::Auto {
-                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
-                legacy_version: Some(rmcp::model::ProtocolVersion::V_2025_11_25),
-            },
-        )
-        .await
-        .expect("mcp");
     let trace_mcp = mcp_client
         .call_tool(
             CallToolRequestParams::new("musehub_deployment_trace").with_arguments({

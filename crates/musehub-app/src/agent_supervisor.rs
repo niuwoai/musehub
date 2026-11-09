@@ -3,8 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use musehub_agent_adapter::{spawn_reference, AgentTask, RunOutcome, UsageTotals};
+use musehub_agent_adapter::{
+    spawn_codex_sim, spawn_reference, AgentTask, RunOutcome, UsageTotals, CODEX_ADAPTER,
+    REFERENCE_ADAPTER,
+};
 use sqlx::PgPool;
+use std::path::Path;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -156,13 +160,34 @@ pub async fn run_reference_job(
         message,
         branch: Some(branch.clone()),
     };
-    let run = match spawn_reference(&task, work_dir.path(), &reference_bin).await {
-        Ok(run) => run,
-        Err(_) => {
-            fenced_fail(&pool, run_id, instance_id, epoch, "adapter_spawn_failed").await;
-            return;
+    let run = if let Ok(fixture) = std::env::var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN") {
+        let path = Path::new(fixture.trim());
+        match spawn_codex_sim(&task, work_dir.path(), path).await {
+            Ok(run) => run,
+            Err(_) => {
+                fenced_fail(&pool, run_id, instance_id, epoch, "adapter_spawn_failed").await;
+                return;
+            }
+        }
+    } else {
+        match spawn_reference(&task, work_dir.path(), &reference_bin).await {
+            Ok(run) => run,
+            Err(_) => {
+                fenced_fail(&pool, run_id, instance_id, epoch, "adapter_spawn_failed").await;
+                return;
+            }
         }
     };
+    if std::env::var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN").is_ok() {
+        let _ = sqlx::query(
+            "UPDATE agent_runs SET adapter_kind = $2 WHERE id = $1 AND adapter_kind = $3",
+        )
+        .bind(run_id)
+        .bind(CODEX_ADAPTER)
+        .bind(REFERENCE_ADAPTER)
+        .execute(&pool)
+        .await;
+    }
     if let Some(pid) = run.child_id() {
         supervisor.register(run_id, pid).await;
     }
@@ -187,6 +212,11 @@ pub async fn run_reference_job(
             }
         }
     });
+    let deadline = std::env::var("MUSEHUB_AGENT_RUN_DEADLINE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(deadline);
     let outcome = match musehub_agent_adapter::finish_run(
         run,
         deadline,

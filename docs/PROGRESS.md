@@ -10,7 +10,7 @@
 | `rust-portable` | `[x]` | fmt/clippy/portable/acceptance/backup/安全 E2E |
 | `web` | `[x]` | Playwright `scripts/run-web-e2e.sh`（失败时 `collect-e2e-diagnostics.sh`）；`MUSEHUB_PRODUCT_OCI_E2E=1` 时 delivery 经 pipeline OCI 产品路径 |
 | `compose-runner-e2e` | `[x]` | `scripts/verify-compose-runner-e2e.sh`（真实 pull/up/inspect/rollback，**非** `docker info` 探针） |
-| `pipeline-oci-product` | `[x]` | `scripts/verify-pipeline-oci-product-e2e.sh`（CI 本地 registry、双 source_oid→双 digest、`pipeline_oci_product_e2e`）；develop run [`42596872230`](https://github.com/niuwoai/musehub/actions/runs/42596872230) 全绿 |
+| `pipeline-oci-product` | `[~]` | `verify-pipeline-oci-product-e2e.sh`：双 digest + **`MUSEHUB_MCP_PRODUCT=1` 产品 MCP 写路径**；待本 PR CI SHA 全绿后标回 `[x]` |
 
 ## P0 清单（节选）
 
@@ -20,7 +20,7 @@
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
 | DEP-COMPOSE | `[x]` 产品路径 | `musehub-pipeline-oci` → `artifacts.oci_image_ref` 自动绑定 publish → API `compose-runner` 校验 `verified_source_oid`/`applied_oci_digest`；`verify-pipeline-oci-product-e2e.sh` 双 digest；`compose-runner-e2e` 仍为 runner 隔离探针 |
 | OPS-01 | `[x]` | backup：`main` OID + artifact SHA（`verify-backup-restore.sh`） |
-| IAM/PIPE/AGT | `[~]` | 生产 MCP：Bearer **每次 HTTP 必验**（`mcp-session-id` 非凭据、无 PAT 内存映射）；部分工具 + Resources/Prompts §13；`production_mcp_*` + Python 矩阵（`spawn_blocking` 子进程）；`pipeline_oci_product_e2e` 内 MCP trace/resources/prompts；V1 PAT Bearer；Codex sim 默认 + `codex_adapter_e2e` |
+| IAM/PIPE/AGT | `[~]` | 生产 MCP：Bearer **每次 HTTP 必验**；`pipeline_oci_product_e2e` 经 rmcp 调 `musehub_pipeline_run` + `musehub_deployment_start`（非只读 tail）；`production_mcp_write_matrix_e2e` / `production_mcp_resources_e2e`（agent-run URI + `resolve_repo`）；`agent_codex_fixture_e2e` 主线 AgentRun + 可控 fixture（非在线）；Python 矩阵；Codex `/adapters/codex/task` sim 门卫 |
 
 ## 未验证边界
 
