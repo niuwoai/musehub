@@ -1,6 +1,15 @@
 # P0 / README 验收 ↔ 证据对照（诚实）
 
-> 仅列本仓库可重复跑到的证据；**双主机物理分列**仅在 README 原文明确要求时分项（当前以**跨容器 + 共享 DB/卷**代替，见 `scripts/verify-runner-cross-container-e2e.sh`）。
+> 仅列本仓库可重复跑到的证据。
+
+### 独立 Linux Runner vs 物理双主机（对照 `docs/01-product-requirements.md` / `README.md`）
+
+| 原文要求 | V1 范围结论 | 本仓库本地证据 |
+|---|---|---|
+| `README.md` 设计基线：「模块化单体控制面 + **独立 Linux Runner**」 | **在 V1 内**（控制面与 Runner 分进程/分容器，非 Windows/macOS Runner） | `musehub-runnerd`、production compose、`verify-remote-*-e2e.sh` |
+| `docs/01-product-requirements.md` §3 **CI-02** Linux Runner | **在 V1 内** | 同上 + `run-ci-security-integration-local.sh` remote executor 步 |
+| `docs/01-product-requirements.md` §3 **明确排除**（约 L79）：Windows/macOS Runner、**多地域 HA** | **未**将「第二台物理 Linux 机」列为 V1 外 | — |
+| 实验室「两台物理机」拓扑证据 | 非产品契约；仅验收诚实性 | `scripts/verify-runner-cross-container-e2e.sh`（**跨容器 + host-network + 共享 DB/卷**，[`docs/RUNNER-BOUNDARY.md`](RUNNER-BOUNDARY.md) 已标明非双主机） |
 
 | ID / 主题 | README / 01 | 状态 | 证据 |
 |-----------|-------------|------|------|

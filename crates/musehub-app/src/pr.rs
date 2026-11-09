@@ -8,6 +8,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -253,6 +254,209 @@ pub async fn create_pull_request(
             base_oid: Some(base_oid),
         }),
     ))
+}
+
+#[derive(Debug)]
+pub struct CreatePrParams {
+    pub title: String,
+    pub source_branch: String,
+    pub target_branch: Option<String>,
+    pub expected_head_oid: String,
+    pub issue_id: Option<Uuid>,
+}
+
+pub async fn create_pull_request_in_repo(
+    state: &Arc<AppState>,
+    org_id: Uuid,
+    repo_id: Uuid,
+    storage_key: Uuid,
+    principal_id: Uuid,
+    params: CreatePrParams,
+) -> Result<Value, AppError> {
+    if params.title.trim().is_empty() {
+        return Err(AppError::Validation("title required".to_string()));
+    }
+    crate::security::validate_git_oid(&params.expected_head_oid).map_err(AppError::Validation)?;
+    let default_branch: (String,) =
+        sqlx::query_as("SELECT default_branch FROM repositories WHERE id = $1")
+            .bind(repo_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let target = params
+        .target_branch
+        .clone()
+        .unwrap_or_else(|| default_branch.0.clone());
+    if params.source_branch == target {
+        return Err(AppError::Validation(
+            "source and target branches must differ".to_string(),
+        ));
+    }
+    let bare = bare_repo_path(&state.git_root, &storage_key);
+    let head_oid = git_rev_parse(&bare, &format!("refs/heads/{}", params.source_branch))?;
+    if head_oid != params.expected_head_oid {
+        return Err(AppError::Validation(
+            "expected_head_oid does not match source branch tip".to_string(),
+        ));
+    }
+    let base_oid = git_rev_parse(&bare, &format!("refs/heads/{target}"))?;
+    let ahead = commits_ahead(&bare, &base_oid, &head_oid)?;
+    if ahead == 0 {
+        return Err(AppError::Validation(
+            "pull request requires a non-empty diff".to_string(),
+        ));
+    }
+    if let Some(issue_id) = params.issue_id {
+        let ok =
+            sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
+                .bind(issue_id)
+                .bind(repo_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        if ok.is_none() {
+            return Err(AppError::NotFound);
+        }
+    }
+    let number: (i64,) = sqlx::query_as(
+        "UPDATE repositories SET next_pr_number = next_pr_number + 1
+         WHERE id = $1 RETURNING next_pr_number - 1",
+    )
+    .bind(repo_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let pr_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pull_requests (
+            id, org_id, repo_id, number, author_id, title, source_branch, target_branch,
+            issue_id, agent_run_id, head_oid, base_oid, state
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, 'open')",
+    )
+    .bind(pr_id)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(number.0)
+    .bind(principal_id)
+    .bind(params.title.trim())
+    .bind(&params.source_branch)
+    .bind(&target)
+    .bind(params.issue_id)
+    .bind(&head_oid)
+    .bind(&base_oid)
+    .execute(&state.pool)
+    .await?;
+    insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    Ok(json!({
+        "id": pr_id.to_string(),
+        "number": number.0,
+        "title": params.title.trim(),
+        "source_branch": params.source_branch,
+        "target_branch": target,
+        "state": "open",
+        "head_oid": head_oid,
+        "base_oid": base_oid,
+    }))
+}
+
+pub async fn merge_pull_request_by_id(
+    state: &Arc<AppState>,
+    repo_id: Uuid,
+    storage_key: Uuid,
+    principal_id: Uuid,
+    pr_id: Uuid,
+    expected_head_oid: &str,
+    expected_base_oid: &str,
+    expected_candidate_oid: &str,
+) -> Result<Value, AppError> {
+    crate::security::validate_git_oid(expected_head_oid).map_err(AppError::Validation)?;
+    crate::security::validate_git_oid(expected_base_oid).map_err(AppError::Validation)?;
+    crate::security::validate_git_oid(expected_candidate_oid).map_err(AppError::Validation)?;
+    if expected_head_oid != expected_candidate_oid {
+        return Err(AppError::Validation(
+            "expected_candidate_oid must match expected_head_oid".to_string(),
+        ));
+    }
+    let pr = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT id, author_id, state, source_branch, target_branch, head_oid, base_oid
+         FROM pull_requests WHERE id = $1 AND repo_id = $2",
+    )
+    .bind(pr_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, author_id, pr_state, source_branch, target_branch, stored_head, base_oid)) = pr
+    else {
+        return Err(AppError::NotFound);
+    };
+    if pr_state != "open" {
+        return Err(AppError::Validation("pull request is not open".to_string()));
+    }
+    let stored_head =
+        stored_head.ok_or_else(|| AppError::Validation("missing head_oid".to_string()))?;
+    if stored_head != expected_head_oid {
+        return Err(AppError::Validation(
+            "expected_head_oid does not match pull request record".to_string(),
+        ));
+    }
+    let base_oid = base_oid.ok_or_else(|| AppError::Validation("missing base_oid".to_string()))?;
+    if base_oid != expected_base_oid {
+        return Err(AppError::Validation(
+            "expected_base_oid does not match pull request record".to_string(),
+        ));
+    }
+    let bare = bare_repo_path(&state.git_root, &storage_key);
+    let live_head = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
+    if live_head != expected_head_oid {
+        return Err(AppError::Validation(
+            "source branch advanced; sync pull request before merge".to_string(),
+        ));
+    }
+    let current_target = git_rev_parse(&bare, &format!("refs/heads/{target_branch}"))?;
+    if current_target != expected_base_oid {
+        return Err(AppError::Validation(
+            "target branch advanced since pull request opened (CAS)".to_string(),
+        ));
+    }
+    merge_preconditions(&state.pool, id, author_id, &live_head).await?;
+    let merged_oid = merge_with_cas(&bare, &target_branch, &expected_base_oid, &live_head)?;
+    sqlx::query(
+        "UPDATE pull_requests SET state = 'merged', merged_oid = $2, merged_by = $3,
+         merged_at = CURRENT_TIMESTAMP, head_oid = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND state = 'open'",
+    )
+    .bind(id)
+    .bind(&merged_oid)
+    .bind(principal_id)
+    .execute(&state.pool)
+    .await?;
+    let number: (i64,) = sqlx::query_as("SELECT number FROM pull_requests WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    let title: (String,) = sqlx::query_as("SELECT title FROM pull_requests WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(json!({
+        "id": id.to_string(),
+        "number": number.0,
+        "title": title.0,
+        "state": "merged",
+        "source_branch": source_branch,
+        "target_branch": target_branch,
+        "head_oid": merged_oid,
+        "base_oid": expected_base_oid,
+        "merge_commit_oid": merged_oid,
+    }))
 }
 
 pub async fn list_pull_requests(

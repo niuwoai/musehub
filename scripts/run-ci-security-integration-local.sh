@@ -38,6 +38,7 @@ MUSEHUB_MCP_PRODUCT=1 _one production_mcp_resources_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_guards_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_cross_tenant_resources_e2e
 MUSEHUB_MCP_PRODUCT=1 _one production_mcp_selected_repo_e2e
+MUSEHUB_MCP_PRODUCT=1 _one production_mcp_write_expansion_e2e
 MUSEHUB_MCP_PRODUCT=1 _one grants_security_e2e
 MUSEHUB_MCP_PRODUCT=1 _one repository_grants_e2e
 _one runner_daemon_acceptance_e2e

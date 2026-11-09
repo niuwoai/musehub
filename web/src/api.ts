@@ -335,6 +335,36 @@ export async function listRunnerTokens(org: string) {
   return api<RunnerTokenMasked[]>(`/api/v1/orgs/${org}/runner-tokens`)
 }
 
+export type AuditEvent = {
+  id: string
+  actor_id: string
+  action: string
+  resource_type: string
+  resource_id: string
+  decision: string
+  occurred_at: string
+  metadata?: unknown
+}
+
+export type RunnerCapabilities = {
+  pipeline_executor: string
+  agent_executor: string
+  deploy_executor: string
+  lease_seconds: number
+  scopes_accepted: string[]
+  note: string
+}
+
+export async function listAuditEvents(org: string, limit = 25) {
+  return api<AuditEvent[]>(
+    `/api/v1/orgs/${org}/audit/events?limit=${encodeURIComponent(String(limit))}`,
+  )
+}
+
+export async function getRunnerCapabilities() {
+  return api<RunnerCapabilities>('/api/v1/runner/capabilities')
+}
+
 export async function createScopedPat(
   org: string,
   name: string,

@@ -5,8 +5,9 @@ use uuid::Uuid;
 
 use crate::agent_supervisor;
 use crate::error::AppError;
-use crate::git_http::{bare_repo_path, git_clone_url};
+use crate::git_http::{bare_repo_path, git_clone_url, init_bare_repository};
 use crate::mcp::auth::RepoAccess;
+use crate::pipeline;
 use crate::pr;
 use crate::security;
 use crate::AppState;
@@ -490,4 +491,273 @@ pub fn repo_summary_json(
         "state": state,
         "clone_url": git_clone_url(bind_display, org_slug, slug),
     })
+}
+
+fn normalize_repo_slug(slug: &str) -> Result<String, AppError> {
+    let slug = slug.trim().to_lowercase();
+    if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(AppError::Validation("invalid repository slug".to_string()));
+    }
+    Ok(slug)
+}
+
+#[derive(Debug, Default)]
+pub struct IssueUpdatePatch {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub state: Option<String>,
+}
+
+pub async fn repository_create(
+    state: &Arc<AppState>,
+    org_id: Uuid,
+    org_slug: &str,
+    principal_id: Uuid,
+    slug: &str,
+    description: Option<&str>,
+    default_branch: Option<&str>,
+) -> Result<Value, AppError> {
+    let slug = normalize_repo_slug(slug)?;
+    if !crate::grants::is_org_privileged(&state.pool, org_id, principal_id).await? {
+        return Err(AppError::Forbidden);
+    }
+    let dup = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT id FROM repositories WHERE org_id = $1 AND slug_normalized = $2",
+    )
+    .bind(org_id)
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await?;
+    if dup.is_some() {
+        return Err(AppError::Validation("repository slug already exists".to_string()));
+    }
+    let branch = default_branch
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main")
+        .to_string();
+    if branch.contains("..") || branch.starts_with('/') {
+        return Err(AppError::Validation("invalid default_branch".to_string()));
+    }
+    let storage_key = Uuid::new_v4();
+    let repo_id = Uuid::new_v4();
+    init_bare_repository(&state.git_root, &storage_key)?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO repositories (id, org_id, slug, slug_normalized, description, storage_key, state, default_branch)
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', $7)",
+    )
+    .bind(repo_id)
+    .bind(org_id)
+    .bind(&slug)
+    .bind(&slug)
+    .bind(description.unwrap_or_default())
+    .bind(storage_key)
+    .bind(&branch)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO repository_grants (id, org_id, repo_id, principal_id, role)
+         VALUES ($1, $2, $3, $4, 'maintainer')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(principal_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    pr::seed_repo_required_checks(&state.pool, repo_id).await?;
+    pipeline::seed_repo_environment(&state.pool, org_id, repo_id).await?;
+    let mut data = repo_summary_json(&state.bind_display, org_slug, repo_id, &slug, "ready");
+    if let Some(map) = data.as_object_mut() {
+        map.insert("org_id".into(), json!(org_id.to_string()));
+        map.insert(
+            "description".into(),
+            json!(description.unwrap_or_default()),
+        );
+        map.insert("default_branch".into(), json!(branch));
+    }
+    Ok(data)
+}
+
+pub async fn issue_update(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    principal_id: Uuid,
+    issue_id: Uuid,
+    expected_version: i32,
+    patch: IssueUpdatePatch,
+) -> Result<Value, AppError> {
+    let row = sqlx::query_as::<_, (Uuid, i64, String, String, Option<Uuid>)>(
+        "SELECT i.id, i.number, i.title, i.state, i.current_revision_id
+         FROM issues i WHERE i.id = $1 AND i.repo_id = $2",
+    )
+    .bind(issue_id)
+    .bind(access.repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, number, title, issue_state, current_revision_id)) = row else {
+        return Err(AppError::NotFound);
+    };
+    let revision_id = current_revision_id.ok_or_else(|| {
+        AppError::Validation("issue has no current revision".to_string())
+    })?;
+    let rev = sqlx::query_as::<_, (i32, String, String)>(
+        "SELECT revision, title, body FROM issue_revisions WHERE id = $1 AND issue_id = $2",
+    )
+    .bind(revision_id)
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((revision, rev_title, rev_body)) = rev else {
+        return Err(AppError::NotFound);
+    };
+    if revision != expected_version {
+        return Err(AppError::Validation(format!(
+            "expected_version {expected_version} does not match current revision {revision}"
+        )));
+    }
+    if patch.title.is_none() && patch.body.is_none() && patch.state.is_none() {
+        return Err(AppError::Validation("patch must include at least one field".to_string()));
+    }
+    let mut new_title = title;
+    let rev_body_snapshot = rev_body.clone();
+    let mut new_body = rev_body;
+    let mut content_changed = false;
+    if let Some(t) = patch.title {
+        let t = t.trim().to_string();
+        if t.is_empty() {
+            return Err(AppError::Validation("title cannot be empty".to_string()));
+        }
+        if t != rev_title {
+            new_title = t;
+            content_changed = true;
+        }
+    }
+    if let Some(b) = patch.body {
+        if b != rev_body_snapshot {
+            new_body = b;
+            content_changed = true;
+        }
+    }
+  let new_state = if let Some(s) = patch.state {
+        let s = s.trim().to_lowercase();
+        if !matches!(s.as_str(), "open" | "closed") {
+            return Err(AppError::Validation("invalid issue state".to_string()));
+        }
+        s
+    } else {
+        issue_state.clone()
+    };
+    let mut tx = state.pool.begin().await?;
+    let mut out_revision = revision;
+    let mut out_revision_id = revision_id;
+    if content_changed {
+        out_revision = revision + 1;
+        out_revision_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO issue_revisions (id, org_id, repo_id, issue_id, revision, title, body, author_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(out_revision_id)
+        .bind(access.org_id)
+        .bind(access.repo_id)
+        .bind(id)
+        .bind(out_revision)
+        .bind(&new_title)
+        .bind(&new_body)
+        .bind(principal_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE issues SET title = $2, body = $3, current_revision_id = $4, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&new_title)
+        .bind(&new_body)
+        .bind(out_revision_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if new_state != issue_state {
+        sqlx::query(
+            "UPDATE issues SET state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&new_state)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(json!({
+        "id": id.to_string(),
+        "number": number,
+        "title": new_title,
+        "state": new_state,
+        "body": new_body,
+        "current_revision_id": out_revision_id.to_string(),
+        "version": out_revision,
+    }))
+}
+
+pub async fn pr_create(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    principal_id: Uuid,
+    title: &str,
+    source_branch: &str,
+    target_branch: Option<&str>,
+    expected_head_oid: &str,
+    issue_revision_ids: &[Uuid],
+    _draft: bool,
+) -> Result<Value, AppError> {
+    let issue_id = if issue_revision_ids.is_empty() {
+        None
+    } else {
+        let rev_id = issue_revision_ids[0];
+        let row = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT issue_id FROM issue_revisions WHERE id = $1 AND repo_id = $2",
+        )
+        .bind(rev_id)
+        .bind(access.repo_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let Some((issue_id,)) = row else {
+            return Err(AppError::NotFound);
+        };
+        for extra in issue_revision_ids.iter().skip(1) {
+            let ok = sqlx::query_as::<_, (Uuid,)>(
+                "SELECT issue_id FROM issue_revisions WHERE id = $1 AND repo_id = $2",
+            )
+            .bind(extra)
+            .bind(access.repo_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            if ok.is_none() {
+                return Err(AppError::NotFound);
+            }
+        }
+        Some(issue_id)
+    };
+    let storage_key: (Uuid,) = sqlx::query_as("SELECT storage_key FROM repositories WHERE id = $1")
+        .bind(access.repo_id)
+        .fetch_one(&state.pool)
+        .await?;
+    pr::create_pull_request_in_repo(
+        state,
+        access.org_id,
+        access.repo_id,
+        storage_key.0,
+        principal_id,
+        pr::CreatePrParams {
+            title: title.to_string(),
+            source_branch: source_branch.to_string(),
+            target_branch: target_branch.map(str::to_string),
+            expected_head_oid: expected_head_oid.to_string(),
+            issue_id,
+        },
+    )
+    .await
 }

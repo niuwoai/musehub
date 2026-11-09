@@ -16,6 +16,10 @@ import {
   grantRepoCollaborator,
   listRepoGrants,
   listRunnerTokens,
+  listAuditEvents,
+  getRunnerCapabilities,
+  type AuditEvent,
+  type RunnerCapabilities,
   getAgentRun,
   getDeploymentTrace,
   Issue,
@@ -61,12 +65,42 @@ export default function App() {
   const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
   const [grantHandle, setGrantHandle] = useState('')
   const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
+  const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
+  const [runnerTokens, setRunnerTokens] = useState<
+    Awaited<ReturnType<typeof listRunnerTokens>>
+  >([])
 
   useEffect(() => {
     me()
       .then((principal) => setSession(principal.handle))
       .catch(() => setSession(null))
   }, [])
+
+  useEffect(() => {
+    if (!session) {
+      setAuditEvents([])
+      setRunnerCaps(null)
+      setRunnerTokens([])
+      return
+    }
+    void (async () => {
+      try {
+        const [audit, caps, tokens] = await Promise.all([
+          listAuditEvents(DEFAULT_ORG, 30),
+          getRunnerCapabilities(),
+          listRunnerTokens(DEFAULT_ORG),
+        ])
+        setAuditEvents(audit)
+        setRunnerCaps(caps)
+        setRunnerTokens(tokens)
+      } catch {
+        setAuditEvents([])
+        setRunnerCaps(null)
+        setRunnerTokens([])
+      }
+    })()
+  }, [session])
 
   async function refreshRepos() {
     const data = await listRepos(DEFAULT_ORG)
@@ -260,6 +294,52 @@ export default function App() {
           <p>
             {t('app.signedInAs')} <strong>{session}</strong>
           </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="audit-panel">
+              <h3>Audit (read-only)</h3>
+              {auditEvents.length === 0 ? (
+                <p>No audit events yet.</p>
+              ) : (
+                <ul style={{ maxHeight: '12rem', overflow: 'auto', margin: 0, paddingLeft: '1.2rem' }}>
+                  {auditEvents.map((ev) => (
+                    <li key={ev.id}>
+                      <code>{ev.occurred_at.slice(0, 19)}</code> {ev.action}{' '}
+                      <span>
+                        {ev.resource_type}/{ev.resource_id.slice(0, 8)}…
+                      </span>{' '}
+                      · {ev.decision}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="runner-status-panel">
+              <h3>Runner status</h3>
+              {runnerCaps ? (
+                <>
+                  <p data-testid="runner-executors">
+                    pipeline {runnerCaps.pipeline_executor} · agent {runnerCaps.agent_executor} ·
+                    deploy {runnerCaps.deploy_executor}
+                  </p>
+                  <p>lease {runnerCaps.lease_seconds}s · scopes: {runnerCaps.scopes_accepted.join(', ')}</p>
+                  <p style={{ color: '#57606a', fontSize: '0.9rem' }}>{runnerCaps.note}</p>
+                </>
+              ) : (
+                <p>Unable to load runner capabilities.</p>
+              )}
+              {runnerTokens.length > 0 ? (
+                <ul>
+                  {runnerTokens.map((tok) => (
+                    <li key={tok.id}>
+                      {tok.name}: <code>{tok.token_prefix}…</code> ({tok.scope_mode})
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No runner tokens (masked list only).</p>
+              )}
+            </Panel>
+          </div>
           <button type="button" onClick={() => void onCreateRepo()}>
             {t('app.createRepo')}
           </button>
