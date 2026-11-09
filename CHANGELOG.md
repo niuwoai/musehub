@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Migration `0005_fk_indexes` for BOOT-02 schema check; Git HTTP route fix (`/git/{org}/{repo}.git/...`).
+- Bootstrap 强密码策略；Agent 分支 `agent/*` 校验；Git 路径穿越拒绝。
+- `verify-product-acceptance.sh`；CI 强 bootstrap 密码与 reference 二进制预构建。
+
 ### Added
 
 - 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。

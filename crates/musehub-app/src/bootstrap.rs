@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::auth::{hash_password, normalize_handle};
 use crate::error::AppError;
+use crate::security::validate_bootstrap_password;
 
 /// Seeds default org `demo` and admin `admin` when the database is empty.
 pub async fn seed_if_empty(pool: &PgPool, bootstrap_password: &str) -> Result<(), AppError> {
@@ -14,9 +15,10 @@ pub async fn seed_if_empty(pool: &PgPool, bootstrap_password: &str) -> Result<()
     }
     if bootstrap_password.trim().is_empty() {
         return Err(AppError::Validation(
-            "database empty: set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD once".to_string(),
+            "database empty: set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD once (min 16 chars)".to_string(),
         ));
     }
+    validate_bootstrap_password(bootstrap_password).map_err(AppError::Validation)?;
     let org_id = Uuid::new_v4();
     let principal_id = Uuid::new_v4();
     let password_hash = hash_password(bootstrap_password)?;

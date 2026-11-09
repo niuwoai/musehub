@@ -4,8 +4,10 @@
 
 mod auth;
 mod bootstrap;
+mod codex;
 mod error;
 mod git_http;
+mod security;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,7 +62,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/agent-runs/{run_id}/cancel", post(cancel_agent_run))
         .route(
-            "/git/{org}/{repo}.git/{*git_path}",
+            "/git/{org}/{repo_git}/{*git_path}",
             axum::routing::any(git_smart_http),
         )
         .with_state(state)
@@ -345,6 +347,13 @@ async fn start_agent_run(
     }
     let run_id = Uuid::new_v4();
     let branch = format!("agent/{run_id}");
+    let default_branch: (String,) =
+        sqlx::query_as("SELECT default_branch FROM repositories WHERE id = $1")
+            .bind(repo_id)
+            .fetch_one(&state.pool)
+            .await?;
+    security::validate_agent_work_branch(&branch, &default_branch.0)
+        .map_err(AppError::Validation)?;
     sqlx::query(
         "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'running')",
@@ -467,18 +476,22 @@ async fn cancel_agent_run(
 async fn git_smart_http(
     State(state): State<Arc<AppState>>,
     method: Method,
-    Path((org, repo, git_path)): Path<(String, String, String)>,
+    Path((org, repo_git, git_path)): Path<(String, String, String)>,
     Query(query): Query<Vec<(String, String)>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
     let (user, pass) = basic_auth(&headers)?;
     let principal_id = authenticate_basic(&state.pool, &user, &pass).await?;
-    let storage_key = repo_storage_for_member(&state.pool, &org, &repo, principal_id)
+    let repo = repo_git.strip_suffix(".git").ok_or(AppError::Validation(
+        "repository URL must end with .git".to_string(),
+    ))?;
+    let storage_key = repo_storage_for_member(&state.pool, &org, repo, principal_id)
         .await?
         .2;
     let remote_user = user;
     let query_string = serde_urlencoded::to_string(&query).unwrap_or_default();
+    security::validate_git_suffix(&git_path).map_err(AppError::Validation)?;
     let suffix = if git_path.is_empty() {
         String::new()
     } else {

@@ -35,6 +35,11 @@ pub fn session_token() -> String {
     format!("{}{}", Uuid::new_v4(), Uuid::new_v4()).replace('-', "")
 }
 
+/// Returns whether a session token appears well-formed (opaque, non-guessable length).
+pub fn token_format_valid(token: &str) -> bool {
+    token.len() >= 32
+}
+
 pub fn hash_token(token: &str) -> Vec<u8> {
     let digest = Sha256::digest(token.as_bytes());
     digest.to_vec()
@@ -92,6 +97,9 @@ pub async fn logout(pool: &PgPool, token: &str) -> Result<(), AppError> {
 }
 
 pub async fn principal_from_session(pool: &PgPool, token: &str) -> Result<Uuid, AppError> {
+    if !token_format_valid(token) {
+        return Err(AppError::Unauthorized);
+    }
     let token_hash = hash_token(token);
     let row = sqlx::query_as::<_, (Uuid, OffsetDateTime, Option<OffsetDateTime>, String)>(
         "SELECT s.principal_id, s.expires_at, s.revoked_at, p.status

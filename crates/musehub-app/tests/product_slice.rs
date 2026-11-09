@@ -29,17 +29,23 @@ async fn login_create_repo_issue_reference_agent() {
     prepare(
         pool.clone(),
         git_root.path().to_path_buf(),
-        Some("slice-test-password"),
+        Some("Slice-Test-Bootstrap-Strong!1"),
     )
     .await
     .expect("prepare");
 
-    let adapter = std::env::var("CARGO_BIN_EXE_musehub-agent-reference")
+    let adapter = std::env::var("CARGO_BIN_EXE_musehub_agent_reference")
+        .ok()
+        .or_else(|| std::env::var("CARGO_BIN_EXE_musehub-agent-reference").ok())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("target/debug/musehub-agent-reference"));
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/musehub-agent-reference")
+        });
     assert!(
         adapter.is_file(),
-        "build musehub-agent-reference before product_slice test"
+        "missing {} (run: cargo build -p musehub-agent-adapter --bin musehub-agent-reference)",
+        adapter.display()
     );
     let state = Arc::new(AppState {
         pool: pool.clone(),
@@ -51,7 +57,7 @@ async fn login_create_repo_issue_reference_agent() {
 
     let login_body = serde_json::json!({
         "handle": "admin",
-        "password": "slice-test-password"
+        "password": "Slice-Test-Bootstrap-Strong!1"
     });
     let login = app
         .clone()

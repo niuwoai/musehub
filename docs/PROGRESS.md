@@ -5,6 +5,8 @@
 
 ## 本 PR 垂直切片目标
 
+**验收脚本**：`./scripts/verify-product-acceptance.sh`（需 Postgres；含 up → product_slice → down → up）。
+
 **可演示链路（Slice A）**：本地登录 → 创建组织内仓库（bare Git）→ `git clone/push`（HTTP Basic）→ 创建 Issue → 启动 **参考 Agent 适配器**（无模型）→ 产生可核对 Git 提交 → 取消运行无新提交。
 
 ## P0 清单

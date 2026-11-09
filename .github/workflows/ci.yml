@@ -31,7 +31,7 @@ jobs:
       MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
       MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
-      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v4
@@ -49,10 +49,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: migrate
         run: cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+      - name: build reference agent
+        run: cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
-      - name: product slice integration
-        run: cargo test -p musehub-app --test product_slice -- --test-threads=1
+      - name: product acceptance
+        run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
+      - name: security db tests
+        run: cargo test -p musehub-app --test security_db -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
