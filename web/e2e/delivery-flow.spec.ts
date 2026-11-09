@@ -152,7 +152,9 @@ test.describe('delivery chain browser flow', () => {
     const releaseDeploy = page.getByRole('button', { name: /release.*mock|mock 部署/i })
     await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
     await releaseDeploy.click()
-    await expect(page.getByTestId('delivery-trace')).toBeVisible({ timeout: 90_000 })
+    await expect(page.getByTestId('delivery-trace')).toBeVisible({
+      timeout: productOci ? 240_000 : 90_000,
+    })
     if (productOci) {
       await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
         timeout: 120_000,
