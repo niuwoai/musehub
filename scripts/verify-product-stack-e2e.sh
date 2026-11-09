@@ -158,10 +158,17 @@ pr_n=$(echo "$pr" | jq -r .number)
 pr_id=$(echo "$pr" | jq -r .id)
 
 echo "step=review_pr"
-curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
-  -d '{"decision":"approve"}' \
-  -o /dev/null -w "%{http_code}" \
-  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/reviews" | grep -q '^20'
+rev_me=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" "$BASE/api/v1/me")
+echo "$rev_me" | jq -e '.handle == "stack-rev"' >/dev/null
+rev_tmp=$(mktemp)
+rev_code=$(curl -sS -c "$REV_JAR" -b "$REV_JAR" -H 'Content-Type: application/json' \
+  -d '{"decision":"approve"}' -o "$rev_tmp" -w "%{http_code}" \
+  "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/reviews")
+[[ "$rev_code" =~ ^2 ]] || {
+  echo "review failed http=${rev_code} body=$(cat "$rev_tmp") rev_me=${rev_me}" >&2
+  exit 1
+}
+rm -f "$rev_tmp"
 
 attempt_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
 curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
