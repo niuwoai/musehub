@@ -12,6 +12,7 @@ import {
   createRepo,
   DeploymentTrace,
   getOrgSettings,
+  patchOrgSettings,
   grantRepoCollaborator,
   listRepoGrants,
   listRunnerTokens,
@@ -55,7 +56,8 @@ export default function App() {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
-  const [settings, setSettings] = useState<{ pipeline_executor: string } | null>(null)
+  const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
+  const [orgDisplayName, setOrgDisplayName] = useState('')
   const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
   const [grantHandle, setGrantHandle] = useState('')
   const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
@@ -98,7 +100,9 @@ export default function App() {
       setPulls(prs)
       const data = await listIssues(DEFAULT_ORG, slug)
       setIssues(data)
-      setSettings(await getOrgSettings(DEFAULT_ORG))
+      const s = await getOrgSettings(DEFAULT_ORG)
+      setSettings(s)
+      setOrgDisplayName(s.display_name)
       const g = await listRepoGrants(DEFAULT_ORG, slug)
       setGrants(g)
       const masked = await listRunnerTokens(DEFAULT_ORG)
@@ -275,10 +279,36 @@ export default function App() {
             <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
               {settings ? (
-                <p data-testid="org-settings">
-                  executor: {settings.pipeline_executor}
-                  {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
-                </p>
+                <div data-testid="org-settings">
+                  <label>
+                    Org display name
+                    <input
+                      data-testid="org-display-name"
+                      value={orgDisplayName}
+                      onChange={(e) => setOrgDisplayName(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    data-testid="save-org-settings"
+                    onClick={async () => {
+                      const next = await patchOrgSettings(DEFAULT_ORG, {
+                        display_name: orgDisplayName,
+                        preferences: {
+                          default_collaborator_role:
+                            settings.preferences.default_collaborator_role || 'reader',
+                        },
+                      })
+                      setSettings(next)
+                    }}
+                  >
+                    Save org settings
+                  </button>
+                  <p>
+                    executor: {settings.pipeline_executor}
+                    {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
+                  </p>
+                </div>
               ) : null}
               <div data-testid="repo-grants" style={{ marginBottom: '1rem' }}>
                 <strong>Repo grants</strong>

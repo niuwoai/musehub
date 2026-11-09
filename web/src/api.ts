@@ -271,8 +271,11 @@ export async function publishRelease(org: string, repo: string, releaseId: strin
 }
 
 export type OrgSettings = {
+  display_name: string
+  preferences: { default_collaborator_role: string }
   pipeline_executor: string
   require_pipeline_oci: boolean
+  runner_dependencies: string[]
 }
 
 export type RepoGrant = {
@@ -297,6 +300,16 @@ export type PatCreated = {
 
 export async function getOrgSettings(org: string) {
   return api<OrgSettings>(`/api/v1/orgs/${org}/settings`)
+}
+
+export async function patchOrgSettings(
+  org: string,
+  body: { display_name?: string; preferences?: { default_collaborator_role: string } },
+) {
+  return api<OrgSettings>(`/api/v1/orgs/${org}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 }
 
 export async function listRepoGrants(org: string, repo: string) {

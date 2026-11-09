@@ -20,12 +20,14 @@ pub mod lease;
 pub mod mcp;
 mod grants;
 mod members;
+mod org_config;
 pub mod runner_api;
 pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
 mod recovery;
+pub use artifacts::sha256_file as artifact_sha256_file;
 pub use pipeline::{execute_pipeline_job, seed_repo_environment};
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod pr;
@@ -898,8 +900,11 @@ struct CreatePatRequest {
 
 #[derive(Serialize)]
 struct OrgSettingsView {
+    pub display_name: String,
+    pub preferences: org_config::OrgPreferences,
     pub pipeline_executor: String,
     pub require_pipeline_oci: bool,
+    pub runner_dependencies: &'static [&'static str],
 }
 
 async fn org_settings_handler(
@@ -909,29 +914,76 @@ async fn org_settings_handler(
 ) -> Result<Json<OrgSettingsView>, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
     let org_id = org_id_for_member(&state.pool, &org, principal_id).await?;
-    let _ = org_id;
+    let display_name = org_config::load_display_name(&state.pool, org_id).await?;
+    let preferences = org_config::load_preferences(&state.pool, org_id).await?;
     Ok(Json(OrgSettingsView {
+        display_name,
+        preferences,
         pipeline_executor: if runner_api::pipeline_executor_remote() {
             "remote".to_string()
         } else {
             "inprocess".to_string()
         },
         require_pipeline_oci: state.require_pipeline_oci,
+        runner_dependencies: &[
+            "MUSEHUB_DATABASE_URL",
+            "MUSEHUB_GIT_ROOT",
+            "MUSEHUB_ARTIFACT_ROOT",
+            "shared volume with API",
+        ],
     }))
 }
 
 #[derive(Deserialize)]
 struct PatchOrgSettingsRequest {
-    /// Reserved for future mutable org flags (V1: read-only except grants via other routes).
-    _noop: Option<bool>,
+    pub display_name: Option<String>,
+    pub preferences: Option<org_config::OrgPreferences>,
 }
 
 async fn patch_org_settings_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(org): Path<String>,
-    Json(_body): Json<PatchOrgSettingsRequest>,
+    Json(body): Json<PatchOrgSettingsRequest>,
 ) -> Result<Json<OrgSettingsView>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let org_id = members::require_org_admin(&state.pool, &org, principal_id).await?;
+    let request_id = audit::request_id_from_headers(&headers);
+    if let Some(name) = body.display_name {
+        org_config::save_display_name(&state.pool, org_id, &name).await?;
+        let _ = audit::record(
+            &state.pool,
+            Some(org_id),
+            None,
+            principal_id,
+            None,
+            "org.settings.update",
+            "organization",
+            org_id,
+            request_id,
+            "allow",
+            serde_json::json!({ "field": "display_name" }),
+        )
+        .await;
+    }
+    if let Some(mut prefs) = body.preferences {
+        prefs.normalize()?;
+        org_config::save_preferences(&state.pool, org_id, &prefs).await?;
+        let _ = audit::record(
+            &state.pool,
+            Some(org_id),
+            None,
+            principal_id,
+            None,
+            "org.settings.update",
+            "organization",
+            org_id,
+            request_id,
+            "allow",
+            serde_json::json!({ "field": "preferences", "default_collaborator_role": prefs.default_collaborator_role }),
+        )
+        .await;
+    }
     org_settings_handler(State(state), headers, Path(org)).await
 }
 
