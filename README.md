@@ -70,8 +70,9 @@ musehub/
 
 ```sh
 cargo test --workspace
-# MCP 互操作矩阵（stdio 子进程客户端 + Streamable HTTP 客户端，无付费依赖）：
-cargo test -p musehub-mcp-probe --test matrix
+# MCP 互操作（先准备 Python 依赖，见 docs/m0-rmcp-matrix.md）：
+./scripts/setup-mcp-matrix-python-deps.sh
+cargo test -p musehub-mcp-probe -- --test-threads=1
 cargo run -p musehub-server
 yarn --cwd web install --frozen-lockfile
 yarn --cwd web test

@@ -35,7 +35,7 @@ const RUST_CLIENT_NAME: &str = "musehub-mcp-matrix-rust-rmcp";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct TransportReport {
     transport: String,
-    negotiated_protocol: String,
+    negotiated_protocol: Option<String>,
     tools_discovered: Vec<String>,
     checks: BTreeSet<String>,
 }
@@ -171,7 +171,7 @@ async fn exercise_rust_rmcp_client<H: rmcp::handler::client::ClientHandler + Sen
 
     TransportReport {
         transport: transport_label.to_string(),
-        negotiated_protocol: negotiated,
+        negotiated_protocol: Some(negotiated),
         tools_discovered: names,
         checks,
     }
@@ -191,9 +191,23 @@ fn python_run_to_transport(run: python_harness::PythonMatrixRun) -> TransportRep
     assert!(run.passed);
     TransportReport {
         transport: run.transport,
-        negotiated_protocol: run.negotiated_protocol,
+        negotiated_protocol: Some(run.negotiated_protocol),
         tools_discovered: run.tools_discovered,
         checks: run.checks.into_iter().collect(),
+    }
+}
+
+#[test]
+fn static_matrix_json_does_not_fake_runtime_protocol_versions() {
+    let raw: serde_json::Value =
+        serde_json::from_str(include_str!("../../../docs/m0-rmcp-matrix.json")).expect("json");
+    for client in raw["clients"].as_array().expect("clients") {
+        for transport in client["transports"].as_array().expect("transports") {
+            assert!(
+                transport["negotiated_protocol"].is_null(),
+                "static matrix must not embed forged negotiated_protocol"
+            );
+        }
     }
 }
 
@@ -349,5 +363,11 @@ fn matrix_document_matches_repo_evidence_schema() {
             .collect();
         assert!(transports.contains("stdio"));
         assert!(transports.contains("streamable_http"));
+        for transport in &client.transports {
+            assert!(
+                transport.negotiated_protocol.is_none(),
+                "static JSON must not store forged negotiated_protocol"
+            );
+        }
     }
 }

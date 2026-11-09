@@ -39,22 +39,42 @@ fn install_marker() -> PathBuf {
     python_deps_dir().join(format!(".mcp-{PYTHON_MCP_SDK_VERSION}-installed"))
 }
 
+pub fn python_deps_ready() -> bool {
+    install_marker().is_file() && python_deps_dir().join("mcp").exists()
+}
+
 static INSTALL_PYTHON_DEPS: Once = Once::new();
 
+/// Ensures Python `mcp==2.3.0` is importable from `target/mcp-matrix-pydeps`.
+///
+/// By default **does not** invoke pip during tests. Prepare deps with:
+/// `./scripts/setup-mcp-matrix-python-deps.sh`
+///
+/// Set `MUSEHUB_MCP_MATRIX_ALLOW_PIP=1` to allow one-shot pip install (needs network).
 pub fn ensure_python_mcp_sdk() {
-    if install_marker().is_file() {
+    if python_deps_ready() {
         return;
     }
-    INSTALL_PYTHON_DEPS.call_once(|| {
-        install_python_mcp_sdk_once();
-    });
-    if !install_marker().is_file() {
+    let allow_pip = std::env::var("MUSEHUB_MCP_MATRIX_ALLOW_PIP")
+        .ok()
+        .as_deref()
+        == Some("1");
+    if !allow_pip {
+        panic!(
+            "Python mcp=={PYTHON_MCP_SDK_VERSION} is not prepared in {}. \
+Run ./scripts/setup-mcp-matrix-python-deps.sh from the repo root \
+(or set MUSEHUB_MCP_MATRIX_ALLOW_PIP=1 to install during the test — requires network).",
+            python_deps_dir().display()
+        );
+    }
+    INSTALL_PYTHON_DEPS.call_once(install_python_mcp_sdk_once);
+    if !python_deps_ready() {
         install_python_mcp_sdk_once();
     }
 }
 
 fn install_python_mcp_sdk_once() {
-    if install_marker().is_file() {
+    if install_marker().is_file() && python_deps_dir().join("mcp").exists() {
         return;
     }
     let deps = python_deps_dir();

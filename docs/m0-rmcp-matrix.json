@@ -7,7 +7,14 @@
   "write_idempotency_verified": false,
   "m0_mcp_interop_matrix_passed": true,
   "m0_overall_passed": false,
-  "verification": "cargo test -p musehub-mcp-probe --test matrix (requires python3 + pip3 network on first run)",
+  "evidence_note": "negotiated_protocol and runtime check outcomes are produced by tests, not stored in this file",
+  "python_client_modes": {
+    "stdio": "2026-07-28",
+    "streamable_http": "legacy",
+    "streamable_http_bearer_reject": "legacy"
+  },
+  "rust_client_lifecycle": "ClientLifecycleMode::Auto (preferred 2026-07-28, legacy 2025-11-25)",
+  "verification": "See docs/m0-rmcp-matrix.md test taxonomy; run ./scripts/setup-mcp-matrix-python-deps.sh then cargo test -p musehub-mcp-probe",
   "clients": [
     {
       "client_implementation": "rust-rmcp",
@@ -16,7 +23,7 @@
       "transports": [
         {
           "transport": "stdio",
-          "negotiated_protocol": "runtime: cargo test",
+          "negotiated_protocol": null,
           "tools_discovered": [
             "musehub_capabilities_get",
             "musehub_probe_echo",
@@ -33,7 +40,7 @@
         },
         {
           "transport": "streamable_http",
-          "negotiated_protocol": "runtime: cargo test",
+          "negotiated_protocol": null,
           "tools_discovered": [
             "musehub_capabilities_get",
             "musehub_probe_echo",
@@ -58,7 +65,7 @@
       "transports": [
         {
           "transport": "stdio",
-          "negotiated_protocol": "runtime: cargo test",
+          "negotiated_protocol": null,
           "tools_discovered": [
             "musehub_capabilities_get",
             "musehub_probe_echo",
@@ -76,7 +83,7 @@
         },
         {
           "transport": "streamable_http",
-          "negotiated_protocol": "runtime: cargo test",
+          "negotiated_protocol": null,
           "tools_discovered": [
             "musehub_capabilities_get",
             "musehub_probe_echo",

@@ -260,21 +260,31 @@ pub async fn serve_http_probe(
     Ok(address)
 }
 
+/// Returns the Bearer token value when the header matches `Bearer <token>` exactly.
+pub fn parse_bearer_token(authorization_header: Option<&str>) -> Option<&str> {
+    authorization_header?
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+}
+
+/// Probe HTTP gate: `/mcp` requires `Authorization: Bearer <expected>`; `/healthz` is open.
+pub fn bearer_matches_path(path: &str, authorization_header: Option<&str>, expected: &str) -> bool {
+    if !path.starts_with("/mcp") {
+        return true;
+    }
+    parse_bearer_token(authorization_header) == Some(expected)
+}
+
 async fn require_bearer_for_mcp(
     axum::extract::State(expected): axum::extract::State<Arc<str>>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if !request.uri().path().starts_with("/mcp") {
-        return Ok(next.run(request).await);
-    }
-    let provided = request
+    let header = request
         .headers()
         .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if provided != expected.as_ref() {
+        .and_then(|value| value.to_str().ok());
+    if !bearer_matches_path(request.uri().path(), header, expected.as_ref()) {
         return Err(StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(request).await)
@@ -290,6 +300,54 @@ pub fn echo_arguments(message: &str) -> JsonObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_bearer_token_rejects_missing_or_malformed() {
+        assert_eq!(parse_bearer_token(None), None);
+        assert_eq!(parse_bearer_token(Some("Basic abc")), None);
+        assert_eq!(parse_bearer_token(Some("Bearer")), None);
+        assert_eq!(parse_bearer_token(Some("Bearer ")), None);
+        assert_eq!(parse_bearer_token(Some("Bearer secret")), Some("secret"));
+    }
+
+    #[test]
+    fn bearer_matches_path_only_guards_mcp() {
+        assert!(bearer_matches_path("/healthz", None, "x"));
+        assert!(!bearer_matches_path("/mcp", None, "x"));
+        assert!(bearer_matches_path("/mcp", Some("Bearer token"), "token"));
+        assert!(!bearer_matches_path("/mcp", Some("Bearer wrong"), "token"));
+    }
+
+    #[test]
+    fn domain_error_envelope_has_no_data() {
+        let envelope = ToolEnvelope::domain_error("CODE", "msg", true);
+        assert!(envelope.data.is_none());
+        assert_eq!(envelope.error.as_ref().unwrap().code, "CODE");
+        assert!(envelope.error.as_ref().unwrap().retryable);
+    }
+
+    #[test]
+    fn capability_payload_states_non_production() {
+        let value = ProbeServer::capability_payload("stdio");
+        assert_eq!(value["probe_scope"], PROBE_SCOPE);
+        assert_eq!(value["production_claim"], false);
+        assert_eq!(value["limits"]["idempotency_write_tools_verified"], false);
+    }
+
+    #[test]
+    fn echo_arguments_sets_message_field_only() {
+        let args = echo_arguments("hi");
+        assert_eq!(args.len(), 1);
+        assert_eq!(args.get("message").and_then(|v| v.as_str()), Some("hi"));
+    }
+
+    #[test]
+    fn expected_probe_tools_are_unique() {
+        let mut names: Vec<_> = EXPECTED_PROBE_TOOLS.to_vec();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 3);
+    }
 
     #[test]
     fn envelope_success_shape_matches_contract() {

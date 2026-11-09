@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased] — 0.1.0-rc3
+## [Unreleased] — 0.1.0-rc4
+
+### Fixed
+
+- MCP 测试：默认禁止测试进程内 `pip`；新增 `scripts/setup-mcp-matrix-python-deps.sh`。
+- 静态 `m0-rmcp-matrix.json` 不再伪造 `negotiated_protocol`；Python Bearer 负例与 HTTP 一致使用 `legacy` 模式。
+- 增补 Bearer 门控、探针级 E2E mock 与 lib 单元测试。
+
+## [0.1.0-rc3]
 
 开发中版本，不是产品发布（`v0.1.0-rc2` Git 标签为历史推送，不代表本轮发布）。
 

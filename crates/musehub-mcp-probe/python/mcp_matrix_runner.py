@@ -18,6 +18,10 @@ CLIENT_NAME = "musehub-mcp-matrix-python"
 PROBE_SCOPE = "m0_mcp_probe"
 MCP_CONTRACT_VERSION = 1
 SAMPLE_ERROR_CODE = "PROBE_SAMPLE_ERROR"
+PYTHON_STDIO_CLIENT_MODE = "2026-07-28"
+PYTHON_HTTP_CLIENT_MODE = "legacy"
+PYTHON_HTTP_BEARER_REJECT_MODE = "legacy"
+
 EXPECTED_TOOLS = (
     "musehub_capabilities_get",
     "musehub_probe_echo",
@@ -87,7 +91,7 @@ async def run_stdio(stdio_bin: str) -> dict[str, Any]:
     from mcp import Client, StdioServerParameters
 
     server = StdioServerParameters(command=stdio_bin, args=[])
-    async with Client(server, mode="2026-07-28") as client:
+    async with Client(server, mode=PYTHON_STDIO_CLIENT_MODE) as client:
         body = await _exercise(client, bearer_gate=False)
     return {
         "client_implementation": CLIENT_IMPLEMENTATION,
@@ -110,7 +114,7 @@ async def run_http(url: str, bearer: str) -> dict[str, Any]:
     ) as http_client:
         transport = streamable_http_client(url, http_client=http_client)
         # rmcp probe server uses classic initialize over Streamable HTTP sessions.
-        async with Client(transport, mode="legacy") as client:
+        async with Client(transport, mode=PYTHON_HTTP_CLIENT_MODE) as client:
             body = await _exercise(client, bearer_gate=True)
     return {
         "client_implementation": CLIENT_IMPLEMENTATION,
@@ -130,7 +134,7 @@ async def verify_http_bearer_rejects(url: str) -> dict[str, Any]:
     async with httpx2.AsyncClient(timeout=httpx2.Timeout(10.0)) as http_client:
         transport = streamable_http_client(url, http_client=http_client)
         try:
-            async with Client(transport, mode="2026-07-28") as _client:
+            async with Client(transport, mode=PYTHON_HTTP_BEARER_REJECT_MODE) as _client:
                 raise RuntimeError("missing bearer must not initialize")
         except Exception:
             return {"transport": "streamable_http", "check": "missing_bearer_rejected", "passed": True}
