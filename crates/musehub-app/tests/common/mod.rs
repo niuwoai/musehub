@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use musehub_app::agent_supervisor::new_supervisor;
+use musehub_app::pipeline_supervisor::PipelineSupervisor;
 use musehub_app::{prepare, product_router, AppState};
 use musehub_migrate::{load_migrations, migrate_down, migrate_up};
 use sqlx::postgres::PgPoolOptions;
@@ -60,9 +61,23 @@ pub async fn product_app(
     let state = Arc::new(AppState {
         pool,
         git_root: git_root.to_path_buf(),
+        artifact_root: git_root.join("artifacts"),
         bind_display: "127.0.0.1".to_string(),
         reference_adapter_bin: reference_adapter_bin(),
+        pipeline_adapter_bin: std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-pipeline-reference")
+            }),
+        compose_adapter_bin: std::env::var("CARGO_BIN_EXE_musehub-compose-mock")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-compose-mock")
+            }),
         supervisor: new_supervisor(),
+        pipeline_supervisor: PipelineSupervisor::new(),
     });
     product_router(state)
 }

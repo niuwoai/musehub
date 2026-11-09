@@ -120,6 +120,10 @@ async fn insert_pr_checks(
     Ok(())
 }
 
+pub(crate) fn git_rev_parse_public(bare: &Path, refspec: &str) -> Result<String, AppError> {
+    git_rev_parse(bare, refspec)
+}
+
 fn git_rev_parse(bare: &Path, refspec: &str) -> Result<String, AppError> {
     let output = Command::new("git")
         .args([
@@ -470,6 +474,185 @@ pub async fn set_pull_request_check(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct RunnerCheckReport {
+    pub pr_number: i64,
+    pub check_name: String,
+    pub head_oid: String,
+    pub state: String,
+    pub attempt_id: Uuid,
+    pub pipeline_run_id: Uuid,
+}
+
+fn bearer_token(headers: &axum::http::HeaderMap) -> Result<String, AppError> {
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let Some(token) = auth.strip_prefix("Bearer ") else {
+        return Err(AppError::Unauthorized);
+    };
+    Ok(token.trim().to_string())
+}
+
+pub async fn runner_report_check(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo)): AxumPath<(String, String)>,
+    Json(body): Json<RunnerCheckReport>,
+) -> Result<StatusCode, AppError> {
+    let token = bearer_token(&headers)?;
+    let pat_ctx = super::pat_auth::authenticate_pat_context(&state.pool, &token).await?;
+    if !super::pat_auth::scope_allows(&pat_ctx.scopes, "checks:write") {
+        return Err(AppError::Forbidden);
+    }
+    if !super::pat_policy::is_runner_only_pat(&pat_ctx.scopes) {
+        return Err(AppError::Forbidden);
+    }
+    let org_id = super::org_id_for_member(&state.pool, &org, pat_ctx.principal_id).await?;
+    if super::pat_policy::principal_is_privileged_org_member(
+        &state.pool,
+        org_id,
+        pat_ctx.principal_id,
+    )
+    .await?
+    {
+        return Err(AppError::Forbidden);
+    }
+    if !super::pat_auth::pat_org_allowed(pat_ctx.org_id, org_id) {
+        return Err(AppError::Forbidden);
+    }
+    let row = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT r.id, r.storage_key FROM repositories r
+         WHERE r.org_id = $1 AND r.slug_normalized = $2",
+    )
+    .bind(org_id)
+    .bind(repo.to_lowercase())
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((repo_id, storage_key)) = row else {
+        return Err(AppError::NotFound);
+    };
+    let pipe = sqlx::query_as::<_, (String, Uuid, String, Uuid, String)>(
+        "SELECT state, run_attempt_id, source_oid, org_id, run_kind FROM pipeline_runs
+         WHERE id = $1 AND repo_id = $2",
+    )
+    .bind(body.pipeline_run_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((pipe_state, run_attempt, pipe_source, pipe_org, run_kind)) = pipe else {
+        return Err(AppError::NotFound);
+    };
+    if run_kind != "pr_validation" {
+        return Err(AppError::Validation(
+            "check reports must reference a pr_validation pipeline run (not release_build)"
+                .to_string(),
+        ));
+    }
+    if pipe_org != org_id {
+        return Err(AppError::Forbidden);
+    }
+    if pipe_source != body.head_oid {
+        return Err(AppError::Validation(
+            "head_oid must match pipeline source_oid".to_string(),
+        ));
+    }
+    if pipe_state != "succeeded" {
+        return Err(AppError::Validation(
+            "pipeline must succeed before check report".to_string(),
+        ));
+    }
+    if run_attempt != body.attempt_id {
+        return Err(AppError::Validation(
+            "attempt_id must match pipeline run_attempt_id".to_string(),
+        ));
+    }
+    let state_name = body.state.to_lowercase();
+    if !matches!(state_name.as_str(), "success" | "failure") {
+        return Err(AppError::Validation("invalid check state".to_string()));
+    }
+    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        "SELECT id, author_id, source_branch, state FROM pull_requests WHERE repo_id = $1 AND number = $2",
+    )
+    .bind(repo_id)
+    .bind(body.pr_number)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((pr_id, author_id, source_branch, pr_state)) = pr else {
+        return Err(AppError::NotFound);
+    };
+    if pr_state != "open" {
+        return Err(AppError::Validation("pull request is not open".to_string()));
+    }
+    if pat_ctx.principal_id == author_id {
+        return Err(AppError::Forbidden);
+    }
+    let bare = bare_repo_path(&state.git_root, &storage_key);
+    let live_head = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
+    if live_head != body.head_oid {
+        return Err(AppError::Validation(
+            "head_oid does not match current source branch".to_string(),
+        ));
+    }
+    let used: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM runner_check_receipts WHERE attempt_id = $1")
+            .bind(body.attempt_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if used.0 > 0 {
+        return Err(AppError::Validation(
+            "attempt_id already consumed".to_string(),
+        ));
+    }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO runner_check_receipts (id, org_id, repo_id, pipeline_run_id, attempt_id,
+         pr_id, check_name, head_oid, reported_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(body.pipeline_run_id)
+    .bind(body.attempt_id)
+    .bind(pr_id)
+    .bind(&body.check_name)
+    .bind(&body.head_oid)
+    .bind(pat_ctx.principal_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(db) = &e {
+            if db.constraint().is_some() {
+                return AppError::Validation("attempt_id already consumed".to_string());
+            }
+        }
+        AppError::Database(e)
+    })?;
+    let updated = sqlx::query(
+        "UPDATE pr_check_runs SET state = $4, reported_by = $5, attempt_id = $6,
+         expires_at = CURRENT_TIMESTAMP + INTERVAL '7 days', updated_at = CURRENT_TIMESTAMP
+         WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3",
+    )
+    .bind(pr_id)
+    .bind(&body.check_name)
+    .bind(&body.head_oid)
+    .bind(&state_name)
+    .bind(pat_ctx.principal_id)
+    .bind(body.attempt_id)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() == 0 {
+        tx.rollback().await.ok();
+        return Err(AppError::Validation(
+            "check run missing for current head (sync PR first)".to_string(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn merge_preconditions(
     pool: &sqlx::PgPool,
     pr_id: Uuid,
@@ -589,13 +772,12 @@ pub async fn merge_pull_request(
     let merged_oid = merge_with_cas(&bare, &target_branch, &base_oid, &live_head)?;
     sqlx::query(
         "UPDATE pull_requests SET state = 'merged', merged_oid = $2, merged_by = $3,
-         merged_at = CURRENT_TIMESTAMP, head_oid = $4, updated_at = CURRENT_TIMESTAMP
+         merged_at = CURRENT_TIMESTAMP, head_oid = $2, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND state = 'open'",
     )
     .bind(pr_id)
     .bind(&merged_oid)
     .bind(principal_id)
-    .bind(&live_head)
     .execute(&state.pool)
     .await?;
     let title: (String,) = sqlx::query_as("SELECT title FROM pull_requests WHERE id = $1")

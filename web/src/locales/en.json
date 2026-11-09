@@ -10,9 +10,18 @@
     "signedInAs": "Signed in as",
     "createRepo": "Create repository",
     "createIssue": "Create issue",
+    "refreshRepo": "Refresh",
     "runReferenceAgent": "Run reference agent (no model)",
     "acceptPlan": "Accept plan",
     "cancelAgent": "Cancel agent run",
-    "createPullRequest": "Create pull request"
+    "createPullRequest": "Create pull request",
+    "deliveryTitle": "Delivery chain",
+    "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
+    "runPipelineOnMain": "Run pipeline on merged main tip",
+    "releaseAndDeployMock": "Release + mock deploy",
+    "viewTrace": "View deployment trace",
+    "mergeShortcut": "Approve, check, merge (demo; needs CI reporter in real gates)",
+    "noMergedPr": "No merged PR with main tip yet — merge via review + checks first.",
+    "traceGaps": "Trace gaps (not fabricated)"
   }
 }

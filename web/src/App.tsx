@@ -8,17 +8,28 @@ import {
   createIssue,
   createPlan,
   createPullRequest,
+  createRelease,
   createRepo,
+  DeploymentTrace,
   getAgentRun,
+  getDeploymentTrace,
   Issue,
   listIssues,
   listPullRequests,
   listRepos,
   login,
   me,
+  mergePullRequest,
+  PipelineRun,
+  pollPipeline,
+  publishRelease,
   PullRequest,
   Repository,
+  setPullRequestCheck,
   startAgentRun,
+  startDeployment,
+  startPipeline,
+  submitReview,
 } from './api'
 
 const appVersion = import.meta.env.VITE_APP_VERSION
@@ -37,6 +48,9 @@ export default function App() {
   const [lastRun, setLastRun] = useState<AgentRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loginForm, setLoginForm] = useState({ handle: 'admin', password: '' })
+  const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
+  const [deploymentId, setDeploymentId] = useState<string | null>(null)
+  const [trace, setTrace] = useState<DeploymentTrace | null>(null)
 
   useEffect(() => {
     me()
@@ -70,10 +84,15 @@ export default function App() {
 
   async function loadIssues(slug: string) {
     setSelectedRepo(slug)
-    const data = await listIssues(DEFAULT_ORG, slug)
-    setIssues(data)
-    const prs = await listPullRequests(DEFAULT_ORG, slug)
-    setPulls(prs)
+    setError(null)
+    try {
+      const prs = await listPullRequests(DEFAULT_ORG, slug)
+      setPulls(prs)
+      const data = await listIssues(DEFAULT_ORG, slug)
+      setIssues(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed to load repository')
+    }
   }
 
   async function onCreateIssue() {
@@ -131,6 +150,74 @@ export default function App() {
     await loadIssues(selectedRepo)
   }
 
+  const mergedPr = pulls.find((p) => p.state === 'merged' && p.head_oid)
+
+  async function onApproveAndMerge(pr: PullRequest) {
+    if (!selectedRepo) return
+    setError(null)
+    try {
+      await submitReview(DEFAULT_ORG, selectedRepo, pr.number, 'approve')
+      const attempt = crypto.randomUUID()
+      await setPullRequestCheck(
+        DEFAULT_ORG,
+        selectedRepo,
+        pr.number,
+        'product-ci',
+        'success',
+        attempt,
+      )
+      await mergePullRequest(DEFAULT_ORG, selectedRepo, pr.number)
+      await loadIssues(selectedRepo)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'merge failed')
+    }
+  }
+
+  async function onRunDeliveryPipeline() {
+    if (!selectedRepo || !mergedPr?.head_oid) return
+    setError(null)
+    try {
+      const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
+      setPipelineRun(run)
+      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, run.id)
+      setPipelineRun(done)
+      if (done.state !== 'succeeded') {
+        throw new Error(done.error_code ?? done.state)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'pipeline failed')
+    }
+  }
+
+  async function onReleaseAndDeploy() {
+    if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
+      return
+    }
+    setError(null)
+    try {
+      const version = `0.0.${Date.now().toString(36)}`
+      const rel = await createRelease(DEFAULT_ORG, selectedRepo, {
+        version,
+        tag_name: `v${version}`,
+        commit_oid: mergedPr.head_oid,
+        pipeline_run_id: pipelineRun.id,
+        pr_id: mergedPr.id,
+      })
+      await publishRelease(DEFAULT_ORG, selectedRepo, rel.id)
+      const dep = await startDeployment(DEFAULT_ORG, selectedRepo, rel.id)
+      setDeploymentId(dep.id)
+      const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+      setTrace(tv)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'release/deploy failed')
+    }
+  }
+
+  async function onLoadTrace() {
+    if (!selectedRepo || !deploymentId) return
+    setTrace(await getDeploymentTrace(DEFAULT_ORG, selectedRepo, deploymentId))
+  }
+
   return (
     <main
       style={{
@@ -174,6 +261,13 @@ export default function App() {
           {selectedRepo ? (
             <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
+              <button
+                type="button"
+                data-testid="refresh-repo"
+                onClick={() => void loadIssues(selectedRepo)}
+              >
+                {t('app.refreshRepo')}
+              </button>
               <button type="button" onClick={() => void onCreateIssue()}>
                 {t('app.createIssue')}
               </button>
@@ -217,10 +311,61 @@ export default function App() {
                     <li key={pr.id}>
                       #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} →{' '}
                       {pr.target_branch}
+                      {pr.state === 'open' ? (
+                        <button type="button" onClick={() => void onApproveAndMerge(pr)}>
+                          {t('app.mergeShortcut')}
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
               ) : null}
+              <Panel style={{ marginTop: '1rem' }} data-testid="delivery-panel">
+                <h3>{t('app.deliveryTitle')}</h3>
+                <p style={{ color: '#9a6700' }}>{t('app.deliveryMockNote')}</p>
+                {mergedPr?.head_oid ? (
+                  <>
+                    <p>
+                      main @{mergedPr.head_oid.slice(0, 7)} (PR #{mergedPr.number})
+                    </p>
+                    {pipelineRun ? (
+                      <p data-testid="pipeline-state">
+                        pipeline {pipelineRun.id.slice(0, 8)}… {pipelineRun.state}
+                      </p>
+                    ) : null}
+                    <button type="button" onClick={() => void onRunDeliveryPipeline()}>
+                      {t('app.runPipelineOnMain')}
+                    </button>
+                    <button type="button" onClick={() => void onReleaseAndDeploy()}>
+                      {t('app.releaseAndDeployMock')}
+                    </button>
+                    {deploymentId ? (
+                      <button type="button" onClick={() => void onLoadTrace()}>
+                        {t('app.viewTrace')}
+                      </button>
+                    ) : null}
+                    {trace ? (
+                      <pre data-testid="delivery-trace" style={{ fontSize: '0.85rem' }}>
+                        {JSON.stringify(
+                          {
+                            adapter: trace.deployment_adapter,
+                            mock: trace.adapter_is_mock,
+                            gaps: trace.gaps,
+                            artifacts: trace.artifacts.length,
+                          },
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    ) : null}
+                    {trace && trace.gaps.length > 0 ? (
+                      <p role="status">{t('app.traceGaps')}: {trace.gaps.join(', ')}</p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p>{t('app.noMergedPr')}</p>
+                )}
+              </Panel>
             </Panel>
           ) : null}
         </section>
@@ -256,7 +401,8 @@ export default function App() {
 function Panel({
   children,
   style,
-}: {
+  ...rest
+}: React.HTMLAttributes<HTMLDivElement> & {
   children: React.ReactNode
   style?: React.CSSProperties
 }) {
@@ -269,6 +415,7 @@ function Panel({
         padding: '1rem',
         ...style,
       }}
+      {...rest}
     >
       {children}
     </div>

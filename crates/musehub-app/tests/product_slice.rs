@@ -56,9 +56,23 @@ async fn login_create_repo_issue_reference_agent() {
     let state = Arc::new(AppState {
         pool: pool.clone(),
         git_root: git_root.path().to_path_buf(),
+        artifact_root: git_root.path().join("artifacts"),
         bind_display: "127.0.0.1:8080".to_string(),
-        reference_adapter_bin: adapter,
+        reference_adapter_bin: adapter.clone(),
+        pipeline_adapter_bin: std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-pipeline-reference")
+            }),
+        compose_adapter_bin: std::env::var("CARGO_BIN_EXE_musehub-compose-mock")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-compose-mock")
+            }),
         supervisor: new_supervisor(),
+        pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
     });
     let app = product_router(state);
 

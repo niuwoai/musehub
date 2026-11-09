@@ -21,3 +21,11 @@ path = "src/bin/musehub_agent_reference.rs"
 [[bin]]
 name = "musehub-agent-codex-sim"
 path = "src/bin/musehub_agent_codex_sim.rs"
+
+[[bin]]
+name = "musehub-pipeline-reference"
+path = "src/bin/musehub_pipeline_reference.rs"
+
+[[bin]]
+name = "musehub-compose-mock"
+path = "src/bin/musehub_compose_mock.rs"
