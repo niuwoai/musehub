@@ -2,12 +2,10 @@
 
 mod common;
 
-use std::time::Duration;
-
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use musehub_app::lease::{try_reclaim_expired_pipeline, renew_pipeline_work_lease};
+use musehub_app::lease::{renew_pipeline_work_lease, try_reclaim_expired_pipeline};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -37,10 +35,8 @@ async fn mint_runner_pat(app: &axum::Router, admin_cookie: &str, repo_id: Uuid) 
         )
         .await
         .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(
-        &pat_resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     (
         body["token"].as_str().unwrap().to_string(),
         Uuid::parse_str(body["id"].as_str().unwrap()).unwrap(),
@@ -86,13 +82,12 @@ async fn runner_recovery_matrix() {
         )
         .await
         .unwrap();
-    let repo_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM repositories WHERE slug = 'recv-pipe'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .0;
+    let repo_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'recv-pipe'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     app.clone()
         .oneshot(
             Request::builder()
@@ -100,7 +95,9 @@ async fn runner_recovery_matrix() {
                 .uri("/api/v1/orgs/demo/repos/recv-pipe/collaborators")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &admin_cookie)
-                .body(Body::from(r#"{"handle":"recovery-runner","role":"developer"}"#))
+                .body(Body::from(
+                    r#"{"handle":"recovery-runner","role":"developer"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -108,18 +105,18 @@ async fn runner_recovery_matrix() {
     let (token, token_id) = mint_runner_pat(&app, &admin_cookie, repo_id).await;
     let run_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
-    let admin_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM principals WHERE handle_normalized = 'admin'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
+    let admin_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM principals WHERE handle_normalized = 'admin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
          requested_by, run_attempt_id, run_kind, lease_holder, lease_epoch)
@@ -173,7 +170,9 @@ async fn runner_recovery_matrix() {
     .await
     .unwrap();
     let new_worker = Uuid::new_v4();
-    let reclaim = try_reclaim_expired_pipeline(&pool, run_id, new_worker).await.unwrap();
+    let reclaim = try_reclaim_expired_pipeline(&pool, run_id, new_worker)
+        .await
+        .unwrap();
     assert!(reclaim.epoch > 1);
     assert!(
         !musehub_app::try_publish_stale_pipeline_success_for_test(
@@ -200,7 +199,9 @@ async fn runner_recovery_matrix() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/orgs/demo/repos/recv-pipe/pipeline-runs/{run_id}/cancel"))
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/recv-pipe/pipeline-runs/{run_id}/cancel"
+                ))
                 .header(header::COOKIE, &admin_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -224,22 +225,20 @@ async fn runner_recovery_matrix() {
     .execute(&pool)
     .await
     .unwrap();
-    assert!(renew_pipeline_work_lease(&pool, run_id, runner_a, 6).await.is_ok());
-    sqlx::query(
-        "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(token_id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    assert!(renew_pipeline_work_lease(&pool, run_id, runner_a, 6)
+        .await
+        .is_ok());
+    sqlx::query("UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1")
+        .bind(token_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let renew_resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/api/v1/runner/pipeline-runs/{run_id}/lease/renew"
-                ))
+                .uri(format!("/api/v1/runner/pipeline-runs/{run_id}/lease/renew"))
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-musehub-runner-id", runner_a.to_string())

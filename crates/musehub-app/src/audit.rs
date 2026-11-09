@@ -109,7 +109,7 @@ pub async fn query_org_audit(
     .bind(limit)
     .fetch_all(pool)
     .await?;
-     Ok(rows
+    Ok(rows
         .into_iter()
         .map(
             |(id, o, r, actor, action, rt, rid, decision, meta, at)| AuditEventView {
@@ -139,14 +139,7 @@ pub async fn list_org_audit(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let org_id = super::org_id_for_member(&state.pool, &org, principal_id).await?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    let items = query_org_audit(
-        &state.pool,
-        org_id,
-        None,
-        query.resource_type,
-        None,
-        limit,
-    )
-    .await?;
+    let items =
+        query_org_audit(&state.pool, org_id, None, query.resource_type, None, limit).await?;
     Ok(Json(items))
 }

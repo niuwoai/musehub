@@ -246,9 +246,9 @@ async fn runner_two_release_rollback_http_and_trace() {
         .await
         .unwrap();
 
-    let (rel_a, _, pipe_a) =
+    let (rel_a, _, _pipe_a) =
         seed_oci_release(&pool, git_root.path(), "oci-rb-two", &oid1, &ref1, "0.0.1").await;
-    let (rel_b, _, pipe_b) =
+    let (rel_b, _, _pipe_b) =
         seed_oci_release(&pool, git_root.path(), "oci-rb-two", &oid2, &ref2, "0.0.2").await;
     let dep_a = deploy_release(&app, &cookie, "oci-rb-two", rel_a).await;
     assert_eq!(

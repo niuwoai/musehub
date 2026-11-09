@@ -116,7 +116,8 @@ pub async fn read_resource(state: &AppState, uri: &str) -> Result<ReadResourceRe
             let revision: i32 = rev_str
                 .parse()
                 .map_err(|_| ErrorData::invalid_params("invalid issue revision", None))?;
-            return super::resource_reads::read_issue_revision(state, issue_id, revision, uri).await;
+            return super::resource_reads::read_issue_revision(state, issue_id, revision, uri)
+                .await;
         }
     }
     if let Some(rest) = uri.strip_prefix(PR_REV_PREFIX) {

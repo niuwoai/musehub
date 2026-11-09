@@ -7,7 +7,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use musehub_app::{boot_reconcile, lease, prepare, product_router, AppState as ProductState};
+use musehub_app::{
+    boot_reconcile, compose_mode_from_env, lease, prepare, product_router, runner_api,
+    AppState as ProductState, ComposeAdapterMode,
+};
 use musehub_core::version;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -35,6 +38,17 @@ struct ReadinessChecks {
     database: &'static str,
     git_storage: &'static str,
     product_api: &'static str,
+    /// `mock` default in product image; use `runner` + verified OCI path for real compose.
+    compose_adapter_mode: &'static str,
+    pipeline_executor: &'static str,
+}
+
+fn compose_adapter_mode_label() -> &'static str {
+    match compose_mode_from_env() {
+        ComposeAdapterMode::Mock => "mock",
+        ComposeAdapterMode::Runner => "runner",
+        ComposeAdapterMode::Auto => "auto",
+    }
 }
 
 #[derive(Serialize)]
@@ -101,6 +115,12 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 database,
                 git_storage,
                 product_api,
+                compose_adapter_mode: compose_adapter_mode_label(),
+                pipeline_executor: if runner_api::pipeline_executor_remote() {
+                    "remote"
+                } else {
+                    "in_process"
+                },
             },
         }),
     )

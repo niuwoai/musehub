@@ -130,6 +130,7 @@ pub async fn start_deployment(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn mcp_rollback_deployment(
     state: &Arc<crate::AppState>,
     org_id: Uuid,

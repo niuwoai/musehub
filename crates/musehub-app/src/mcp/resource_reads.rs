@@ -127,7 +127,8 @@ pub async fn read_repo_commit_file(
     let output = std::process::Command::new("git")
         .args([
             "--git-dir",
-            bare.to_str().ok_or_else(|| ErrorData::internal_error("git path", None))?,
+            bare.to_str()
+                .ok_or_else(|| ErrorData::internal_error("git path", None))?,
             "show",
             &spec,
         ])
@@ -139,7 +140,11 @@ pub async fn read_repo_commit_file(
     let bytes = output.stdout;
     const MAX_BYTES: usize = 512_000;
     let truncated = bytes.len() > MAX_BYTES;
-    let slice = if truncated { &bytes[..MAX_BYTES] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..MAX_BYTES]
+    } else {
+        &bytes[..]
+    };
     let content = String::from_utf8_lossy(slice).into_owned();
     let body_json = serde_json::json!({
         "repository_id": repo_id.to_string(),

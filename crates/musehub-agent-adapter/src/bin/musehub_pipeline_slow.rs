@@ -22,9 +22,7 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .filter(|&s| s > 0 && s <= 3600)
         .unwrap_or(120);
-    println!(
-        r#"{{"type":"started","source_oid":"{source_oid}","run_id":"{run_id}"}}"#
-    );
+    println!(r#"{{"type":"started","source_oid":"{source_oid}","run_id":"{run_id}"}}"#);
     println!(r#"{{"type":"holding","seconds":{hold_secs}}}"#);
     thread::sleep(Duration::from_secs(hold_secs));
     let tree = Command::new("git")

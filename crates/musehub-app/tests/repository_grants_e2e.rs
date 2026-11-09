@@ -125,10 +125,8 @@ async fn member_sees_only_granted_repos_and_selected_pat_denies_peer_repo() {
         )
         .await
         .unwrap();
-    let token: serde_json::Value = serde_json::from_slice(
-        &pat.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let token: serde_json::Value =
+        serde_json::from_slice(&pat.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let pat_str = token["token"].as_str().unwrap();
     let basic = |token: &str| {
         format!(

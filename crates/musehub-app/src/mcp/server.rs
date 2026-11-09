@@ -1369,19 +1369,18 @@ impl ProductionMcpServer {
             None => None,
         };
         if let Some(rid) = repo_id {
-            let belongs: Option<(i32,)> = sqlx::query_as(
-                "SELECT 1 FROM repositories WHERE id = $1 AND org_id = $2",
-            )
-            .bind(rid)
-            .bind(org_id)
-            .fetch_optional(&self.state.pool)
-            .await
-            .map_err(|e| app_error_to_mcp(e.into()))?;
+            let belongs: Option<(i32,)> =
+                sqlx::query_as("SELECT 1 FROM repositories WHERE id = $1 AND org_id = $2")
+                    .bind(rid)
+                    .bind(org_id)
+                    .fetch_optional(&self.state.pool)
+                    .await
+                    .map_err(|e| app_error_to_mcp(e.into()))?;
             if belongs.is_none() {
                 return Ok(domain_err(AppError::NotFound));
             }
         }
-        let limit = page_limit(input.page.limit) as i64;
+        let limit = page_limit(input.page.limit);
         let items = crate::audit::query_org_audit(
             &self.state.pool,
             org_id,
@@ -1391,7 +1390,7 @@ impl ProductionMcpServer {
             limit,
         )
         .await
-        .map_err(|e| app_error_to_mcp(e.into()))?;
+        .map_err(app_error_to_mcp)?;
         let rows: Vec<Value> = items
             .into_iter()
             .map(|e| {

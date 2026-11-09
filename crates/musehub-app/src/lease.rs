@@ -210,7 +210,10 @@ pub async fn finalize_pipeline_job_state(
     Ok(updated.rows_affected() == 1)
 }
 
-pub async fn bump_pipeline_run_epoch_for_test(pool: &PgPool, run_id: Uuid) -> Result<i64, AppError> {
+pub async fn bump_pipeline_run_epoch_for_test(
+    pool: &PgPool,
+    run_id: Uuid,
+) -> Result<i64, AppError> {
     let row = sqlx::query_as::<_, (i64,)>(
         "UPDATE pipeline_runs SET lease_epoch = lease_epoch + 1, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 RETURNING lease_epoch",

@@ -464,13 +464,29 @@ pub async fn execute_pipeline_job(
     let artifact_id = Uuid::new_v4();
     let dir = artifact_storage_dir(&artifact_root, org_id, repo_id, artifact_id);
     if std::fs::create_dir_all(&dir).is_err() {
-        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_dir_failed").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "artifact_dir_failed",
+        )
+        .await;
         return;
     }
     let file_path = match safe_join(&dir, ARTIFACT_NAME) {
         Ok(path) => path,
         Err(_) => {
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_path_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "artifact_path_failed",
+            )
+            .await;
             return;
         }
     };
@@ -510,7 +526,15 @@ pub async fn execute_pipeline_job(
         Ok(child) => child,
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "adapter_spawn_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "adapter_spawn_failed",
+            )
+            .await;
             return;
         }
     };
@@ -530,20 +554,44 @@ pub async fn execute_pipeline_job(
         Err(ChildWaitOutcome::TimedOut) => {
             let _ = supervisor.cancel(run_id).await;
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_timeout").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_timeout",
+            )
+            .await;
             supervisor.finish(run_id).await;
             return;
         }
         Err(ChildWaitOutcome::IoFailed) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_adapter_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_adapter_failed",
+            )
+            .await;
             supervisor.finish(run_id).await;
             return;
         }
     };
     if !output.status.success() {
         let _ = quarantine_artifact(&pool, artifact_id).await;
-        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_adapter_failed").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "pipeline_adapter_failed",
+        )
+        .await;
         return;
     }
     let oci_from_adapter = parse_pipeline_stdout(&output.stdout);
@@ -554,14 +602,30 @@ pub async fn execute_pipeline_job(
                 .is_err()
             {
                 let _ = std::fs::remove_file(&file_path);
-                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_db_finalize_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "artifact_db_finalize_failed",
+                )
+                .await;
                 return;
             }
         }
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
             let _ = std::fs::remove_file(&file_path);
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "artifact_verify_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "artifact_verify_failed",
+            )
+            .await;
             return;
         }
     }
@@ -569,14 +633,30 @@ pub async fn execute_pipeline_job(
         && run_kind == KIND_RELEASE
         && oci_from_adapter.is_none()
     {
-        let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_oci_missing").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "pipeline_oci_missing",
+        )
+        .await;
         return;
     }
     if let Some(oci_ref) = oci_from_adapter {
         let oci_path = match safe_join(&dir, artifacts::ARTIFACT_OCI_REF_NAME) {
             Ok(p) => p,
             Err(_) => {
-                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "oci_artifact_path_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "oci_artifact_path_failed",
+                )
+                .await;
                 return;
             }
         };
@@ -584,14 +664,30 @@ pub async fn execute_pipeline_job(
             let _ = std::fs::write(&oci_path, &oci_ref);
         }
         if crate::security::validate_oci_image_ref(&oci_ref).is_err() {
-            let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "pipeline_oci_invalid").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_oci_invalid",
+            )
+            .await;
             return;
         }
         let oci_id = Uuid::new_v4();
         let (sha, len) = match artifacts::sha256_file(&oci_path) {
             Ok(v) => v,
             Err(_) => {
-                let _ = mark_failed(&pool, run_id, job_id, instance_id, work_lease.epoch, "oci_artifact_verify_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "oci_artifact_verify_failed",
+                )
+                .await;
                 return;
             }
         };
@@ -612,10 +708,16 @@ pub async fn execute_pipeline_job(
         .execute(&pool)
         .await;
     }
-    let job_ok =
-        crate::lease::finalize_pipeline_job_state(&pool, job_id, run_id, instance_id, work_lease.epoch, "succeeded")
-            .await
-            .unwrap_or(false);
+    let job_ok = crate::lease::finalize_pipeline_job_state(
+        &pool,
+        job_id,
+        run_id,
+        instance_id,
+        work_lease.epoch,
+        "succeeded",
+    )
+    .await
+    .unwrap_or(false);
     let run_ok = crate::lease::finalize_pipeline_run_state(
         &pool,
         run_id,
@@ -691,11 +793,25 @@ async fn mark_failed(
     epoch: i64,
     code: &str,
 ) -> bool {
-    let _ = crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "failed")
-        .await;
-    crate::lease::finalize_pipeline_run_state(pool, run_id, instance_id, epoch, "failed", Some(code))
-        .await
-        .unwrap_or(false)
+    let _ = crate::lease::finalize_pipeline_job_state(
+        pool,
+        job_id,
+        run_id,
+        instance_id,
+        epoch,
+        "failed",
+    )
+    .await;
+    crate::lease::finalize_pipeline_run_state(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+        "failed",
+        Some(code),
+    )
+    .await
+    .unwrap_or(false)
 }
 
 async fn mark_succeeded_stale_blocked(
@@ -748,8 +864,15 @@ async fn mark_canceled(
     instance_id: Uuid,
     epoch: i64,
 ) -> bool {
-    let _ = crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "canceled")
-        .await;
+    let _ = crate::lease::finalize_pipeline_job_state(
+        pool,
+        job_id,
+        run_id,
+        instance_id,
+        epoch,
+        "canceled",
+    )
+    .await;
     crate::lease::finalize_pipeline_run_state(pool, run_id, instance_id, epoch, "canceled", None)
         .await
         .unwrap_or(false)

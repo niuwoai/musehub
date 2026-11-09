@@ -651,7 +651,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         let url = format!("http://{py_addr}/mcp");
         let api_base = format!("http://{py_addr}");
         let mcp_token_own = mcp_token.to_string();
-        let admin_cookie_own = admin_cookie.clone();
+        let _admin_cookie_own = admin_cookie.clone();
         let release_id_own = release_id.to_string();
         let merge_commit_own = merge_commit.to_string();
         let org_s = org_uuid.0.to_string();

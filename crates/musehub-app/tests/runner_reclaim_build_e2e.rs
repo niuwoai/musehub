@@ -5,10 +5,10 @@ mod common;
 use std::process::Stdio;
 use std::time::Duration;
 
+use musehub_app::bare_repo_path;
 use musehub_app::execute_pipeline_job;
 use musehub_app::lease::{self, try_reclaim_expired_pipeline};
 use musehub_app::pipeline_supervisor::PipelineSupervisor;
-use musehub_app::bare_repo_path;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -36,18 +36,18 @@ async fn reclaim_expired_worker_completes_once() {
         )
         .await
         .unwrap();
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
-    let repo_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM repositories WHERE slug = 'reclaim-pipe'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
+    let repo_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'reclaim-pipe'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     let storage_key: Uuid =
         sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE id = $1")
             .bind(repo_id)
@@ -57,17 +57,21 @@ async fn reclaim_expired_worker_completes_once() {
             .0;
     let bare = bare_repo_path(git_root.path(), &storage_key);
     let source_oid = std::process::Command::new("git")
-        .args(["--git-dir", bare.to_str().unwrap(), "rev-parse", "refs/heads/main"])
+        .args([
+            "--git-dir",
+            bare.to_str().unwrap(),
+            "rev-parse",
+            "refs/heads/main",
+        ])
         .output()
         .map(|o| String::from_utf8(o.stdout).unwrap().trim().to_string())
         .unwrap();
-    let admin_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM principals WHERE handle_normalized = 'admin'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .0;
+    let admin_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM principals WHERE handle_normalized = 'admin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     let run_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
     sqlx::query(
@@ -123,7 +127,7 @@ async fn reclaim_expired_worker_completes_once() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let slow_child = slow.spawn().unwrap();
+    let mut slow_child = slow.spawn().unwrap();
     let slow_pid = slow_child.id();
     renew.abort();
     tokio::time::sleep(Duration::from_secs(9)).await;
@@ -137,6 +141,7 @@ async fn reclaim_expired_worker_completes_once() {
     let _ = std::process::Command::new("kill")
         .args(["-TERM", &slow_pid.to_string()])
         .status();
+    let _ = slow_child.wait();
 
     std::env::set_var("MUSEHUB_PIPELINE_HOLD_SECS", "0");
     let reference = std::env::var("CARGO_BIN_EXE_musehub-pipeline-reference")

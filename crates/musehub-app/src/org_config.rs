@@ -63,10 +63,11 @@ pub async fn save_preferences(
 }
 
 pub async fn load_display_name(pool: &PgPool, org_id: Uuid) -> Result<String, AppError> {
-    let row = sqlx::query_as::<_, (String,)>("SELECT display_name FROM organizations WHERE id = $1")
-        .bind(org_id)
-        .fetch_one(pool)
-        .await?;
+    let row =
+        sqlx::query_as::<_, (String,)>("SELECT display_name FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .fetch_one(pool)
+            .await?;
     Ok(row.0)
 }
 

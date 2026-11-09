@@ -121,7 +121,11 @@ pub struct GrantRepoRequest {
     pub role: Option<String>,
 }
 
-async fn grantor_org_role(pool: &sqlx::PgPool, org_id: Uuid, principal_id: Uuid) -> Result<String, AppError> {
+async fn grantor_org_role(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    principal_id: Uuid,
+) -> Result<String, AppError> {
     let row = sqlx::query_as::<_, (String,)>(
         "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
     )
@@ -182,13 +186,17 @@ pub async fn grant_repo_collaborator(
     .fetch_optional(&state.pool)
     .await?;
     let Some((member_org_role,)) = member_org_role else {
-        return Err(AppError::Validation("target is not an org member".to_string()));
+        return Err(AppError::Validation(
+            "target is not an org member".to_string(),
+        ));
     };
     if role_rank(role) > role_rank(&grantor) && grantor != "owner" {
         return Err(AppError::Forbidden);
     }
     if role_rank(role) > role_rank(&member_org_role) + 1 && grantor != "owner" {
-        return Err(AppError::Validation("cannot elevate beyond membership".to_string()));
+        return Err(AppError::Validation(
+            "cannot elevate beyond membership".to_string(),
+        ));
     }
     grant_repo_access(&state.pool, org_id, repo_id, member_id, role).await?;
     let request_id = crate::audit::request_id_from_headers(&headers);
@@ -238,13 +246,8 @@ pub async fn revoke_repo_grant(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
     let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let removed = crate::grants::revoke_repo_grant(
-        &state.pool,
-        org_id,
-        repo_id,
-        query.principal_id,
-    )
-    .await?;
+    let removed =
+        crate::grants::revoke_repo_grant(&state.pool, org_id, repo_id, query.principal_id).await?;
     if removed {
         let request_id = crate::audit::request_id_from_headers(&headers);
         let _ = crate::audit::record(

@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 const RUNNER_PASS: &str = "Runner-Accept-Member-12!";
 
+#[allow(dead_code)]
 struct Fixture {
     token: String,
     run_id: Uuid,
@@ -24,7 +25,11 @@ struct Fixture {
     token_id: Uuid,
 }
 
-async fn remote_fixture(pool: &sqlx::PgPool, git_root: &std::path::Path, app: &axum::Router) -> Fixture {
+async fn remote_fixture(
+    pool: &sqlx::PgPool,
+    git_root: &std::path::Path,
+    app: &axum::Router,
+) -> Fixture {
     std::env::set_var("MUSEHUB_PIPELINE_EXECUTOR", "remote");
     let bootstrap = common::bootstrap_password();
     let admin_cookie = common::login_cookie(app, "admin", &bootstrap).await;
@@ -59,11 +64,12 @@ async fn remote_fixture(pool: &sqlx::PgPool, git_root: &std::path::Path, app: &a
         )
         .await
         .unwrap();
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(pool)
-        .await
-        .unwrap()
-        .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .0;
     let repo_id: Uuid =
         sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'runner-acc'")
             .fetch_one(pool)
@@ -105,18 +111,17 @@ async fn remote_fixture(pool: &sqlx::PgPool, git_root: &std::path::Path, app: &a
         )
         .await
         .unwrap();
-    let pat_body: serde_json::Value = serde_json::from_slice(
-        &pat_resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let pat_body: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let token_id: Uuid = Uuid::parse_str(pat_body["id"].as_str().unwrap()).unwrap();
     let token = pat_body["token"].as_str().unwrap().to_string();
-    let storage_key: Uuid =
-        sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE slug = 'runner-acc'")
-            .fetch_one(pool)
-            .await
-            .unwrap()
-            .0;
+    let storage_key: Uuid = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT storage_key FROM repositories WHERE slug = 'runner-acc'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+    .0;
     let bare = musehub_app::bare_repo_path(git_root, &storage_key);
     let oid = std::process::Command::new("git")
         .args([
@@ -128,13 +133,12 @@ async fn remote_fixture(pool: &sqlx::PgPool, git_root: &std::path::Path, app: &a
         .output()
         .unwrap();
     let source_oid = String::from_utf8(oid.stdout).unwrap().trim().to_string();
-    let admin_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM principals WHERE handle_normalized = 'admin'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap()
-    .0;
+    let admin_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM principals WHERE handle_normalized = 'admin'")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .0;
     let run_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
     sqlx::query(
@@ -168,7 +172,10 @@ async fn remote_fixture(pool: &sqlx::PgPool, git_root: &std::path::Path, app: &a
             .fetch_one(pool)
             .await
             .unwrap();
-    assert!(holder.0.is_none(), "enqueue must not set lease_holder on API");
+    assert!(
+        holder.0.is_none(),
+        "enqueue must not set lease_holder on API"
+    );
     Fixture {
         token,
         run_id,
@@ -185,7 +192,10 @@ async fn claim(
     app: &axum::Router,
     token: &str,
     runner_id: Uuid,
-) -> (StatusCode, Option<musehub_app::runner_api::ClaimedPipelineRun>) {
+) -> (
+    StatusCode,
+    Option<musehub_app::runner_api::ClaimedPipelineRun>,
+) {
     let resp = app
         .clone()
         .oneshot(
@@ -203,10 +213,8 @@ async fn claim(
     if !status.is_success() {
         return (status, None);
     }
-    let claimed: musehub_app::runner_api::ClaimedPipelineRun = serde_json::from_slice(
-        &resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let claimed: musehub_app::runner_api::ClaimedPipelineRun =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     (status, Some(claimed))
 }
 
@@ -222,13 +230,11 @@ async fn case_fencing_and_pat_negative_cases() {
     assert!(c1.is_some());
     let (st2, _) = claim(&app, &fx.token, runner_b).await;
     assert_eq!(st2, StatusCode::NOT_FOUND);
-    sqlx::query(
-        "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(fx.token_id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1")
+        .bind(fx.token_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (bad, _) = claim(&app, &fx.token, runner_b).await;
     assert_eq!(bad, StatusCode::UNAUTHORIZED);
 }
@@ -243,9 +249,11 @@ async fn case_renew_fencing_and_artifact_sha() {
     let (_, Some(claimed)) = claim(&app, &fx.token, runner_id).await else {
         panic!("claim");
     };
-    assert!(renew_pipeline_work_lease(&pool, claimed.run_id, runner_id, claimed.lease_epoch)
-        .await
-        .is_ok());
+    assert!(
+        renew_pipeline_work_lease(&pool, claimed.run_id, runner_id, claimed.lease_epoch)
+            .await
+            .is_ok()
+    );
     assert!(
         renew_pipeline_work_lease(&pool, claimed.run_id, runner_id, claimed.lease_epoch - 1)
             .await
@@ -327,10 +335,8 @@ async fn case_wrong_scope_and_repo_isolation() {
         )
         .await
         .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(
-        &read_only.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&read_only.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let token = body["token"].as_str().unwrap();
     let (st, _) = claim(&app, token, Uuid::new_v4()).await;
     assert_eq!(st, StatusCode::FORBIDDEN);

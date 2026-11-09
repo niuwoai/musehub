@@ -55,11 +55,10 @@ async fn remote_runner_claims_and_completes_pipeline() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    let repo_id: (Uuid,) =
-        sqlx::query_as("SELECT id FROM repositories WHERE slug = 'remote-pipe'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let repo_id: (Uuid,) = sqlx::query_as("SELECT id FROM repositories WHERE slug = 'remote-pipe'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     app.clone()
         .oneshot(
             Request::builder()
@@ -101,10 +100,8 @@ async fn remote_runner_claims_and_completes_pipeline() {
         )
         .await
         .unwrap();
-    let pat_body: serde_json::Value = serde_json::from_slice(
-        &pat_resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let pat_body: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let token = pat_body["token"].as_str().unwrap();
     let runner_id = Uuid::new_v4();
     let storage_key: (Uuid,) =
@@ -171,10 +168,8 @@ async fn remote_runner_claims_and_completes_pipeline() {
         .await
         .unwrap();
     assert_eq!(claim.status(), StatusCode::OK);
-    let claimed: musehub_app::runner_api::ClaimedPipelineRun = serde_json::from_slice(
-        &claim.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let claimed: musehub_app::runner_api::ClaimedPipelineRun =
+        serde_json::from_slice(&claim.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(claimed.run_id, run_id);
     assert_eq!(claimed.job_id, job_id);
     let supervisor = musehub_app::pipeline_supervisor::PipelineSupervisor::new();

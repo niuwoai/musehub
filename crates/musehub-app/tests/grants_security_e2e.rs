@@ -4,7 +4,6 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -89,11 +88,12 @@ async fn grant_self_and_member_write_denied_with_audit_on_success() {
         )
         .await
         .unwrap();
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events WHERE org_id = $1 AND action = 'repository.grant'",
     )

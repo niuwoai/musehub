@@ -43,10 +43,7 @@ fn runner_instance_id(headers: &HeaderMap) -> Result<Uuid, AppError> {
     Uuid::parse_str(raw.trim()).map_err(|_| AppError::Validation("invalid runner id".to_string()))
 }
 
-async fn require_runner_pat(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<PatContext, AppError> {
+async fn require_runner_pat(state: &AppState, headers: &HeaderMap) -> Result<PatContext, AppError> {
     let token = bearer_token(headers)?;
     let pat = pat_auth::authenticate_pat_context(&state.pool, token).await?;
     if !pat_auth::scope_allows(&pat.scopes, "pipeline:execute")
@@ -178,20 +175,16 @@ pub async fn renew_pipeline_lease(
     Json(body): Json<RenewBody>,
 ) -> Result<StatusCode, AppError> {
     let pat = require_runner_pat(&state, &headers).await?;
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT repo_id FROM pipeline_runs WHERE id = $1",
-    )
-    .bind(run_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    if let Some((repo_id,)) = row {
-        let org_id = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT org_id FROM pipeline_runs WHERE id = $1",
-        )
+    let row = sqlx::query_as::<_, (Uuid,)>("SELECT repo_id FROM pipeline_runs WHERE id = $1")
         .bind(run_id)
-        .fetch_one(&state.pool)
-        .await?
-        .0;
+        .fetch_optional(&state.pool)
+        .await?;
+    if let Some((repo_id,)) = row {
+        let org_id = sqlx::query_as::<_, (Uuid,)>("SELECT org_id FROM pipeline_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&state.pool)
+            .await?
+            .0;
         grants::ensure_pat_repo_access(&state.pool, &pat, org_id, repo_id).await?;
     }
     let instance_id = runner_instance_id(&headers)?;

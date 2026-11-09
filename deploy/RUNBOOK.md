@@ -78,6 +78,8 @@ CI stack test automates backup/restore against the compose Postgres port overlay
 
 In-process **supervisor** workers are not a separate remote runner service. Pipeline/deploy adapters are **child processes** of the API container (`compose-mock` by default in the product image), not arbitrary shell from HTTP.
 
+`GET /readyz` reports `checks.compose_adapter_mode` (`mock` | `runner` | `auto`) and `checks.pipeline_executor` (`in_process` | `remote`). The product image sets `MUSEHUB_COMPOSE_ADAPTER_MODE=mock`. For verified compose-runner + OCI, set `MUSEHUB_COMPOSE_ADAPTER_MODE=runner`, mount Docker, and follow `scripts/verify-pipeline-oci-product-e2e.sh` / `scripts/verify-compose-runner-e2e.sh`.
+
 ## What is not in this stack
 
 - External OCI registry / compose-runner (use dev binaries + `verify-compose-runner-e2e.sh`)

@@ -12,21 +12,22 @@ mod auth;
 mod bootstrap;
 mod codex;
 mod compose;
+pub use compose::{compose_mode_from_env, ComposeAdapterMode};
 mod deployment;
 mod error;
 mod git_http;
+mod grants;
 mod hooks;
 pub mod lease;
 pub mod mcp;
-mod grants;
 mod members;
 mod org_config;
-pub mod runner_api;
 pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
 mod recovery;
+pub mod runner_api;
 pub use artifacts::sha256_file as artifact_sha256_file;
 pub use pipeline::{
     execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
@@ -114,10 +115,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             "/api/v1/orgs/{org}/runner-tokens",
             get(runner_api::list_runner_tokens_masked),
         )
-        .route(
-            "/api/v1/runner/capabilities",
-            get(runner_api::capabilities),
-        )
+        .route("/api/v1/runner/capabilities", get(runner_api::capabilities))
         .route(
             "/api/v1/runner/pipeline-runs/claim",
             post(runner_api::claim_pipeline_run),
@@ -1177,12 +1175,10 @@ pub(crate) async fn repo_storage_for_member(
 ) -> Result<(Uuid, Uuid, Uuid), AppError> {
     let (org_id, repo_id) =
         repo_org_ids_for_member(pool, org_slug, repo_slug, principal_id).await?;
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT storage_key FROM repositories WHERE id = $1",
-    )
-    .bind(repo_id)
-    .fetch_one(pool)
-    .await?;
+    let row = sqlx::query_as::<_, (Uuid,)>("SELECT storage_key FROM repositories WHERE id = $1")
+        .bind(repo_id)
+        .fetch_one(pool)
+        .await?;
     Ok((org_id, repo_id, row.0))
 }
 

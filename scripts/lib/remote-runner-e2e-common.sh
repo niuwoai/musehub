@@ -104,7 +104,9 @@ remote_runner_bootstrap_repo() {
   local slug="${1:-subproc-pipe-$(e2e_uuid | tr '[:upper:]' '[:lower:]' | cut -c1-8)}"
   local member_handle="${2:-subproc-runner}"
   local member_pass="${3:-Subproc-Runner-Member-1!}"
-  COOKIE=$(remote_runner_login_cookie)
+  if [[ -z "${COOKIE:-}" ]]; then
+    COOKIE=$(remote_runner_login_cookie)
+  fi
   curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/members" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d "{\"handle\":\"$member_handle\",\"password\":\"$member_pass\",\"role\":\"member\"}" >/dev/null || true

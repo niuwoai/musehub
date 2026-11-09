@@ -76,16 +76,18 @@ async fn selected_pat_same_org_other_repo_denied_for_resources_and_writes() {
             .await
             .unwrap();
     }
-    let repo_a: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'sel-a'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
-    let repo_b: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'sel-b'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
+    let repo_a: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'sel-a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
+    let repo_b: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM repositories WHERE slug = 'sel-b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
 
     let issue_b: serde_json::Value = serde_json::from_slice(
         &app.clone()
@@ -131,10 +133,8 @@ async fn selected_pat_same_org_other_repo_denied_for_resources_and_writes() {
         )
         .await
         .unwrap();
-    let pat_body: serde_json::Value = serde_json::from_slice(
-        &pat_resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let pat_body: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let token = pat_body["token"].as_str().unwrap();
 
     let client = mcp_client(&app, token).await;
@@ -153,11 +153,12 @@ async fn selected_pat_same_org_other_repo_denied_for_resources_and_writes() {
         .await;
     assert!(deny_file.is_err());
 
-    let org_id: Uuid = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .0;
+    let org_id: Uuid =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug = 'demo'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
     let mut args = serde_json::Map::new();
     args.insert("org_id".into(), json!(org_id.to_string()));
     args.insert("repository_id".into(), json!(repo_b.to_string()));

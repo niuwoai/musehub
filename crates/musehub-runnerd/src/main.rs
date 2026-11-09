@@ -7,7 +7,7 @@ use std::time::Duration;
 use musehub_app::execute_pipeline_job;
 use musehub_app::pipeline_supervisor::PipelineSupervisor;
 use musehub_app::runner_api::{self, ClaimedPipelineRun};
-use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -77,8 +77,8 @@ async fn main() {
 }
 
 fn load_config() -> Result<Config, String> {
-    let api_base = std::env::var("MUSEHUB_API_BASE")
-        .map_err(|_| "MUSEHUB_API_BASE required".to_string())?;
+    let api_base =
+        std::env::var("MUSEHUB_API_BASE").map_err(|_| "MUSEHUB_API_BASE required".to_string())?;
     let pat = std::env::var("MUSEHUB_RUNNER_PAT").unwrap_or_default();
     let git_root = std::env::var("MUSEHUB_GIT_ROOT")
         .map(PathBuf::from)
@@ -104,7 +104,10 @@ fn load_config() -> Result<Config, String> {
     })
 }
 
-async fn claim_run(client: &reqwest::Client, cfg: &Config) -> Result<Option<ClaimedPipelineRun>, String> {
+async fn claim_run(
+    client: &reqwest::Client,
+    cfg: &Config,
+) -> Result<Option<ClaimedPipelineRun>, String> {
     let url = format!("{}/api/v1/runner/pipeline-runs/claim", cfg.api_base);
     let resp = client
         .post(url)
@@ -183,7 +186,7 @@ async fn run_claimed(
 fn runner_lease_renew_interval_secs() -> u64 {
     if let Ok(raw) = std::env::var("MUSEHUB_RUNNER_LEASE_RENEW_SECS") {
         if let Ok(v) = raw.parse::<u64>() {
-            if v >= 1 && v <= 60 {
+            if (1..=60).contains(&v) {
                 return v;
             }
         }
