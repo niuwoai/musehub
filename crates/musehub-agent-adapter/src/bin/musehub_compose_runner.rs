@@ -51,7 +51,7 @@ fn main() {
     let publish_port =
         std::env::var("MUSEHUB_COMPOSE_PUBLISH_PORT").unwrap_or_else(|_| "18080".into());
     let nginx_image = std::env::var("MUSEHUB_NGINX_IMAGE_DIGEST")
-        .unwrap_or_else(|_| DEFAULT_NGINX_DIGEST.to_string());
+        .unwrap_or_else(|_| DEFAULT_NGINX_IMAGE.to_string());
     let leave_stack = std::env::var("MUSEHUB_COMPOSE_LEAVE_STACK")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
