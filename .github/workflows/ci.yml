@@ -89,6 +89,10 @@ jobs:
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_validation_e2e -- --test-threads=1
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_write_matrix_e2e -- --test-threads=1
           MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_resources_e2e -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_guards_e2e -- --test-threads=1
+          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_cross_tenant_resources_e2e -- --test-threads=1
+          env CARGO_BIN_EXE_musehub-agent-codex-sim="$PWD/target/debug/musehub-agent-codex-sim" \
+            cargo test -p musehub-app --test agent_codex_mainline_select_e2e -- --test-threads=1
           env CARGO_BIN_EXE_musehub-agent-codex-fixture="$PWD/target/debug/musehub-agent-codex-fixture" \
             cargo test -p musehub-app --test agent_codex_fixture_e2e -- --test-threads=1
           cargo test -p musehub-app --test codex_adapter_e2e -- --test-threads=1

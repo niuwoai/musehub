@@ -27,6 +27,15 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     "musehub_deployment_trace",
 ];
 
+/// Resource URI templates from `docs/04-mcp-api.md` §13 (V1 catalog; reads enforce PAT + repo scope).
+pub const V1_RESOURCE_URI_TEMPLATES: &[&str] = &[
+    "musehub://repositories/{repository_id}/commits/{oid}/files/{encoded-path}",
+    "musehub://issues/{issue_id}/revisions/{n}",
+    "musehub://pull-requests/{pr_id}/revisions/{n}",
+    "musehub://agent-runs/{agent_run_id}/summary",
+    "musehub://deployments/{deployment_id}",
+];
+
 pub const WRITE_IDEMPOTENCY_TOOLS: &[&str] = &[
     "musehub_issue_create",
     "musehub_plan_create",
@@ -47,6 +56,7 @@ pub fn capability_payload() -> Value {
         "supported_protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
         "maturity": "partial_implementation",
         "implemented_tools": IMPLEMENTED_TOOLS,
+        "resource_uri_templates_v1": V1_RESOURCE_URI_TEMPLATES,
         "write_idempotency_tools": WRITE_IDEMPOTENCY_TOOLS,
         "authentication": {
             "http_bearer_pat": true,

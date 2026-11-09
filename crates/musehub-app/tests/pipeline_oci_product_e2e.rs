@@ -584,4 +584,41 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     let resources = mcp_client.list_resources(None).await.expect("resources");
     assert!(!resources.resources.is_empty());
     mcp_client.cancel().await.ok();
+
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python/mcp_product_oci_write.py");
+    let pydeps =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps");
+    let py_ok = std::process::Command::new("python3")
+        .args(["-c", "import mcp"])
+        .env("PYTHONPATH", &pydeps)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if py_ok && script.is_file() {
+        let url = format!("http://{mcp_addr}/mcp");
+        let out = std::process::Command::new("python3")
+            .env("PYTHONPATH", &pydeps)
+            .arg(&script)
+            .arg("--url")
+            .arg(&url)
+            .arg("--bearer")
+            .arg(mcp_token)
+            .arg("--org-id")
+            .arg(org_uuid.0.to_string())
+            .arg("--repository-id")
+            .arg(repo_uuid.0.to_string())
+            .arg("--deployment-id")
+            .arg(deployment_id)
+            .output()
+            .expect("python oci mcp");
+        assert!(
+            out.status.success(),
+            "python oci write: stderr={} stdout={}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+    } else {
+        eprintln!("skip python oci mcp: SDK or script missing");
+    }
 }

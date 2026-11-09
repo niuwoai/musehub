@@ -10,7 +10,6 @@ use crate::mcp::auth::RepoAccess;
 use crate::pr;
 use crate::security;
 use crate::AppState;
-use musehub_agent_adapter::REFERENCE_ADAPTER;
 
 pub async fn issue_create(
     state: &Arc<AppState>,
@@ -165,6 +164,7 @@ pub async fn agent_run_start(
     issue_id: Uuid,
     message: &str,
     budget_tokens: Option<u64>,
+    adapter: Option<&str>,
 ) -> Result<Value, AppError> {
     let issue =
         sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
@@ -213,7 +213,7 @@ pub async fn agent_run_start(
     .bind(access.repo_id)
     .bind(issue_id)
     .bind(principal_id)
-    .bind(REFERENCE_ADAPTER)
+    .bind(crate::agent_adapter::adapter_kind_for_request(adapter))
     .bind(&branch)
     .bind(budget_tokens.map(|v| v as i64))
     .bind(instance_id)
@@ -229,7 +229,7 @@ pub async fn agent_run_start(
     let repo_id = access.repo_id;
     let storage = storage_key.0;
     tokio::spawn(async move {
-        agent_supervisor::run_reference_job(
+        agent_supervisor::run_agent_job(
             pool,
             supervisor,
             instance_id,
@@ -245,9 +245,10 @@ pub async fn agent_run_start(
         )
         .await;
     });
+    let kind = crate::agent_adapter::adapter_kind_for_request(adapter);
     Ok(json!({
         "id": run_id.to_string(),
-        "adapter_kind": REFERENCE_ADAPTER,
+        "adapter_kind": kind,
         "state": "queued",
         "issue_id": issue_id.to_string()
     }))
