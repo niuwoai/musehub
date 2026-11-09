@@ -13,28 +13,30 @@ command -v pg_restore >/dev/null || { echo "pg_restore required" >&2; exit 1; }
 
 STACK_ID="musehub-stack-ci-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
-export COMPOSE_FILE="$ROOT/deploy/docker-compose.yml:$ROOT/deploy/docker-compose.ci.yml"
+ENV_FILE="$ROOT/deploy/.env.ci"
+COMPOSE_BASE=(docker compose -f "$ROOT/deploy/docker-compose.yml" -f "$ROOT/deploy/docker-compose.ci.yml" --env-file "$ENV_FILE")
+dc() { "${COMPOSE_BASE[@]}" "$@"; }
 
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 SESSION_SECRET="$(openssl rand -hex 24)"
 BOOTSTRAP_PW="Stack-Bootstrap-Strong-$(openssl rand -hex 4)!"
 
-cat >"$ROOT/deploy/.env.ci" <<EOF
+cat >"$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 MUSEHUB_SESSION_SECRET=$SESSION_SECRET
 MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=$BOOTSTRAP_PW
 MUSEHUB_GATEWAY_HTTP_PORT=18080
 MUSEHUB_MCP_PRODUCT=0
 EOF
-POSTGRES_PASSWORD="$(grep '^POSTGRES_PASSWORD=' "$ROOT/deploy/.env.ci" | cut -d= -f2-)"
-SESSION_SECRET="$(grep '^MUSEHUB_SESSION_SECRET=' "$ROOT/deploy/.env.ci" | cut -d= -f2-)"
-BOOTSTRAP_PW="$(grep '^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=' "$ROOT/deploy/.env.ci" | cut -d= -f2-)"
-MUSEHUB_GATEWAY_HTTP_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' "$ROOT/deploy/.env.ci" | cut -d= -f2-)"
+POSTGRES_PASSWORD="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
+SESSION_SECRET="$(grep '^MUSEHUB_SESSION_SECRET=' "$ENV_FILE" | cut -d= -f2-)"
+BOOTSTRAP_PW="$(grep '^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
+MUSEHUB_GATEWAY_HTTP_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' "$ENV_FILE" | cut -d= -f2-)"
 export POSTGRES_PASSWORD SESSION_SECRET BOOTSTRAP_PW MUSEHUB_GATEWAY_HTTP_PORT
 
 cleanup() {
-  docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" down -v --remove-orphans 2>/dev/null || true
-  rm -f "$ROOT/deploy/.env.ci"
+  dc down -v --remove-orphans 2>/dev/null || true
+  rm -f "$ENV_FILE"
 }
 trap cleanup EXIT
 
@@ -44,10 +46,10 @@ if grep -v '^[[:space:]]*#' "$ROOT/deploy/docker-compose.yml" | grep -q 'docker\
 fi
 
 echo "=== compose build (server + gateway) ==="
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" build --pull
+dc build --pull
 
 echo "=== compose up ==="
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" up -d
+dc up -d
 
 BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
 DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:55432/musehub"
@@ -59,7 +61,7 @@ wait_ready() {
     fi
     sleep 2
   done
-  docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" logs --tail=80
+  dc logs --tail=80
   echo "gateway not ready" >&2
   exit 1
 }
@@ -169,23 +171,23 @@ trace=$(api GET "/api/v1/orgs/demo/repos/stack-slice/trace/deployments/${dep_id}
 echo "product_stack_slice=ok deployment=$dep_id"
 
 MARKER="stack-marker-$(date +%s)"
-echo -n "$MARKER" | docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" exec -T \
+echo -n "$MARKER" | dc exec -T \
   musehub-server sh -c "mkdir -p /var/lib/musehub/artifacts/stack && cat > /var/lib/musehub/artifacts/stack/marker.txt"
 
 echo "=== restart persistence ==="
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" restart musehub-server gateway
+dc restart musehub-server gateway
 wait_ready
 repos=$(api GET /api/v1/orgs/demo/repos)
 echo "$repos" | jq -e '.[] | select(.slug=="stack-slice")' >/dev/null
-marker_after=$(docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" exec -T musehub-server \
+marker_after=$(dc exec -T musehub-server \
   cat /var/lib/musehub/artifacts/stack/marker.txt)
 [[ "$marker_after" == "$MARKER" ]]
 echo "restart_persistence=ok"
 
 echo "=== migrate idempotency ==="
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" run --rm --no-deps \
+dc run --rm --no-deps \
   --entrypoint /docker-entrypoint.sh musehub-server migrate-only
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" run --rm --no-deps \
+dc run --rm --no-deps \
   --entrypoint /docker-entrypoint.sh musehub-server migrate-only
 echo "migrate_idempotent=ok"
 
@@ -193,16 +195,16 @@ echo "=== backup / wipe / restore ==="
 BACKUP_DIR=$(mktemp -d)
 GIT_EX=$(mktemp -d)
 ART_EX=$(mktemp -d)
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" cp \
+dc cp \
   musehub-server:/var/lib/musehub/git/. "$GIT_EX/git"
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" cp \
+dc cp \
   musehub-server:/var/lib/musehub/artifacts/. "$ART_EX/artifacts"
 export MUSEHUB_GIT_ROOT="$GIT_EX/git"
 export MUSEHUB_ARTIFACT_ROOT="$ART_EX/artifacts"
 chmod +x "$ROOT/scripts/backup-musehub-state.sh" "$ROOT/scripts/restore-musehub-state.sh"
 "$ROOT/scripts/backup-musehub-state.sh" "$BACKUP_DIR"
 
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" stop musehub-server gateway
+dc stop musehub-server gateway
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 rm -rf "$GIT_EX/git" "$ART_EX/artifacts"
 mkdir -p "$GIT_EX/git" "$ART_EX/artifacts"
@@ -214,21 +216,21 @@ docker run --rm -v "${GIT_VOL}:/dest" -v "$GIT_EX/git:/src:ro" alpine:3.20 \
   sh -c 'rm -rf /dest/* && cp -a /src/. /dest/'
 docker run --rm -v "${ART_VOL}:/dest" -v "$ART_EX/artifacts:/src:ro" alpine:3.20 \
   sh -c 'rm -rf /dest/* && cp -a /src/. /dest/'
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" start musehub-server gateway
+dc start musehub-server gateway
 wait_ready
 repos2=$(api GET /api/v1/orgs/demo/repos)
 echo "$repos2" | jq -e '.[] | select(.slug=="stack-slice")' >/dev/null
 echo "backup_restore=ok"
 
 echo "=== image upgrade (recreate server) ==="
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" build musehub-server
-docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" up -d --force-recreate musehub-server gateway
+dc build musehub-server
+dc up -d --force-recreate musehub-server gateway
 wait_ready
 repos3=$(api GET /api/v1/orgs/demo/repos)
 echo "$repos3" | jq -e '.[] | select(.slug=="stack-slice")' >/dev/null
 echo "upgrade_persistence=ok"
 
-CID=$(docker compose -f "$COMPOSE_FILE" --env-file "$ROOT/deploy/.env.ci" ps -q musehub-server)
+CID=$(dc ps -q musehub-server)
 BINDS=$(docker inspect "$CID" --format '{{json .HostConfig.Binds}}')
 [[ "$BINDS" != *"docker.sock"* ]]
 echo "product_stack_e2e=ok"
