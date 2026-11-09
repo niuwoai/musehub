@@ -322,7 +322,9 @@ export default function App() {
               ) : null}
               <Panel style={{ marginTop: '1rem' }} data-testid="delivery-panel">
                 <h3>{t('app.deliveryTitle')}</h3>
-                <p style={{ color: '#9a6700' }}>{t('app.deliveryMockNote')}</p>
+                <p style={{ color: '#9a6700' }} data-testid="delivery-mode-note">
+                  {t('app.deliveryModeNote')}
+                </p>
                 {mergedPr?.head_oid ? (
                   <>
                     <p>
@@ -350,6 +352,10 @@ export default function App() {
                           {
                             adapter: trace.deployment_adapter,
                             mock: trace.adapter_is_mock,
+                            release_oci_image_ref: trace.release_oci_image_ref,
+                            applied_oci_digest: trace.applied_oci_digest,
+                            verified_source_oid: trace.verified_source_oid,
+                            commit_oid: trace.commit_oid,
                             gaps: trace.gaps,
                             artifacts: trace.artifacts.length,
                           },

@@ -70,6 +70,14 @@ pub struct AppState {
     pub instance_id: Uuid,
     pub supervisor: Arc<AgentSupervisor>,
     pub pipeline_supervisor: Arc<PipelineSupervisor>,
+    /// When true: release publish requires pipeline OCI artifact; deploy rejects mock health / mock compose.
+    pub require_pipeline_oci: bool,
+}
+
+pub fn require_pipeline_oci_from_env() -> bool {
+    std::env::var("MUSEHUB_REQUIRE_PIPELINE_OCI")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 pub fn product_router(state: Arc<AppState>) -> Router {

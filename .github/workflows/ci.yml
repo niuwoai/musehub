@@ -56,6 +56,7 @@ jobs:
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
           cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-oci -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
       - name: portable tests
@@ -79,6 +80,42 @@ jobs:
           cargo test -p musehub-app --test pipeline_security_e2e -- --test-threads=1
           cargo test -p musehub-app --test pipeline_runner_pat_e2e -- --test-threads=1
           cargo test -p musehub-app --test pipeline_cancel_e2e -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_oci_negative_e2e -- --test-threads=1
+
+  pipeline-oci-product:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: musehub
+          POSTGRES_PASSWORD: musehub
+          POSTGRES_DB: musehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U musehub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+      MUSEHUB_GIT_ROOT: /tmp/musehub-oci-product-git
+      MUSEHUB_ARTIFACT_ROOT: /tmp/musehub-oci-product-artifacts
+      MUSEHUB_SESSION_SECRET: ci-oci-product-secret
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Oci-Product-Strong!2026'
+      MUSEHUB_OCI_REGISTRY: 127.0.0.1:5000
+      MUSEHUB_REQUIRE_PIPELINE_OCI: "1"
+      MUSEHUB_COMPOSE_ADAPTER_MODE: runner
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: pipeline OCI product acceptance
+        run: |
+          chmod +x ./scripts/verify-pipeline-oci-product-e2e.sh
+          ./scripts/verify-pipeline-oci-product-e2e.sh
 
   web:
     runs-on: ubuntu-latest
@@ -115,6 +152,7 @@ jobs:
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-oci -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
           cargo build -p musehub-server -q

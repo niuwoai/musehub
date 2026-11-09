@@ -151,9 +151,19 @@ test.describe('delivery chain browser flow', () => {
     await expect(releaseDeploy).toBeEnabled({ timeout: 15_000 })
     await releaseDeploy.click()
     await expect(page.getByTestId('delivery-trace')).toBeVisible({ timeout: 90_000 })
-    await expect(page.getByTestId('delivery-trace')).toContainText(/compose-mock/, {
-      timeout: 60_000,
-    })
-    await expect(page.getByTestId('delivery-trace')).toContainText(/"mock": true/)
+    const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
+    if (productOci) {
+      await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
+        timeout: 120_000,
+      })
+      await expect(page.getByTestId('delivery-trace')).toContainText(/applied_oci_digest/)
+      await expect(page.getByTestId('delivery-trace')).toContainText(/verified_source_oid/)
+      await expect(page.getByTestId('delivery-trace')).not.toContainText(/"mock": true/)
+    } else {
+      await expect(page.getByTestId('delivery-trace')).toContainText(/compose-mock/, {
+        timeout: 60_000,
+      })
+      await expect(page.getByTestId('delivery-trace')).toContainText(/"mock": true/)
+    }
   })
 })

@@ -84,6 +84,11 @@ pub async fn create_release(
         ));
     }
     artifacts::verify_ready_artifacts_for_pipeline(&state.pool, body.pipeline_run_id).await?;
+    let pipeline_oci = if state.require_pipeline_oci {
+        Some(artifacts::require_pipeline_oci_artifact(&state.pool, body.pipeline_run_id).await?)
+    } else {
+        artifacts::pipeline_bound_oci_image_ref(&state.pool, body.pipeline_run_id).await?
+    };
     let release_kind: (String,) =
         sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
             .bind(body.pipeline_run_id)
@@ -109,6 +114,12 @@ pub async fn create_release(
         "pipeline_run_id".to_string(),
         body.pipeline_run_id.to_string().into(),
     );
+    if let Some(ref oci) = pipeline_oci {
+        manifest.insert(
+            "pipeline_oci_image_ref".to_string(),
+            serde_json::Value::String(oci.clone()),
+        );
+    }
     let manifest_bytes =
         serde_json::to_vec(&manifest).map_err(|e| AppError::Other(e.to_string()))?;
     let manifest_sha256 = Sha256::digest(&manifest_bytes);
@@ -172,18 +183,72 @@ pub async fn publish_release(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (_, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    if let Some(ref oci) = body.oci_image_ref {
-        validate_oci_image_ref(oci).map_err(AppError::Validation)?;
+    let draft = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT pipeline_run_id, commit_oid, manifest_sha256 FROM releases
+         WHERE id = $1 AND repo_id = $2 AND state = 'draft'",
+    )
+    .bind(release_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((pipeline_run_id, commit_oid, _old_manifest)) = draft else {
+        return Err(AppError::Validation(
+            "release not in draft or not found".to_string(),
+        ));
+    };
+    let bound = artifacts::pipeline_bound_oci_image_ref(&state.pool, pipeline_run_id).await?;
+    let oci_to_set: Option<String> = if state.require_pipeline_oci {
+        let expected = bound.ok_or_else(|| {
+            AppError::Validation("publish requires pipeline-built OCI artifact".to_string())
+        })?;
+        if let Some(ref submitted) = body.oci_image_ref {
+            validate_oci_image_ref(submitted).map_err(AppError::Validation)?;
+            if submitted != &expected {
+                return Err(AppError::Validation(
+                    "oci_image_ref does not match pipeline artifact (tamper)".to_string(),
+                ));
+            }
+        }
+        Some(expected)
+    } else if let Some(ref submitted) = body.oci_image_ref {
+        validate_oci_image_ref(submitted).map_err(AppError::Validation)?;
+        if let Some(ref pipeline_ref) = bound {
+            if submitted != pipeline_ref {
+                return Err(AppError::Validation(
+                    "oci_image_ref must match pipeline artifact when present".to_string(),
+                ));
+            }
+        }
+        Some(submitted.clone())
+    } else {
+        bound
+    };
+    let mut manifest: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    manifest.insert("commit_oid".into(), commit_oid.into());
+    manifest.insert("pipeline_run_id".into(), pipeline_run_id.to_string().into());
+    if let Some(ref oci) = oci_to_set {
+        manifest.insert(
+            "pipeline_oci_image_ref".into(),
+            serde_json::Value::String(oci.clone()),
+        );
     }
+    let manifest_bytes =
+        serde_json::to_vec(&manifest).map_err(|e| AppError::Other(e.to_string()))?;
+    let manifest_hex: String = Sha256::digest(&manifest_bytes)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     let updated = sqlx::query(
         "UPDATE releases SET state = 'published',
-         oci_image_ref = COALESCE($3, oci_image_ref),
+         oci_image_ref = $3,
+         manifest_sha256 = $4,
          updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND repo_id = $2 AND state = 'draft'",
     )
     .bind(release_id)
     .bind(repo_id)
-    .bind(body.oci_image_ref)
+    .bind(oci_to_set)
+    .bind(manifest_hex)
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {

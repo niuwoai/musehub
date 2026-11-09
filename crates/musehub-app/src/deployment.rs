@@ -103,14 +103,14 @@ pub async fn start_deployment(
     let Some((environment_id,)) = env else {
         return Err(AppError::NotFound);
     };
-    let release = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-        "SELECT state, manifest_sha256, oci_image_ref FROM releases WHERE id = $1 AND repo_id = $2",
+    let release = sqlx::query_as::<_, (String, Option<String>, Option<String>, String)>(
+        "SELECT state, manifest_sha256, oci_image_ref, commit_oid FROM releases WHERE id = $1 AND repo_id = $2",
     )
     .bind(body.release_id)
     .bind(repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((release_state, manifest, oci_image_ref)) = release else {
+    let Some((release_state, manifest, oci_image_ref, release_commit_oid)) = release else {
         return Err(AppError::NotFound);
     };
     if release_state != "published" {
@@ -151,14 +151,27 @@ pub async fn start_deployment(
         .fetch_one(&state.pool)
         .await?;
     crate::artifacts::verify_ready_artifacts_for_pipeline(&state.pool, pipeline_id.0).await?;
-    let health_target = body
-        .health_target
-        .clone()
-        .unwrap_or_else(|| "mock://healthy".to_string());
+    let deployment_id = Uuid::new_v4();
+    let publish_port = 20_000u32 + (deployment_id.as_u128() % 15_000) as u32;
+    let default_runner_target = format!("http://127.0.0.1:{publish_port}/");
+    let health_target = match (body.health_target.clone(), state.require_pipeline_oci) {
+        (Some(t), _) => t,
+        (None, true) => default_runner_target.clone(),
+        (None, false) => "mock://healthy".to_string(),
+    };
+    if state.require_pipeline_oci && health_target.starts_with("mock://") {
+        return Err(AppError::Validation(
+            "product OCI deploy rejects mock health target".to_string(),
+        ));
+    }
     validate_compose_health_target(&health_target).map_err(AppError::Validation)?;
 
-    let (compose_bin, adapter_kind) =
-        resolve_compose_adapter(&state.compose_adapter_bin, &state.compose_runner_bin);
+    let (compose_bin, adapter_kind) = resolve_compose_adapter(
+        &state.compose_adapter_bin,
+        &state.compose_runner_bin,
+        state.require_pipeline_oci,
+    )
+    .map_err(AppError::Validation)?;
     if adapter_kind == "compose-runner" {
         let Some(ref oci) = oci_image_ref else {
             return Err(AppError::Validation(
@@ -167,7 +180,6 @@ pub async fn start_deployment(
         };
         validate_oci_image_ref(oci).map_err(AppError::Validation)?;
     }
-    let deployment_id = Uuid::new_v4();
     let insert = sqlx::query(
         "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id)
          VALUES ($1,$2,$3,$4,$5,$6,'running',$7)",
@@ -214,6 +226,8 @@ pub async fn start_deployment(
             manifest.clone().unwrap_or_default(),
         )
         .env("MUSEHUB_COMPOSE_PROJECT", &project)
+        .env("MUSEHUB_COMPOSE_PUBLISH_PORT", publish_port.to_string())
+        .env("MUSEHUB_RELEASE_COMMIT_OID", &release_commit_oid)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -238,6 +252,14 @@ pub async fn start_deployment(
                 .and_then(|d| d.as_str())
                 .map(String::from)
         });
+    let verified_source_oid = adapter_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|v| {
+            v.get("verified_source_oid")
+                .and_then(|d| d.as_str())
+                .map(String::from)
+        });
     let digest_ok = if adapter_kind == "compose-runner" {
         match (oci_image_ref.as_ref(), applied_digest.as_ref()) {
             (Some(req), Some(app)) => req.split('@').nth(1) == Some(app.as_str()),
@@ -247,7 +269,12 @@ pub async fn start_deployment(
     } else {
         true
     };
-    let ok = ok && digest_ok;
+    let source_ok = if adapter_kind == "compose-runner" {
+        verified_source_oid.as_deref() == Some(release_commit_oid.as_str())
+    } else {
+        true
+    };
+    let ok = ok && digest_ok && source_ok;
     let summary = if ok {
         serde_json::json!({
             "status": "healthy",
@@ -256,6 +283,8 @@ pub async fn start_deployment(
             "release_manifest_sha256": manifest,
             "release_oci_image_ref": oci_image_ref,
             "applied_oci_digest": applied_digest,
+            "verified_source_oid": verified_source_oid,
+            "pipeline_source_oid": release_commit_oid,
             "compose_project": project,
         })
     } else if capability_gap {
@@ -268,6 +297,8 @@ pub async fn start_deployment(
     } else {
         let err = if !digest_ok {
             "oci_digest_mismatch"
+        } else if !source_ok {
+            "source_oid_mismatch"
         } else {
             "deploy_failed"
         };
@@ -277,6 +308,8 @@ pub async fn start_deployment(
             "error_code": err,
             "release_oci_image_ref": oci_image_ref,
             "applied_oci_digest": applied_digest,
+            "verified_source_oid": verified_source_oid,
+            "pipeline_source_oid": release_commit_oid,
             "compose_project": project,
         })
     };

@@ -26,6 +26,9 @@ pub struct TraceView {
     pub agent_run_id: Option<Uuid>,
     pub deployment_adapter: String,
     pub adapter_is_mock: bool,
+    pub release_oci_image_ref: Option<String>,
+    pub applied_oci_digest: Option<String>,
+    pub verified_source_oid: Option<String>,
     pub artifacts: Vec<TraceArtifact>,
     pub gaps: Vec<String>,
 }
@@ -55,14 +58,14 @@ pub async fn get_deployment_trace(
     let Some((release_id,)) = row else {
         return Err(AppError::NotFound);
     };
-    let release = sqlx::query_as::<_, (String, Uuid)>(
-        "SELECT commit_oid, pipeline_run_id FROM releases WHERE id = $1",
+    let release = sqlx::query_as::<_, (String, Uuid, Option<String>)>(
+        "SELECT commit_oid, pipeline_run_id, oci_image_ref FROM releases WHERE id = $1",
     )
     .bind(release_id)
     .fetch_one(&state.pool)
     .await
     .map_err(|_| AppError::NotFound)?;
-    let (commit_oid, pipeline_run_id) = release;
+    let (commit_oid, pipeline_run_id, release_oci) = release;
     let dep = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
         "SELECT adapter_kind, health_summary FROM deployments WHERE id = $1",
     )
@@ -150,10 +153,29 @@ pub async fn get_deployment_trace(
         gaps.push("no_ready_artifacts".to_string());
     }
     let adapter = dep.0.clone();
+    let applied_oci_digest = dep.1.as_ref().and_then(|s| {
+        s.get("applied_oci_digest")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
+    let verified_source_oid = dep.1.as_ref().and_then(|s| {
+        s.get("verified_source_oid")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
     if adapter == "compose-mock" {
         gaps.push("deploy_not_isolated_compose".to_string());
         gaps.push("deploy_no_oci_registry".to_string());
     } else if adapter == "compose-runner" {
+        if release_oci.is_none() {
+            gaps.push("release_oci_image_ref_missing".to_string());
+        }
+        if applied_oci_digest.is_none() {
+            gaps.push("applied_oci_digest_missing".to_string());
+        }
+        if verified_source_oid.as_deref() != Some(commit_oid.as_str()) {
+            gaps.push("verified_source_oid_mismatch".to_string());
+        }
         if let Some(summary) = &dep.1 {
             if summary.get("error_code").and_then(|v| v.as_str()) == Some("docker_unavailable") {
                 gaps.push("deploy_docker_unavailable".to_string());
@@ -176,6 +198,9 @@ pub async fn get_deployment_trace(
         agent_run_id: pipe.2,
         deployment_adapter: adapter.clone(),
         adapter_is_mock: adapter == "compose-mock",
+        release_oci_image_ref: release_oci,
+        applied_oci_digest,
+        verified_source_oid,
         artifacts: artifacts
             .into_iter()
             .map(|(name, sha256, byte_length)| TraceArtifact {

@@ -17,6 +17,7 @@
     "createPullRequest": "Create pull request",
     "deliveryTitle": "Delivery chain",
     "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
+    "deliveryModeNote": "Deploy follows server policy: pipeline-built OCI + compose-runner when MUSEHUB_REQUIRE_PIPELINE_OCI=1; otherwise compose-mock for local dev.",
     "runPipelineOnMain": "Run pipeline on merged main tip",
     "releaseAndDeployMock": "Release + mock deploy",
     "viewTrace": "View deployment trace",

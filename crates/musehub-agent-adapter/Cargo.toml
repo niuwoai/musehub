@@ -25,6 +25,10 @@ name = "musehub-pipeline-reference"
 path = "src/bin/musehub_pipeline_reference.rs"
 
 [[bin]]
+name = "musehub-pipeline-oci"
+path = "src/bin/musehub_pipeline_oci.rs"
+
+[[bin]]
 name = "musehub-compose-mock"
 path = "src/bin/musehub_compose_mock.rs"
 

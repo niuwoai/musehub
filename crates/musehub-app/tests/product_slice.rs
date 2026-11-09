@@ -81,6 +81,7 @@ async fn login_create_repo_issue_reference_agent() {
         instance_id: lease::parse_instance_id(),
         supervisor: new_supervisor(),
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
+        require_pipeline_oci: false,
     });
     let app = product_router(state);
 
