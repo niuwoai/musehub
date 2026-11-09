@@ -24,8 +24,8 @@ use crate::error::AppError;
 use crate::mcp::auth::{self, deny_runner_only_pat, require_scope, resolve_repo};
 use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
-    agent_run_cancel, agent_run_start, deployment_start, issue_create, pipeline_run, plan_accept,
-    plan_create, pr_review, repo_summary_json,
+    agent_run_cancel, agent_run_start, deployment_rollback, deployment_start, issue_create,
+    pipeline_run, plan_accept, plan_create, pr_review, repo_summary_json,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
@@ -36,6 +36,15 @@ use crate::AppState;
 
 const READ_SCOPE: &str = "repo:read";
 const WRITE_SCOPE: &str = "repo:write";
+const AUDIT_READ_SCOPE: &str = "audit:read";
+
+fn require_audit_read(pat: &crate::pat_auth::PatContext) -> Result<(), AppError> {
+    if require_scope(pat, AUDIT_READ_SCOPE).is_ok() || require_scope(pat, READ_SCOPE).is_ok() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
 
 #[derive(Clone)]
 pub struct ProductionMcpServer {
@@ -212,6 +221,32 @@ struct DeploymentStartInput {
     #[serde(default)]
     config_version: Option<i64>,
     idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DeploymentRollbackInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    environment_id: String,
+    target_healthy_deployment_id: String,
+    #[serde(default)]
+    expected_environment_version: Option<i64>,
+    #[serde(default)]
+    reason: Option<String>,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AuditListInput {
+    org_id: String,
+    #[serde(default)]
+    repository_id: Option<String>,
+    #[serde(default)]
+    resource_type: Option<String>,
+    #[serde(default)]
+    resource_id: Option<String>,
+    #[serde(default, flatten)]
+    page: PageInput,
 }
 
 fn app_error_to_mcp(err: AppError) -> ErrorData {
@@ -1225,6 +1260,156 @@ impl ProductionMcpServer {
                 Ok(domain_err(e))
             }
         }
+    }
+
+    #[tool(
+        name = "musehub_deployment_rollback",
+        description = "Rollback an environment to a previous healthy deployment",
+        annotations(idempotent_hint = true, destructive_hint = true)
+    )]
+    async fn musehub_deployment_rollback(
+        &self,
+        Parameters(input): Parameters<DeploymentRollbackInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let environment_id = parse_uuid("environment_id", &input.environment_id)?;
+        let target_id = parse_uuid(
+            "target_healthy_deployment_id",
+            &input.target_healthy_deployment_id,
+        )?;
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "environment_id": input.environment_id,
+            "target_healthy_deployment_id": input.target_healthy_deployment_id,
+            "expected_environment_version": input.expected_environment_version,
+            "reason": input.reason,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_deployment_rollback",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let attempt_id = Uuid::new_v4();
+        match deployment_rollback(
+            &self.state,
+            &access,
+            environment_id,
+            target_id,
+            attempt_id,
+            input.reason.clone(),
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_audit_list",
+        description = "List audit events for an organization",
+        annotations(read_only_hint = true)
+    )]
+    async fn musehub_audit_list(
+        &self,
+        Parameters(input): Parameters<AuditListInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_audit_read(&pat) {
+            return Ok(domain_err(e));
+        }
+        let org_id = parse_uuid("org_id", &input.org_id)?;
+        if !crate::pat_auth::pat_org_allowed(pat.org_id, org_id) {
+            return Ok(domain_err(AppError::Forbidden));
+        }
+        let member: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+        )
+        .bind(org_id)
+        .bind(pat.principal_id)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| app_error_to_mcp(e.into()))?;
+        if member.is_none() {
+            return Ok(domain_err(AppError::Forbidden));
+        }
+        let repo_id = match input.repository_id.as_deref() {
+            Some(raw) => Some(parse_uuid("repository_id", raw)?),
+            None => None,
+        };
+        let resource_id = match input.resource_id.as_deref() {
+            Some(raw) => Some(parse_uuid("resource_id", raw)?),
+            None => None,
+        };
+        if let Some(rid) = repo_id {
+            let belongs: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM repositories WHERE id = $1 AND org_id = $2",
+            )
+            .bind(rid)
+            .bind(org_id)
+            .fetch_optional(&self.state.pool)
+            .await
+            .map_err(|e| app_error_to_mcp(e.into()))?;
+            if belongs.is_none() {
+                return Ok(domain_err(AppError::NotFound));
+            }
+        }
+        let limit = page_limit(input.page.limit) as i64;
+        let items = crate::audit::query_org_audit(
+            &self.state.pool,
+            org_id,
+            repo_id,
+            input.resource_type.clone(),
+            resource_id,
+            limit,
+        )
+        .await
+        .map_err(|e| app_error_to_mcp(e.into()))?;
+        let rows: Vec<Value> = items
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "id": e.id.to_string(),
+                    "org_id": e.org_id.map(|u| u.to_string()),
+                    "repo_id": e.repo_id.map(|u| u.to_string()),
+                    "actor_id": e.actor_id.to_string(),
+                    "action": e.action,
+                    "resource_type": e.resource_type,
+                    "resource_id": e.resource_id.to_string(),
+                    "decision": e.decision,
+                    "metadata": e.metadata,
+                    "occurred_at": e.occurred_at,
+                })
+            })
+            .collect();
+        Ok(domain_ok(json!({ "items": rows })))
     }
 
     #[tool(

@@ -32,10 +32,10 @@
 | 干净机器一键安装/启动 | `[~]` | `deploy/docker-compose.yml` + `deploy/RUNBOOK.md` + CI `product-stack`；无 systemd |
 | 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例；CI 经 HTTP 网关验路径 |
 | DB 迁移升级 Runbook | `[~]` | 入口 migrate + RUNBOOK；CI 证明 idempotent migrate + 镜像 recreate 保数据 |
-| 最小 RBAC / PAT scope / 审计 | `[~]` | `audit_events` 表 + REST `GET .../audit/events`（login/deploy/rollback）；**无** `musehub_audit_list` MCP、细粒度 org grant |
+| 最小 RBAC / PAT scope / 审计 | `[~]` | `audit_events` + REST + **`musehub_audit_list` MCP**（`audit:read` 或 `repo:read`）；细粒度 org grant 仍缺 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[~]` | 见 `docs/RUNNER-BOUNDARY.md`；进程内 supervisor + 子进程；**无** 远端 worker |
-| 部署回滚操作 | `[~]` | REST rollback **经 compose 适配器重跑** release（mock e2e + runner 待 **GitHub Docker CI**）；trace/audit/attempt 幂等；**无** `musehub_deployment_rollback` MCP |
+| 部署回滚操作 | `[~]` | REST + **`musehub_deployment_rollback` MCP** 经 compose 真实 runner（`deployment_rollback_runner_e2e` 在 VM 已跑通）；远端 Docker CI 未统一验收 |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | 环境变量为主；**无** 管理 UI 配置面 |
 | MCP V1 完整工具/Resources 读实现 | `[~]` | 19 工具 + 5 URI 模板；**仅 2** 个 `resource_reads_implemented_v1`；issue/PR/commit file 未实现 |

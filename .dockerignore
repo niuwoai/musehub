@@ -1,0 +1,11 @@
+target/
+.git/
+**/*.rs.bk
+deploy/.env*
+deploy/.env.ci
+**/__pycache__/
+node_modules/
+web/node_modules/
+.cursor/
+tmp/
+*.log

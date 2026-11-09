@@ -421,6 +421,37 @@ pub async fn deployment_start(
     .await
 }
 
+pub async fn deployment_rollback(
+    state: &Arc<AppState>,
+    access: &RepoAccess,
+    environment_id: Uuid,
+    target_deployment_id: Uuid,
+    attempt_id: Uuid,
+    reason: Option<String>,
+) -> Result<Value, AppError> {
+    let (status, axum::Json(view)) = crate::deployment::mcp_rollback_deployment(
+        state,
+        access.org_id,
+        access.repo_id,
+        environment_id,
+        target_deployment_id,
+        attempt_id,
+        reason,
+        None,
+    )
+    .await?;
+    Ok(json!({
+        "id": view.id.to_string(),
+        "release_id": view.release_id.to_string(),
+        "environment_slug": view.environment_slug,
+        "state": view.state,
+        "adapter_kind": view.adapter_kind,
+        "attempt_id": view.attempt_id.map(|u| u.to_string()),
+        "health_summary": view.health_summary,
+        "http_status": status.as_u16(),
+    }))
+}
+
 pub fn repo_summary_json(
     bind_display: &str,
     org_slug: &str,

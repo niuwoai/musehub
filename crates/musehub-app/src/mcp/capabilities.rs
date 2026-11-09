@@ -23,8 +23,10 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     "musehub_pipeline_run",
     "musehub_release_get",
     "musehub_deployment_start",
+    "musehub_deployment_rollback",
     "musehub_deployment_get",
     "musehub_deployment_trace",
+    "musehub_audit_list",
 ];
 
 /// Resource URI templates from `docs/04-mcp-api.md` §13 (V1 catalog; reads enforce PAT + repo scope).
@@ -51,6 +53,7 @@ pub const WRITE_IDEMPOTENCY_TOOLS: &[&str] = &[
     "musehub_agent_run_cancel",
     "musehub_pipeline_run",
     "musehub_deployment_start",
+    "musehub_deployment_rollback",
 ];
 
 pub fn capability_payload() -> Value {

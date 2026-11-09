@@ -4,6 +4,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Legacy builder avoids buildx lock issues on shared CI/VM runners.
+export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
+export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
 
 command -v docker >/dev/null || { echo "docker required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
@@ -14,7 +17,20 @@ command -v pg_restore >/dev/null || { echo "pg_restore required" >&2; exit 1; }
 STACK_ID="musehub-stack-ci-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
 ENV_FILE="$ROOT/deploy/.env.ci"
-COMPOSE_BASE=(docker compose -f "$ROOT/deploy/docker-compose.yml" -f "$ROOT/deploy/docker-compose.ci.yml" --env-file "$ENV_FILE")
+CADDY_CI_HOST="$ROOT/deploy/.caddy.ci.host.${STACK_ID}.yml"
+MUSEHUB_CI_POSTGRES_PORT=$((40000 + RANDOM % 20000))
+MUSEHUB_CI_API_HOST_PORT=$((50000 + RANDOM % 15000))
+export MUSEHUB_CI_POSTGRES_PORT MUSEHUB_CI_API_HOST_PORT
+sed "s/host.docker.internal:58080/host.docker.internal:${MUSEHUB_CI_API_HOST_PORT}/g" \
+  "$ROOT/deploy/Caddyfile.ci.host.yml" >"$CADDY_CI_HOST"
+COMPOSE_CI_EXTRA="$ROOT/deploy/.compose.ci.${STACK_ID}.yml"
+cat >"$COMPOSE_CI_EXTRA" <<EOF
+services:
+  gateway:
+    volumes:
+      - ${CADDY_CI_HOST}:/etc/caddy/Caddyfile:ro
+EOF
+COMPOSE_BASE=(docker compose -f "$ROOT/deploy/docker-compose.yml" -f "$ROOT/deploy/docker-compose.ci.yml" -f "$COMPOSE_CI_EXTRA" --env-file "$ENV_FILE")
 dc() { "${COMPOSE_BASE[@]}" "$@"; }
 
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
@@ -28,6 +44,10 @@ MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=$BOOTSTRAP_PW
 MUSEHUB_GATEWAY_HTTP_PORT=18080
 MUSEHUB_MCP_PRODUCT=0
 EOF
+{
+  echo "MUSEHUB_CI_POSTGRES_PORT=$MUSEHUB_CI_POSTGRES_PORT"
+  echo "MUSEHUB_CI_API_HOST_PORT=$MUSEHUB_CI_API_HOST_PORT"
+} >>"$ENV_FILE"
 POSTGRES_PASSWORD="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 SESSION_SECRET="$(grep '^MUSEHUB_SESSION_SECRET=' "$ENV_FILE" | cut -d= -f2-)"
 BOOTSTRAP_PW="$(grep '^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
@@ -36,7 +56,7 @@ export POSTGRES_PASSWORD SESSION_SECRET BOOTSTRAP_PW MUSEHUB_GATEWAY_HTTP_PORT
 
 cleanup() {
   dc down -v --remove-orphans 2>/dev/null || true
-  rm -f "$ENV_FILE"
+  rm -f "$ENV_FILE" "$CADDY_CI_HOST" "$COMPOSE_CI_EXTRA"
 }
 trap cleanup EXIT
 
@@ -52,7 +72,7 @@ echo "=== compose up ==="
 dc up -d
 
 BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
-DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:55432/musehub"
+DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub"
 
 wait_ready() {
   for _ in $(seq 1 90); do

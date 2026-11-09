@@ -73,15 +73,14 @@ pub fn request_id_from_headers(headers: &HeaderMap) -> Option<Uuid> {
         .and_then(|s| Uuid::parse_str(s).ok())
 }
 
-pub async fn list_org_audit(
-    State(state): State<std::sync::Arc<crate::AppState>>,
-    headers: HeaderMap,
-    axum::extract::Path(org): axum::extract::Path<String>,
-    Query(query): Query<ListAuditQuery>,
-) -> Result<Json<Vec<AuditEventView>>, AppError> {
-    let principal_id = super::require_session(&state.pool, &headers).await?;
-    let org_id = super::org_id_for_member(&state.pool, &org, principal_id).await?;
-    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+pub async fn query_org_audit(
+    pool: &PgPool,
+    org_id: Uuid,
+    repo_id: Option<Uuid>,
+    resource_type: Option<String>,
+    resource_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<AuditEventView>, AppError> {
     let rows = sqlx::query_as::<_, (
         Uuid,
         Option<Uuid>,
@@ -97,16 +96,20 @@ pub async fn list_org_audit(
         "SELECT id, org_id, repo_id, actor_id, action, resource_type, resource_id, decision, metadata, occurred_at
          FROM audit_events
          WHERE org_id = $1
-           AND ($2::text IS NULL OR resource_type = $2)
+           AND ($2::uuid IS NULL OR repo_id = $2)
+           AND ($3::text IS NULL OR resource_type = $3)
+           AND ($4::uuid IS NULL OR resource_id = $4)
          ORDER BY occurred_at DESC, id DESC
-         LIMIT $3",
+         LIMIT $5",
     )
     .bind(org_id)
-    .bind(query.resource_type)
+    .bind(repo_id)
+    .bind(resource_type)
+    .bind(resource_id)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await?;
-    let items = rows
+     Ok(rows
         .into_iter()
         .map(
             |(id, o, r, actor, action, rt, rid, decision, meta, at)| AuditEventView {
@@ -124,6 +127,26 @@ pub async fn list_org_audit(
                     .unwrap_or_else(|_| at.to_string()),
             },
         )
-        .collect();
+        .collect())
+}
+
+pub async fn list_org_audit(
+    State(state): State<std::sync::Arc<crate::AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(org): axum::extract::Path<String>,
+    Query(query): Query<ListAuditQuery>,
+) -> Result<Json<Vec<AuditEventView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let org_id = super::org_id_for_member(&state.pool, &org, principal_id).await?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let items = query_org_audit(
+        &state.pool,
+        org_id,
+        None,
+        query.resource_type,
+        None,
+        limit,
+    )
+    .await?;
     Ok(Json(items))
 }
