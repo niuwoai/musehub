@@ -138,6 +138,7 @@ pub(crate) async fn mcp_rollback_deployment(
     target_deployment_id: Uuid,
     attempt_id: Uuid,
     reason: Option<String>,
+    actor_id: Option<Uuid>,
     request_id: Option<Uuid>,
 ) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
     let target = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<serde_json::Value>)>(
@@ -185,10 +186,7 @@ pub(crate) async fn mcp_rollback_deployment(
         rollback_reason: reason,
         audit_action: "deployment.rollback",
     };
-    let pat = state.mcp_pat_slot.read().await;
-    let actor = pat.as_ref().map(|p| p.principal_id);
-    drop(pat);
-    launch_deployment(state, org_id, repo_id, actor, request_id, launch).await
+    launch_deployment(state, org_id, repo_id, actor_id, request_id, launch).await
 }
 
 pub(crate) async fn mcp_start_deployment(
@@ -596,6 +594,7 @@ pub async fn rollback_deployment(
         body.target_deployment_id,
         attempt_id,
         body.reason.clone(),
+        Some(principal_id),
         crate::audit::request_id_from_headers(&headers),
     )
     .await

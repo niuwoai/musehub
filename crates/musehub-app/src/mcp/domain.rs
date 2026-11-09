@@ -429,6 +429,9 @@ pub async fn deployment_rollback(
     attempt_id: Uuid,
     reason: Option<String>,
 ) -> Result<Value, AppError> {
+    let pat = state.mcp_pat_slot.read().await;
+    let actor = pat.as_ref().map(|p| p.principal_id);
+    drop(pat);
     let (status, axum::Json(view)) = crate::deployment::mcp_rollback_deployment(
         state,
         access.org_id,
@@ -437,6 +440,7 @@ pub async fn deployment_rollback(
         target_deployment_id,
         attempt_id,
         reason,
+        actor,
         None,
     )
     .await?;
