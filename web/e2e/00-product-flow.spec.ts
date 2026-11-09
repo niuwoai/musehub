@@ -19,16 +19,19 @@ test.describe('product slice browser flow', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
+    const repoCountBefore = await repoNavButtons(page).count()
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    const repoButton = repoNavButtons(page).first()
+    await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
+    const repoButton = repoNavButtons(page).last()
     await expect(repoButton).toBeVisible({ timeout: 15_000 })
     await repoButton.click()
 
-    await page
-      .getByRole('button', { name: /create issue|创建 issue/i })
-      .click()
-    await page.getByRole('button', { name: /accept plan|接受计划/i }).click()
-    await page.getByRole('button', { name: /run agent|运行/i }).first().click()
+    await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
+    await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
+    const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
+    await expect(runAgent).toBeVisible({ timeout: 15_000 })
+    await runAgent.click()
+    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
       timeout: 60_000,
     })
