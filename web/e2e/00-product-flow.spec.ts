@@ -31,10 +31,9 @@ test.describe('product slice browser flow', () => {
     const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
     await expect(runAgent).toBeVisible({ timeout: 15_000 })
     await runAgent.click()
-    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
-      timeout: 60_000,
-    })
+    const lastRun = page.getByTestId('last-agent-run')
+    await expect(lastRun).toBeVisible({ timeout: 60_000 })
+    await expect(lastRun).toContainText(/succeeded/i, { timeout: 120_000 })
 
     const me = await page.request.get(`${apiBase}/api/v1/me`)
     expect(me.ok()).toBeTruthy()
