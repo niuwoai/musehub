@@ -1,7 +1,7 @@
 # 本地验收跑批记录
 
 > Branch: `cursor/local-product-integration-5f97` → PR [#16](https://github.com/niuwoai/musehub/pull/16)  
-> **本 commit SHA**: `eb56175`（`run-ci-security-integration-local.sh=ok`，`run-web-e2e.sh` 6 passed）  
+> **本 commit SHA**: `14abc09`（`run-ci-security-integration-local.sh=ok`，`run-web-e2e.sh` 6 passed）  
 > **未** 触发 GitHub Actions merge/tag；用户可在本仓库联跑更新后的 `ci.yml`。
 
 ## 本地可交付（VM 已跑通）
