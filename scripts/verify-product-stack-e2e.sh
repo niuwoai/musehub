@@ -19,7 +19,7 @@ dc() { "${COMPOSE_BASE[@]}" "$@"; }
 
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 SESSION_SECRET="$(openssl rand -hex 24)"
-BOOTSTRAP_PW="Stack-Bootstrap-Strong-$(openssl rand -hex 4)!"
+BOOTSTRAP_PW="StackBootstrap$(openssl rand -hex 8)"
 
 cat >"$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
@@ -74,19 +74,32 @@ echo "$html" | grep -qE '/assets/|MuseHub'
 [[ "$html" != *"/src/main.tsx"* ]] || { echo "dev index leaked into gateway" >&2; exit 1; }
 
 COOKIE_JAR=$(mktemp)
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+login_json=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
-  "$BASE/api/v1/auth/login" >/dev/null
+  "$BASE/api/v1/auth/login")
+echo "$login_json" | jq -e '.ok == true' >/dev/null
+me_json=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/me")
+echo "$me_json" | jq -e '.handle == "admin"' >/dev/null
 
 api() {
   local method=$1 uri=$2 data=${3:-}
+  local tmp body code
+  tmp=$(mktemp)
   if [[ -n "$data" ]]; then
-    curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" \
-      -H 'Content-Type: application/json' -d "$data" "$BASE$uri"
+    code=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" \
+      -H 'Content-Type: application/json' -d "$data" -o "$tmp" -w "%{http_code}" "$BASE$uri")
   else
-    curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" "$BASE$uri"
+    code=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" \
+      -o "$tmp" -w "%{http_code}" "$BASE$uri")
   fi
+  body=$(cat "$tmp")
+  rm -f "$tmp"
+  if [[ "$code" -ge 400 ]]; then
+    echo "api ${method} ${uri} failed http=${code} body=${body}" >&2
+    exit 1
+  fi
+  printf '%s' "$body"
 }
 
 echo "=== vertical slice via gateway ==="
