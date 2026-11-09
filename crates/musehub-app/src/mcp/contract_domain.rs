@@ -1040,51 +1040,17 @@ pub async fn deployment_approve(
     decision: &str,
     reason: &str,
 ) -> Result<Value, AppError> {
-    if !matches!(decision, "approve" | "reject") {
-        return Err(AppError::Validation("invalid decision".to_string()));
-    }
-    let row = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
-        "SELECT d.id, d.state, r.manifest_sha256
-         FROM deployments d
-         JOIN releases r ON r.id = d.release_id
-         WHERE d.id = $1 AND d.repo_id = $2",
+    crate::deployment::apply_deployment_approval(
+        state,
+        access.org_id,
+        access.repo_id,
+        principal_id,
+        deployment_id,
+        expected_plan_hash,
+        decision,
+        reason,
     )
-    .bind(deployment_id)
-    .bind(access.repo_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((id, dep_state, manifest)) = row else {
-        return Err(AppError::NotFound);
-    };
-    let plan_hash = manifest.unwrap_or_default();
-    if plan_hash != expected_plan_hash {
-        return Err(AppError::Validation("expected_plan_hash mismatch".to_string()));
-    }
-    let approver_ok = crate::grants::is_org_privileged(&state.pool, access.org_id, principal_id).await?
-        || crate::grants::principal_has_repo_grant(&state.pool, access.repo_id, principal_id).await?;
-    if !approver_ok {
-        return Err(AppError::Forbidden);
-    }
-    sqlx::query(
-        "INSERT INTO deployment_approvals (id, org_id, repo_id, deployment_id, plan_hash, decision, approver_id, reason)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(access.org_id)
-    .bind(access.repo_id)
-    .bind(id)
-    .bind(&plan_hash)
-    .bind(decision)
-    .bind(principal_id)
-    .bind(reason)
-    .execute(&state.pool)
-    .await?;
-    Ok(json!({
-        "deployment_id": id.to_string(),
-        "decision": decision,
-        "state": dep_state,
-        "plan_hash": plan_hash,
-    }))
+    .await
 }
 
 pub async fn delivery_get(

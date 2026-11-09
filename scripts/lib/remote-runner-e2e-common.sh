@@ -94,6 +94,7 @@ remote_runner_login_cookie() {
   local pass cookie
   local candidates=(
     "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-}"
+    "Ci-Bootstrap-Strong!2026"
     "Acceptance-Bootstrap-Strong-1!"
     "Remote-Runner-E2E-Strong-1!"
     "Product-Stack-E2E-Strong-1!"

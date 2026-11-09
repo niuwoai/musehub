@@ -56,7 +56,7 @@ struct DeploymentLaunch {
     attempt_id: Uuid,
     rollback_of_id: Option<Uuid>,
     rollback_reason: Option<String>,
-    audit_action: &'static str,
+    audit_action: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -138,7 +138,7 @@ pub async fn start_deployment(
         attempt_id: body.attempt_id.unwrap_or_else(Uuid::new_v4),
         rollback_of_id: None,
         rollback_reason: None,
-        audit_action: "deployment.start",
+        audit_action: "deployment.start".to_string(),
     };
     launch_deployment(
         &state,
@@ -250,7 +250,7 @@ pub(crate) async fn mcp_rollback_deployment(
         attempt_id,
         rollback_of_id: Some(target_id),
         rollback_reason: reason,
-        audit_action: "deployment.rollback",
+        audit_action: "deployment.rollback".to_string(),
     };
     launch_deployment(state, org_id, repo_id, actor_id, request_id, launch).await
 }
@@ -279,13 +279,19 @@ pub(crate) async fn mcp_start_deployment(
         attempt_id: Uuid::new_v4(),
         rollback_of_id: None,
         rollback_reason: None,
-        audit_action: "deployment.start",
+        audit_action: "deployment.start".to_string(),
     };
     let pat = state.mcp_pat_slot.read().await;
     let actor = pat.as_ref().map(|p| p.principal_id);
     drop(pat);
     let (status, Json(view)) =
         launch_deployment(state, org_id, repo_id, actor, None, launch).await?;
+    let plan_hash: Option<String> = sqlx::query_scalar(
+        "SELECT plan_hash::text FROM deployments WHERE id = $1",
+    )
+    .bind(view.id)
+    .fetch_optional(&state.pool)
+    .await?;
     Ok(serde_json::json!({
         "id": view.id.to_string(),
         "release_id": view.release_id.to_string(),
@@ -294,6 +300,8 @@ pub(crate) async fn mcp_start_deployment(
         "adapter_kind": view.adapter_kind,
         "attempt_id": view.attempt_id.map(|u| u.to_string()),
         "http_status": status.as_u16(),
+        "approval_required": view.state == "awaiting_approval",
+        "plan_hash": plan_hash,
     }))
 }
 
@@ -306,14 +314,14 @@ async fn launch_deployment(
     launch: DeploymentLaunch,
 ) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
     let env_slug = launch.environment_slug.clone();
-    let env = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM environments WHERE repo_id = $1 AND slug = $2",
+    let env = sqlx::query_as::<_, (Uuid, bool)>(
+        "SELECT id, requires_approval FROM environments WHERE repo_id = $1 AND slug = $2",
     )
     .bind(repo_id)
     .bind(&env_slug)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((environment_id,)) = env else {
+    let Some((environment_id, requires_approval)) = env else {
         return Err(AppError::NotFound);
     };
     let _ = org_id;
@@ -432,7 +440,7 @@ async fn launch_deployment(
         adapter_kind: adapter_kind.to_string(),
         rollback_of_id: launch.rollback_of_id,
         rollback_reason: launch.rollback_reason.clone(),
-        audit_action: launch.audit_action.to_string(),
+        audit_action: launch.audit_action.clone(),
         environment_slug: env_slug.clone(),
         actor_id: actor_id.map(|u| u.to_string()),
     };
@@ -445,11 +453,28 @@ async fn launch_deployment(
     if let Some(ref prev) = teardown_project {
         payload.teardown_project = Some(prev.clone());
     }
-    let initial_state = if remote_deploy { "queued" } else { "running" };
-    let insert = if remote_deploy {
+    let plan_hash = manifest
+        .as_deref()
+        .filter(|m| m.len() == 64)
+        .map(String::from);
+    if requires_approval && plan_hash.is_none() {
+        return Err(AppError::Validation(
+            "protected environment requires published release manifest_sha256".to_string(),
+        ));
+    }
+    let payload_json =
+        serde_json::to_value(&payload).map_err(|e| AppError::Other(e.to_string()))?;
+    let initial_state = if requires_approval {
+        "awaiting_approval"
+    } else if remote_deploy {
+        "queued"
+    } else {
+        "running"
+    };
+    let insert = if requires_approval || remote_deploy {
         sqlx::query(
-            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id, launch_payload)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id, launch_payload, plan_hash, requested_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
         )
         .bind(deployment_id)
         .bind(org_id)
@@ -460,13 +485,15 @@ async fn launch_deployment(
         .bind(initial_state)
         .bind(attempt_id)
         .bind(launch.rollback_of_id)
-        .bind(serde_json::to_value(&payload).map_err(|e| AppError::Other(e.to_string()))?)
+        .bind(payload_json)
+        .bind(plan_hash.as_deref())
+        .bind(actor_id)
         .execute(&state.pool)
         .await
     } else {
         sqlx::query(
-            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id)
-             VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8)",
+            "INSERT INTO deployments (id, org_id, repo_id, environment_id, release_id, adapter_kind, state, attempt_id, rollback_of_id, plan_hash, requested_by)
+             VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8,$9,$10)",
         )
         .bind(deployment_id)
         .bind(org_id)
@@ -476,6 +503,8 @@ async fn launch_deployment(
         .bind(adapter_kind)
         .bind(attempt_id)
         .bind(launch.rollback_of_id)
+        .bind(plan_hash.as_deref())
+        .bind(actor_id)
         .execute(&state.pool)
         .await
     };
@@ -507,6 +536,39 @@ async fn launch_deployment(
     }
     insert?;
 
+    if requires_approval {
+        if let Some(actor) = actor_id {
+            let _ = crate::audit::record(
+                &state.pool,
+                Some(org_id),
+                Some(repo_id),
+                actor,
+                None,
+                "deployment.awaiting_approval",
+                "deployment",
+                deployment_id,
+                request_id,
+                "allow",
+                serde_json::json!({
+                    "release_id": launch.release_id.to_string(),
+                    "plan_hash": plan_hash,
+                    "environment_slug": env_slug,
+                }),
+            )
+            .await;
+        }
+        return Ok(row_to_view(
+            deployment_id,
+            launch.release_id,
+            &env_slug,
+            "awaiting_approval".to_string(),
+            adapter_kind.to_string(),
+            None,
+            attempt_id,
+            StatusCode::ACCEPTED,
+        ));
+    }
+
     if remote_deploy {
         return Ok(row_to_view(
             deployment_id,
@@ -520,23 +582,69 @@ async fn launch_deployment(
         ));
     }
 
+    run_local_compose_deploy(
+        state,
+        deployment_id,
+        org_id,
+        repo_id,
+        &launch,
+        &env_slug,
+        attempt_id,
+        actor_id,
+        request_id,
+        &payload,
+        &compose_bin,
+        adapter_kind,
+        &health_target,
+        publish_port,
+        &manifest,
+        &oci_image_ref,
+        &release_commit_oid,
+        product_runner,
+        &teardown_project,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_local_compose_deploy(
+    state: &Arc<crate::AppState>,
+    deployment_id: Uuid,
+    org_id: Uuid,
+    repo_id: Uuid,
+    launch: &DeploymentLaunch,
+    env_slug: &str,
+    attempt_id: Uuid,
+    actor_id: Option<Uuid>,
+    request_id: Option<Uuid>,
+    payload: &DeploymentLaunchPayload,
+    compose_bin: &std::path::Path,
+    adapter_kind: &str,
+    health_target: &str,
+    publish_port: u32,
+    manifest: &Option<String>,
+    oci_image_ref: &Option<String>,
+    release_commit_oid: &str,
+    product_runner: bool,
+    teardown_project: &Option<String>,
+) -> Result<(StatusCode, Json<DeploymentView>), AppError> {
     let project = payload.project.clone();
-    let mut cmd = Command::new(&compose_bin);
-    cmd.env("MUSEHUB_DEPLOY_HEALTH_TARGET", &health_target)
+    let mut cmd = Command::new(compose_bin);
+    cmd.env("MUSEHUB_DEPLOY_HEALTH_TARGET", health_target)
         .env(
             "MUSEHUB_RELEASE_MANIFEST_SHA256",
             manifest.clone().unwrap_or_default(),
         )
         .env("MUSEHUB_COMPOSE_PROJECT", &project)
         .env("MUSEHUB_COMPOSE_PUBLISH_PORT", publish_port.to_string())
-        .env("MUSEHUB_RELEASE_COMMIT_OID", &release_commit_oid)
+        .env("MUSEHUB_RELEASE_COMMIT_OID", release_commit_oid)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(ref oci) = oci_image_ref {
+    if let Some(oci) = oci_image_ref {
         cmd.env("MUSEHUB_OCI_IMAGE_REF", oci);
     }
-    if let Some(ref prev) = teardown_project {
+    if let Some(prev) = teardown_project {
         cmd.env("MUSEHUB_COMPOSE_TEARDOWN_PROJECT", prev);
     }
     if product_runner || (launch.rollback_of_id.is_some() && adapter_kind == "compose-runner") {
@@ -544,7 +652,7 @@ async fn launch_deployment(
     }
     let child = cmd
         .spawn()
-        .map_err(|e| AppError::Other(format!("spawn {:?}: {e}", compose_bin)))?;
+        .map_err(|e| AppError::Other(format!("spawn {compose_bin:?}: {e}")))?;
     let finished = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await;
     let (ok, adapter_stdout, capability_gap) = match &finished {
         Ok(Ok(out)) => {
@@ -580,7 +688,7 @@ async fn launch_deployment(
         true
     };
     let source_ok = if adapter_kind == "compose-runner" {
-        verified_source_oid.as_deref() == Some(release_commit_oid.as_str())
+        verified_source_oid.as_deref() == Some(release_commit_oid)
     } else {
         true
     };
@@ -652,7 +760,7 @@ async fn launch_deployment(
             Some(repo_id),
             actor,
             None,
-            launch.audit_action,
+            launch.audit_action.as_str(),
             "deployment",
             deployment_id,
             request_id,
@@ -670,13 +778,239 @@ async fn launch_deployment(
     Ok(row_to_view(
         deployment_id,
         launch.release_id,
-        &env_slug,
+        env_slug,
         state_name.to_string(),
         adapter_kind.to_string(),
         Some(summary),
         attempt_id,
         StatusCode::CREATED,
     ))
+}
+
+pub async fn apply_deployment_approval(
+    state: &Arc<crate::AppState>,
+    org_id: Uuid,
+    repo_id: Uuid,
+    principal_id: Uuid,
+    deployment_id: Uuid,
+    expected_plan_hash: &str,
+    decision: &str,
+    reason: &str,
+) -> Result<serde_json::Value, AppError> {
+    if !matches!(decision, "approve" | "reject") {
+        return Err(AppError::Validation("invalid decision".to_string()));
+    }
+    if expected_plan_hash.len() != 64 {
+        return Err(AppError::Validation(
+            "expected_plan_hash must be 64 hex chars".to_string(),
+        ));
+    }
+    let row = sqlx::query_as::<_, (String, Option<String>, Option<Uuid>, Uuid, Uuid, Uuid)>(
+        "SELECT d.state, d.plan_hash, d.requested_by, d.org_id, d.release_id, d.attempt_id
+         FROM deployments d
+         WHERE d.id = $1 AND d.repo_id = $2",
+    )
+    .bind(deployment_id)
+    .bind(repo_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((dep_state, stored_hash, requested_by, dep_org, release_id, attempt_id)) = row else {
+        return Err(AppError::NotFound);
+    };
+    if dep_org != org_id {
+        return Err(AppError::Forbidden);
+    }
+    if dep_state != "awaiting_approval" {
+        return Err(AppError::Conflict(
+            "deployment is not awaiting approval".to_string(),
+        ));
+    }
+    let plan_hash = stored_hash.unwrap_or_default();
+    if plan_hash != expected_plan_hash {
+        return Err(AppError::Validation("expected_plan_hash mismatch".to_string()));
+    }
+    let approver_ok = crate::grants::is_org_privileged(&state.pool, org_id, principal_id).await?
+        || crate::grants::principal_has_repo_grant(&state.pool, repo_id, principal_id).await?;
+    if !approver_ok {
+        return Err(AppError::Forbidden);
+    }
+    if decision == "approve" {
+        if requested_by == Some(principal_id) {
+            return Err(AppError::Conflict(
+                "requester cannot approve own deployment".to_string(),
+            ));
+        }
+    }
+    sqlx::query(
+        "INSERT INTO deployment_approvals (id, org_id, repo_id, deployment_id, plan_hash, decision, approver_id, reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(deployment_id)
+    .bind(&plan_hash)
+    .bind(decision)
+    .bind(principal_id)
+    .bind(reason)
+    .execute(&state.pool)
+    .await?;
+    let audit_action = if decision == "approve" {
+        "deployment.approve"
+    } else {
+        "deployment.reject"
+    };
+    let _ = crate::audit::record(
+        &state.pool,
+        Some(org_id),
+        Some(repo_id),
+        principal_id,
+        None,
+        audit_action,
+        "deployment",
+        deployment_id,
+        None,
+        "allow",
+        serde_json::json!({
+            "decision": decision,
+            "plan_hash": plan_hash,
+            "reason": reason,
+        }),
+    )
+    .await;
+    if decision == "reject" {
+        sqlx::query(
+            "UPDATE deployments SET state = 'rejected', approved_by = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'awaiting_approval'",
+        )
+        .bind(deployment_id)
+        .bind(principal_id)
+        .execute(&state.pool)
+        .await?;
+        return Ok(serde_json::json!({
+            "deployment_id": deployment_id.to_string(),
+            "decision": decision,
+            "state": "rejected",
+            "plan_hash": plan_hash,
+        }));
+    }
+    let updated = sqlx::query(
+        "UPDATE deployments SET approved_by = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'awaiting_approval'",
+    )
+    .bind(deployment_id)
+    .bind(principal_id)
+    .execute(&state.pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "deployment approval raced".to_string(),
+        ));
+    }
+    resume_approved_deployment(state, deployment_id).await?;
+    let new_state: (String,) =
+        sqlx::query_as("SELECT state FROM deployments WHERE id = $1")
+            .bind(deployment_id)
+            .fetch_one(&state.pool)
+            .await?;
+    Ok(serde_json::json!({
+        "deployment_id": deployment_id.to_string(),
+        "decision": decision,
+        "state": new_state.0,
+        "plan_hash": plan_hash,
+        "release_id": release_id.to_string(),
+        "attempt_id": attempt_id.to_string(),
+    }))
+}
+
+async fn resume_approved_deployment(
+    state: &Arc<crate::AppState>,
+    deployment_id: Uuid,
+) -> Result<(), AppError> {
+    let remote = runner_api::deploy_executor_remote();
+    if remote {
+        sqlx::query(
+            "UPDATE deployments SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'awaiting_approval'",
+        )
+        .bind(deployment_id)
+        .execute(&state.pool)
+        .await?;
+        return Ok(());
+    }
+    let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid, Option<serde_json::Value>, String, Option<Uuid>)>(
+        "SELECT d.org_id, d.repo_id, d.release_id, d.attempt_id, d.launch_payload, d.adapter_kind, d.requested_by
+         FROM deployments d WHERE d.id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((org_id, repo_id, release_id, attempt_id, payload_json, adapter_kind, requested_by)) =
+        row
+    else {
+        return Err(AppError::NotFound);
+    };
+    let payload: DeploymentLaunchPayload = serde_json::from_value(
+        payload_json.ok_or_else(|| AppError::Other("missing launch_payload".into()))?,
+    )
+    .map_err(|e| AppError::Other(e.to_string()))?;
+    let release = sqlx::query_as::<_, (Option<String>, Option<String>, String)>(
+        "SELECT manifest_sha256, oci_image_ref, commit_oid FROM releases WHERE id = $1",
+    )
+    .bind(release_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let (manifest, oci_image_ref, release_commit_oid) = release;
+    let (compose_bin, resolved_adapter) = resolve_compose_adapter(
+        &state.compose_adapter_bin,
+        &state.compose_runner_bin,
+        state.require_pipeline_oci,
+    )
+    .map_err(AppError::Validation)?;
+    if resolved_adapter != adapter_kind {
+        return Err(AppError::Conflict("adapter_kind drift".into()));
+    }
+    sqlx::query(
+        "UPDATE deployments SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'awaiting_approval'",
+    )
+    .bind(deployment_id)
+    .execute(&state.pool)
+    .await?;
+    let env_slug = payload.environment_slug.clone();
+    let launch = DeploymentLaunch {
+        release_id,
+        environment_slug: env_slug.clone(),
+        health_target: Some(payload.health_target.clone()),
+        attempt_id,
+        rollback_of_id: payload.rollback_of_id,
+        rollback_reason: payload.rollback_reason.clone(),
+        audit_action: payload.audit_action.clone(),
+    };
+    let actor_id = payload
+        .actor_id
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .or(requested_by);
+    let _ = run_local_compose_deploy(
+        state,
+        deployment_id,
+        org_id,
+        repo_id,
+        &launch,
+        &env_slug,
+        attempt_id,
+        actor_id,
+        None,
+        &payload,
+        &compose_bin,
+        &adapter_kind,
+        &payload.health_target,
+        payload.publish_port,
+        &manifest,
+        &oci_image_ref,
+        &release_commit_oid,
+        payload.product_runner,
+        &payload.teardown_project,
+    )
+    .await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]

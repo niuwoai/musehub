@@ -97,11 +97,50 @@ pub async fn issue_create(
     }))
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, rmcp::schemars::JsonSchema)]
+pub struct PlanStepInput {
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub criterion_ordinals: Vec<i32>,
+}
+
+pub fn validate_plan_steps(
+    steps: &[PlanStepInput],
+    valid_ordinals: &[i32],
+) -> Result<(), AppError> {
+    let mut keys = std::collections::HashSet::new();
+    for step in steps {
+        if step.key.trim().is_empty() || step.title.trim().is_empty() {
+            return Err(AppError::Validation(
+                "plan step key and title are required".to_string(),
+            ));
+        }
+        if !keys.insert(step.key.clone()) {
+            return Err(AppError::Validation("duplicate plan step key".to_string()));
+        }
+        for ord in &step.criterion_ordinals {
+            if *ord < 1 {
+                return Err(AppError::Validation(
+                    "criterion_ordinals must be positive integers".to_string(),
+                ));
+            }
+            if !valid_ordinals.is_empty() && !valid_ordinals.contains(ord) {
+                return Err(AppError::Validation(format!(
+                    "criterion ordinal {ord} not found on issue revision"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn plan_create(
     state: &Arc<AppState>,
     access: &RepoAccess,
     issue_revision_id: Uuid,
     body: &str,
+    steps: &[PlanStepInput],
 ) -> Result<Value, AppError> {
     let revision = sqlx::query_as::<_, (Uuid,)>(
         "SELECT r.id FROM issue_revisions r
@@ -115,6 +154,15 @@ pub async fn plan_create(
     if revision.is_none() {
         return Err(AppError::NotFound);
     }
+    let criteria_ordinals = sqlx::query_as::<_, (i32,)>(
+        "SELECT ordinal FROM issue_acceptance_criteria WHERE issue_revision_id = $1 ORDER BY ordinal",
+    )
+    .bind(issue_revision_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let valid: Vec<i32> = criteria_ordinals.into_iter().map(|(o,)| o).collect();
+    validate_plan_steps(steps, &valid)?;
+    let steps_json = serde_json::to_value(steps).map_err(|e| AppError::Other(e.to_string()))?;
     let version: (i32,) = sqlx::query_as(
         "SELECT COALESCE(MAX(version), 0) + 1 FROM implementation_plans WHERE issue_revision_id = $1",
     )
@@ -123,8 +171,8 @@ pub async fn plan_create(
     .await?;
     let plan_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO implementation_plans (id, org_id, repo_id, issue_revision_id, version, body, state)
-         VALUES ($1, $2, $3, $4, $5, $6, 'draft')",
+        "INSERT INTO implementation_plans (id, org_id, repo_id, issue_revision_id, version, body, steps, state)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')",
     )
     .bind(plan_id)
     .bind(access.org_id)
@@ -132,13 +180,16 @@ pub async fn plan_create(
     .bind(issue_revision_id)
     .bind(version.0)
     .bind(body)
+    .bind(steps_json.clone())
     .execute(&state.pool)
     .await?;
     Ok(json!({
         "id": plan_id.to_string(),
         "version": version.0,
         "state": "draft",
-        "issue_revision_id": issue_revision_id.to_string()
+        "issue_revision_id": issue_revision_id.to_string(),
+        "body": body,
+        "steps": steps_json,
     }))
 }
 

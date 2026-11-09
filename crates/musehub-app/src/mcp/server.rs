@@ -26,7 +26,7 @@ use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
     agent_run_cancel, agent_run_start, deployment_rollback, deployment_start, issue_create,
     issue_update, pr_create, repository_create, IssueUpdatePatch, pipeline_run, plan_accept,
-    plan_create, pr_review, repo_summary_json,
+    plan_create, pr_review, repo_summary_json, PlanStepInput,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
@@ -231,6 +231,8 @@ struct PlanCreateInput {
     repo: RepoInput,
     issue_revision_id: String,
     body: String,
+    #[serde(default)]
+    steps: Vec<PlanStepInput>,
     idempotency_key: String,
 }
 
@@ -909,8 +911,8 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let plan_id = parse_uuid("plan_id", &input.plan_id)?;
-        let row = sqlx::query_as::<_, (Uuid, i32, String, Uuid, String)>(
-            "SELECT id, version, state, issue_revision_id, body FROM implementation_plans
+        let row = sqlx::query_as::<_, (Uuid, i32, String, Uuid, String, serde_json::Value)>(
+            "SELECT id, version, state, issue_revision_id, body, steps FROM implementation_plans
              WHERE id = $1 AND repo_id = $2",
         )
         .bind(plan_id)
@@ -918,7 +920,7 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, version, state, revision_id, body)) = row else {
+        let Some((id, version, state, revision_id, body, steps)) = row else {
             return Ok(domain_err(AppError::NotFound));
         };
         Ok(domain_ok(json!({
@@ -927,6 +929,7 @@ impl ProductionMcpServer {
             "state": state,
             "issue_revision_id": revision_id.to_string(),
             "body": body,
+            "steps": steps,
         })))
     }
 
@@ -953,6 +956,7 @@ impl ProductionMcpServer {
             "repository_id": input.repo.repository_id,
             "issue_revision_id": input.issue_revision_id,
             "body": input.body,
+            "steps": input.steps,
         });
         let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
         let action = begin_idempotent_write(
@@ -971,7 +975,15 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
-        match plan_create(&self.state, &access, issue_revision_id, &input.body).await {
+        match plan_create(
+            &self.state,
+            &access,
+            issue_revision_id,
+            &input.body,
+            &input.steps,
+        )
+        .await
+        {
             Ok(data) => {
                 let stored = envelope_value(&ToolEnvelope::success(data));
                 let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;

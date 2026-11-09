@@ -54,8 +54,18 @@ pub async fn seed_repo_environment(
     repo_id: Uuid,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO environments (id, org_id, repo_id, slug, name)
-         VALUES ($1, $2, $3, 'test', 'Test')
+        "INSERT INTO environments (id, org_id, repo_id, slug, name, requires_approval)
+         VALUES ($1, $2, $3, 'test', 'Test', false)
+         ON CONFLICT (repo_id, slug) DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO environments (id, org_id, repo_id, slug, name, requires_approval)
+         VALUES ($1, $2, $3, 'production', 'Production', true)
          ON CONFLICT (repo_id, slug) DO NOTHING",
     )
     .bind(Uuid::new_v4())
