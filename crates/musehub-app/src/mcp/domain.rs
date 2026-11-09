@@ -7,6 +7,7 @@ use crate::agent_supervisor;
 use crate::error::AppError;
 use crate::git_http::{bare_repo_path, git_clone_url, init_bare_repository};
 use crate::mcp::auth::RepoAccess;
+use crate::mcp::contract_domain::{copy_criteria_to_revision, CriterionInput};
 use crate::pipeline;
 use crate::pr;
 use crate::security;
@@ -18,6 +19,7 @@ pub async fn issue_create(
     principal_id: Uuid,
     title: &str,
     body: &str,
+    criteria: &[CriterionInput],
 ) -> Result<Value, AppError> {
     if title.trim().is_empty() {
         return Err(AppError::Validation("title required".to_string()));
@@ -64,6 +66,27 @@ pub async fn issue_create(
         .bind(revision_id)
         .execute(&mut *tx)
         .await?;
+    for (idx, c) in criteria.iter().enumerate() {
+        let desc = c.description.trim();
+        if desc.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO issue_acceptance_criteria
+             (id, org_id, repo_id, issue_revision_id, ordinal, description, verification_method, required)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(access.org_id)
+        .bind(access.repo_id)
+        .bind(revision_id)
+        .bind((idx + 1) as i32)
+        .bind(desc)
+        .bind(c.verification_method.trim())
+        .bind(c.required)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(json!({
         "id": issue_id.to_string(),
@@ -679,6 +702,14 @@ pub async fn issue_update(
         .bind(&new_body)
         .bind(out_revision_id)
         .execute(&mut *tx)
+        .await?;
+        copy_criteria_to_revision(
+            &state.pool,
+            access.org_id,
+            access.repo_id,
+            revision_id,
+            out_revision_id,
+        )
         .await?;
     }
     if new_state != issue_state {

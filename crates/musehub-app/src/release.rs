@@ -41,15 +41,12 @@ pub struct CreateReleaseRequest {
     pub pr_id: Option<Uuid>,
 }
 
-pub async fn create_release(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-    AxumPath((org, repo)): AxumPath<(String, String)>,
-    Json(body): Json<CreateReleaseRequest>,
-) -> Result<(StatusCode, Json<ReleaseView>), AppError> {
-    let principal_id = super::require_session(&state.pool, &headers).await?;
-    let (org_id, repo_id, _) =
-        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+pub async fn create_release_core(
+    state: &Arc<crate::AppState>,
+    org_id: Uuid,
+    repo_id: Uuid,
+    body: CreateReleaseRequest,
+) -> Result<ReleaseView, AppError> {
     validate_git_oid(&body.commit_oid).map_err(AppError::Validation)?;
     let pipe = sqlx::query_as::<_, (String, String)>(
         "SELECT state, source_oid FROM pipeline_runs WHERE id = $1 AND repo_id = $2",
@@ -158,31 +155,37 @@ pub async fn create_release(
         .await?;
     }
     tx.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ReleaseView {
-            id: release_id,
-            version: body.version,
-            tag_name: body.tag_name,
-            commit_oid: body.commit_oid,
-            pipeline_run_id: body.pipeline_run_id,
-            state: "draft".to_string(),
-            manifest_sha256: Some(manifest_hex),
-            oci_image_ref: None,
-        }),
-    ))
+    Ok(ReleaseView {
+        id: release_id,
+        version: body.version,
+        tag_name: body.tag_name,
+        commit_oid: body.commit_oid,
+        pipeline_run_id: body.pipeline_run_id,
+        state: "draft".to_string(),
+        manifest_sha256: Some(manifest_hex),
+        oci_image_ref: None,
+    })
 }
 
-pub async fn publish_release(
+pub async fn create_release(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
-    AxumPath((org, repo, release_id)): AxumPath<(String, String, Uuid)>,
-    body: Option<Json<PublishReleaseRequest>>,
-) -> Result<Json<ReleaseView>, AppError> {
-    let body = body.map(|Json(b)| b).unwrap_or_default();
+    AxumPath((org, repo)): AxumPath<(String, String)>,
+    Json(body): Json<CreateReleaseRequest>,
+) -> Result<(StatusCode, Json<ReleaseView>), AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
-    let (_, repo_id, _) =
+    let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let view = create_release_core(&state, org_id, repo_id, body).await?;
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+pub async fn publish_release_core(
+    state: &Arc<crate::AppState>,
+    repo_id: Uuid,
+    release_id: Uuid,
+    body: PublishReleaseRequest,
+) -> Result<ReleaseView, AppError> {
     let draft = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
         "SELECT pipeline_run_id, commit_oid, manifest_sha256 FROM releases
          WHERE id = $1 AND repo_id = $2 AND state = 'draft'",
@@ -263,7 +266,7 @@ pub async fn publish_release(
     .bind(release_id)
     .fetch_one(&state.pool)
     .await?;
-    Ok(Json(ReleaseView {
+    Ok(ReleaseView {
         id: row.0,
         version: row.1,
         tag_name: row.2,
@@ -272,5 +275,19 @@ pub async fn publish_release(
         state: row.5,
         manifest_sha256: row.6,
         oci_image_ref: row.7,
-    }))
+    })
+}
+
+pub async fn publish_release(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, release_id)): AxumPath<(String, String, Uuid)>,
+    body: Option<Json<PublishReleaseRequest>>,
+) -> Result<Json<ReleaseView>, AppError> {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let view = publish_release_core(&state, repo_id, release_id, body).await?;
+    Ok(Json(view))
 }

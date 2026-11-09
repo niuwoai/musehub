@@ -2,7 +2,9 @@
 
 mod auth;
 pub mod capabilities;
+mod contract_domain;
 mod domain;
+mod git_read;
 pub mod envelope;
 mod http;
 mod idempotency;
@@ -28,7 +30,7 @@ mod tests {
     fn capability_lists_tools_without_blanket_production_claim() {
         let value = capabilities::capability_payload();
         assert_eq!(value["mcp_scope"], PRODUCTION_SCOPE);
-        assert_eq!(value["maturity"], "partial_implementation");
+        assert_eq!(value["maturity"], "v1_implemented");
         assert!(value.get("production_claim").is_none());
         assert!(value["implemented_tools"].as_array().unwrap().len() > 2);
     }

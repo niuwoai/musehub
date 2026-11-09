@@ -57,7 +57,7 @@ impl ProductionMcpServer {
     pub fn new(state: Arc<AppState>) -> Self {
         Self {
             state,
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router() + server_contract::contract_tool_router(),
         }
     }
 }
@@ -148,6 +148,8 @@ struct IssueCreateInput {
     title: String,
     #[serde(default)]
     body: String,
+    #[serde(default)]
+    criteria: Vec<crate::mcp::contract_domain::CriterionInput>,
     idempotency_key: String,
 }
 
@@ -801,6 +803,7 @@ impl ProductionMcpServer {
             pat.principal_id,
             &input.title,
             &input.body,
+            &input.criteria,
         )
         .await
         {
@@ -2012,3 +2015,6 @@ impl ProductionMcpServer {
         })))
     }
 }
+
+#[path = "server_contract.rs"]
+mod server_contract;
