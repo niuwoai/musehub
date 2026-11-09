@@ -19,6 +19,8 @@ pub enum AppError {
     NotFound,
     #[error("{0}")]
     Validation(String),
+    #[error("{0}")]
+    Conflict(String),
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("{0}")]
@@ -32,6 +34,7 @@ impl AppError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Validation(_) => StatusCode::BAD_REQUEST,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Database(_) | Self::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -42,6 +45,7 @@ impl AppError {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Validation(_) => "validation_error",
+            Self::Conflict(_) => "conflict",
             Self::Database(_) => "database_error",
             Self::Other(_) => "internal_error",
         }

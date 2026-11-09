@@ -4,15 +4,17 @@
 
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
-pub use git_http::bare_repo_path;
+pub use git_http::{bare_repo_path, init_bare_repository};
 mod artifacts;
 mod auth;
 mod bootstrap;
 mod codex;
+mod compose;
 mod deployment;
 mod error;
 mod git_http;
 mod hooks;
+pub mod lease;
 mod members;
 pub mod pat;
 mod pat_auth;
@@ -51,7 +53,7 @@ use crate::auth::{
 };
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
-use crate::git_http::{git_clone_url, git_http_backend, init_bare_repository};
+use crate::git_http::{git_clone_url, git_http_backend};
 
 /// Application state for product routes.
 #[derive(Clone)]
@@ -63,6 +65,9 @@ pub struct AppState {
     pub reference_adapter_bin: PathBuf,
     pub pipeline_adapter_bin: PathBuf,
     pub compose_adapter_bin: PathBuf,
+    pub compose_runner_bin: PathBuf,
+    /// Control-plane instance identity for worker leases.
+    pub instance_id: Uuid,
     pub supervisor: Arc<AgentSupervisor>,
     pub pipeline_supervisor: Arc<PipelineSupervisor>,
 }
@@ -180,8 +185,12 @@ pub async fn prepare(
     fs::create_dir_all(&git_root)
         .await
         .map_err(|error| AppError::Other(error.to_string()))?;
-    reconcile_orphaned_work(&pool).await?;
     Ok(())
+}
+
+/// Run once at process boot (not on every `prepare` call).
+pub async fn boot_reconcile(pool: &PgPool) -> Result<ReconcileReport, AppError> {
+    reconcile_orphaned_work(pool).await
 }
 
 #[derive(Deserialize)]
@@ -292,7 +301,7 @@ async fn create_repo(
     let slug = normalize_slug(&body.slug)?;
     let storage_key = Uuid::new_v4();
     let repo_id = Uuid::new_v4();
-    init_bare_repository(&state.git_root, &storage_key)?;
+    git_http::init_bare_repository(&state.git_root, &storage_key)?;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO repositories (id, org_id, slug, slug_normalized, description, storage_key, state)
@@ -494,9 +503,11 @@ async fn start_agent_run(
             .await?;
     security::validate_agent_work_branch(&branch, &default_branch.0)
         .map_err(AppError::Validation)?;
+    let instance_id = state.instance_id;
     sqlx::query(
-        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8)",
+        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, lease_holder, lease_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9,
+           CURRENT_TIMESTAMP + ($10::text || ' seconds')::interval)",
     )
     .bind(run_id)
     .bind(org_id)
@@ -506,6 +517,8 @@ async fn start_agent_run(
     .bind(REFERENCE_ADAPTER)
     .bind(&branch)
     .bind(body.budget_tokens.map(|limit| limit as i64))
+    .bind(instance_id)
+    .bind(crate::lease::LEASE_SECS)
     .execute(&state.pool)
     .await?;
     let supervisor = state.supervisor.clone();
@@ -519,6 +532,7 @@ async fn start_agent_run(
         agent_supervisor::run_reference_job(
             pool,
             supervisor,
+            instance_id,
             run_id,
             repo_id,
             storage_key,

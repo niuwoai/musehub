@@ -249,11 +249,13 @@ async fn spawn_pipeline_run(
     let run_id = Uuid::new_v4();
     let attempt_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
+    let instance_id = state.instance_id;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
-         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind)
-         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11)",
+         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind, lease_holder, lease_until)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11,$12,
+           CURRENT_TIMESTAMP + ($13::text || ' seconds')::interval)",
     )
     .bind(run_id)
     .bind(org_id)
@@ -266,6 +268,8 @@ async fn spawn_pipeline_run(
     .bind(issue_id)
     .bind(agent_run_id)
     .bind(run_kind)
+    .bind(instance_id)
+    .bind(crate::lease::LEASE_SECS)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -286,6 +290,7 @@ async fn spawn_pipeline_run(
     let artifact_root = state.artifact_root.clone();
     let pipeline_bin = state.pipeline_adapter_bin.clone();
     let supervisor = state.pipeline_supervisor.clone();
+    let instance_id = state.instance_id;
     let source_oid_spawn = source_oid.clone();
     let run_kind_owned = run_kind.to_string();
     tokio::spawn(async move {
@@ -295,6 +300,7 @@ async fn spawn_pipeline_run(
             artifact_root,
             pipeline_bin,
             supervisor,
+            instance_id,
             storage_key,
             run_id,
             job_id,
@@ -380,6 +386,7 @@ async fn run_pipeline_job(
     artifact_root: PathBuf,
     pipeline_bin: PathBuf,
     supervisor: Arc<PipelineSupervisor>,
+    instance_id: Uuid,
     storage_key: Uuid,
     run_id: Uuid,
     job_id: Uuid,
@@ -388,12 +395,25 @@ async fn run_pipeline_job(
     source_oid: String,
     run_kind: String,
 ) {
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(&pool)
-    .await;
+    let work_lease = match crate::lease::try_begin_pipeline_work(&pool, run_id, instance_id).await {
+        Ok(lease) => lease,
+        Err(_) => {
+            let _ = sqlx::query(
+                "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
+                 updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
+            )
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+            return;
+        }
+    };
+    let _renew_guard = crate::lease::pipeline_lease_renew_guard(
+        pool.clone(),
+        run_id,
+        instance_id,
+        work_lease.epoch,
+    );
     let _ = sqlx::query(
         "UPDATE pipeline_jobs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )

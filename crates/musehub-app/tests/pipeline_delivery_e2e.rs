@@ -431,7 +431,6 @@ async fn merge_then_pipeline_release_deploy_trace() {
     for expected in [
         "deploy_not_isolated_compose",
         "deploy_no_oci_registry",
-        "backup_restore_manual_only",
         "mcp_production_not_wired",
     ] {
         assert!(

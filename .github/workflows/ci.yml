@@ -57,10 +57,15 @@ jobs:
           cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
           cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
       - name: product acceptance
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
+      - name: backup restore verification
+        run: chmod +x ./scripts/verify-backup-restore.sh && ./scripts/verify-backup-restore.sh
+      - name: compose runner capability probe
+        run: chmod +x ./scripts/probe-compose-runner.sh && ./scripts/probe-compose-runner.sh
       - name: product security integration tests
         run: |
           cargo test -p musehub-app --test security_db -- --test-threads=1
@@ -113,6 +118,7 @@ jobs:
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
           cargo build -p musehub-server -q
       - run: yarn --cwd web test
       - run: yarn --cwd web build

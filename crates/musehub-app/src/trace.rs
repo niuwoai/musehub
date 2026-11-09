@@ -63,10 +63,12 @@ pub async fn get_deployment_trace(
     .await
     .map_err(|_| AppError::NotFound)?;
     let (commit_oid, pipeline_run_id) = release;
-    let dep = sqlx::query_as::<_, (String,)>("SELECT adapter_kind FROM deployments WHERE id = $1")
-        .bind(deployment_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let dep = sqlx::query_as::<_, (String, Option<serde_json::Value>)>(
+        "SELECT adapter_kind, health_summary FROM deployments WHERE id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_one(&state.pool)
+    .await?;
     let pipe = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, Option<Uuid>)>(
         "SELECT pr_id, issue_id, agent_run_id FROM pipeline_runs WHERE id = $1",
     )
@@ -151,8 +153,13 @@ pub async fn get_deployment_trace(
     if adapter == "compose-mock" {
         gaps.push("deploy_not_isolated_compose".to_string());
         gaps.push("deploy_no_oci_registry".to_string());
+    } else if adapter == "compose-runner" {
+        if let Some(summary) = &dep.1 {
+            if summary.get("error_code").and_then(|v| v.as_str()) == Some("docker_unavailable") {
+                gaps.push("deploy_docker_unavailable".to_string());
+            }
+        }
     }
-    gaps.push("backup_restore_manual_only".to_string());
     gaps.push("mcp_production_not_wired".to_string());
     Ok(Json(TraceView {
         deployment_id,

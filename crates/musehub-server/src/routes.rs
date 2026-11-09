@@ -7,7 +7,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use musehub_app::{prepare, product_router, AppState as ProductState};
+use musehub_app::{boot_reconcile, lease, prepare, product_router, AppState as ProductState};
 use musehub_core::version;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -142,6 +142,8 @@ pub async fn build_product_state(
     bootstrap_password: Option<&str>,
 ) -> Result<Arc<ProductState>, Box<dyn std::error::Error + Send + Sync>> {
     prepare(pool.clone(), git_root.clone(), bootstrap_password).await?;
+    boot_reconcile(&pool).await?;
+    let instance_id = lease::parse_instance_id();
     let reference_adapter_bin = std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
         .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-agent-reference"))
         .map(PathBuf::from)
@@ -166,6 +168,14 @@ pub async fn build_product_state(
                 .unwrap_or_default()
                 .join("target/debug/musehub-compose-mock")
         });
+    let compose_runner_bin = std::env::var("MUSEHUB_COMPOSE_RUNNER_BIN")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_musehub-compose-runner"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("target/debug/musehub-compose-runner")
+        });
     let artifact_root = std::env::var("MUSEHUB_ARTIFACT_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| git_root.join("../musehub-artifacts"));
@@ -177,6 +187,8 @@ pub async fn build_product_state(
         reference_adapter_bin,
         pipeline_adapter_bin,
         compose_adapter_bin,
+        compose_runner_bin,
+        instance_id,
         supervisor: Arc::new(musehub_app::agent_supervisor::AgentSupervisor::default()),
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
     }))
