@@ -1,7 +1,7 @@
 # 本地验收跑批记录
 
 > Branch: `cursor/local-product-integration-5f97` → PR [#16](https://github.com/niuwoai/musehub/pull/16)  
-> **本 commit SHA**: `00d4a97`
+> **本 commit SHA**: `e7bda5c`
 > **未** 触发 GitHub Actions merge/tag。
 
 ## 本地可交付（VM 已跑通）
