@@ -33,11 +33,30 @@ pub struct WorkLease {
     pub epoch: i64,
 }
 
-pub async fn try_begin_agent_work(
+pub async fn lookup_agent_work_lease(
     pool: &PgPool,
     run_id: Uuid,
     instance_id: Uuid,
-) -> Result<WorkLease, AppError> {
+) -> Option<WorkLease> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "SELECT lease_epoch FROM agent_runs
+         WHERE id = $1 AND lease_holder = $2
+           AND state IN ('running', 'cancel_requested')",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+    Some(WorkLease { epoch: row.0 })
+}
+
+async fn try_claim_queued_agent(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Result<Option<WorkLease>, AppError> {
     let row = sqlx::query_as::<_, (i64,)>(
         "UPDATE agent_runs SET
            state = 'running',
@@ -54,9 +73,44 @@ pub async fn try_begin_agent_work(
     .bind(lease_secs())
     .fetch_optional(pool)
     .await?;
+    Ok(row.map(|(epoch,)| WorkLease { epoch }))
+}
+
+pub async fn try_reclaim_expired_agent(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Result<WorkLease, AppError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "UPDATE agent_runs SET
+           state = 'running',
+           lease_holder = $2,
+           lease_until = CURRENT_TIMESTAMP + ($3::text || ' seconds')::interval,
+           lease_epoch = agent_runs.lease_epoch + 1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND state IN ('running', 'cancel_requested')
+           AND lease_until < CURRENT_TIMESTAMP
+         RETURNING lease_epoch",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(lease_secs())
+    .fetch_optional(pool)
+    .await?;
     row.map(|(epoch,)| WorkLease { epoch }).ok_or_else(|| {
         AppError::Conflict("agent run already claimed or lease held by peer".to_string())
     })
+}
+
+pub async fn try_begin_agent_work(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+) -> Result<WorkLease, AppError> {
+    if let Some(lease) = try_claim_queued_agent(pool, run_id, instance_id).await? {
+        return Ok(lease);
+    }
+    try_reclaim_expired_agent(pool, run_id, instance_id).await
 }
 
 /// Holder already running this run (e.g. claim API took the lease); used by `execute_pipeline_job`.

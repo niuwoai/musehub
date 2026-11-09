@@ -1,12 +1,14 @@
-//! Remote pipeline worker: claims queued runs via PAT and executes adapters locally.
+//! Remote worker: claims pipeline and agent runs via PAT; executes adapters locally (shared DB/git).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use musehub_app::agent_supervisor::AgentSupervisor;
+use musehub_app::execute_agent_job;
 use musehub_app::execute_pipeline_job;
 use musehub_app::pipeline_supervisor::PipelineSupervisor;
-use musehub_app::runner_api::{self, ClaimedPipelineRun};
+use musehub_app::runner_api::{ClaimedAgentRun, ClaimedPipelineRun};
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -19,7 +21,16 @@ struct Config {
     git_root: PathBuf,
     artifact_root: PathBuf,
     pipeline_bin: PathBuf,
+    reference_adapter_bin: PathBuf,
     poll_secs: u64,
+    work_kinds: WorkKinds,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WorkKinds {
+    PipelineOnly,
+    AgentOnly,
+    Both,
 }
 
 #[tokio::main]
@@ -48,30 +59,51 @@ async fn main() {
         tracing::error!(error = %e, "database connect failed");
         std::process::exit(78);
     });
-    let supervisor = Arc::new(PipelineSupervisor::new());
+    let pipeline_supervisor = Arc::new(PipelineSupervisor::new());
+    let agent_supervisor = Arc::new(AgentSupervisor::default());
     tracing::info!(
         runner_id = %cfg.instance_id,
         api = %cfg.api_base,
+        work_kinds = ?cfg.work_kinds,
         "musehub-runnerd starting"
     );
     loop {
         if *shutdown_rx.borrow() {
             break;
         }
-        match claim_run(&client, &cfg).await {
-            Ok(Some(claimed)) => {
-                tracing::info!(run_id = %claimed.run_id, "claimed pipeline run");
-                if let Err(err) = run_claimed(&client, &cfg, &pool, &supervisor, claimed).await {
-                    tracing::warn!(error = %err, "pipeline run failed");
+        let mut claimed_work = false;
+        if matches!(cfg.work_kinds, WorkKinds::Both | WorkKinds::PipelineOnly) {
+            match claim_pipeline(&client, &cfg).await {
+                Ok(Some(claimed)) => {
+                    claimed_work = true;
+                    tracing::info!(run_id = %claimed.run_id, "claimed pipeline run");
+                    if let Err(err) =
+                        run_pipeline(&client, &cfg, &pool, &pipeline_supervisor, claimed).await
+                    {
+                        tracing::warn!(error = %err, "pipeline run failed");
+                    }
                 }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(error = %err, "pipeline claim failed"),
             }
-            Ok(None) => {
-                tokio::time::sleep(Duration::from_secs(cfg.poll_secs)).await;
+        }
+        if !claimed_work && matches!(cfg.work_kinds, WorkKinds::Both | WorkKinds::AgentOnly) {
+            match claim_agent(&client, &cfg).await {
+                Ok(Some(claimed)) => {
+                    claimed_work = true;
+                    tracing::info!(run_id = %claimed.run_id, "claimed agent run");
+                    if let Err(err) =
+                        run_agent(&client, &cfg, &pool, &agent_supervisor, claimed).await
+                    {
+                        tracing::warn!(error = %err, "agent run failed");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!(error = %err, "agent claim failed"),
             }
-            Err(err) => {
-                tracing::warn!(error = %err, "claim failed");
-                tokio::time::sleep(Duration::from_secs(cfg.poll_secs)).await;
-            }
+        }
+        if !claimed_work {
+            tokio::time::sleep(Duration::from_secs(cfg.poll_secs)).await;
         }
     }
 }
@@ -89,26 +121,56 @@ fn load_config() -> Result<Config, String> {
     let pipeline_bin = std::env::var("MUSEHUB_PIPELINE_ADAPTER_BIN")
         .map(PathBuf::from)
         .map_err(|_| "MUSEHUB_PIPELINE_ADAPTER_BIN required".to_string())?;
+    let reference_adapter_bin = std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
+        .map(PathBuf::from)
+        .map_err(|_| "MUSEHUB_REFERENCE_ADAPTER_BIN required for agent work".to_string())?;
     let poll_secs = std::env::var("MUSEHUB_RUNNER_POLL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
+    let work_kinds = match std::env::var("MUSEHUB_RUNNER_WORK_KINDS")
+        .unwrap_or_else(|_| "both".into())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pipeline" => WorkKinds::PipelineOnly,
+        "agent" => WorkKinds::AgentOnly,
+        _ => WorkKinds::Both,
+    };
     Ok(Config {
         api_base: api_base.trim_end_matches('/').to_string(),
         pat,
-        instance_id: runner_api::parse_runner_instance_from_env(),
+        instance_id: musehub_app::runner_api::parse_runner_instance_from_env(),
         git_root,
         artifact_root,
         pipeline_bin,
+        reference_adapter_bin,
         poll_secs,
+        work_kinds,
     })
 }
 
-async fn claim_run(
+async fn claim_pipeline(
     client: &reqwest::Client,
     cfg: &Config,
 ) -> Result<Option<ClaimedPipelineRun>, String> {
     let url = format!("{}/api/v1/runner/pipeline-runs/claim", cfg.api_base);
+    claim_json(client, cfg, &url).await
+}
+
+async fn claim_agent(
+    client: &reqwest::Client,
+    cfg: &Config,
+) -> Result<Option<ClaimedAgentRun>, String> {
+    let url = format!("{}/api/v1/runner/agent-runs/claim", cfg.api_base);
+    claim_json(client, cfg, &url).await
+}
+
+async fn claim_json<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    cfg: &Config,
+    url: &str,
+) -> Result<Option<T>, String> {
     let resp = client
         .post(url)
         .header(AUTHORIZATION, bearer(&cfg.pat)?)
@@ -119,50 +181,30 @@ async fn claim_run(
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(None);
+    }
     if !resp.status().is_success() {
         return Err(format!("claim status {}", resp.status()));
     }
-    let claimed: ClaimedPipelineRun = resp.json().await.map_err(|e| e.to_string())?;
+    let claimed: T = resp.json().await.map_err(|e| e.to_string())?;
     Ok(Some(claimed))
 }
 
-async fn run_claimed(
+async fn run_pipeline(
     client: &reqwest::Client,
     cfg: &Config,
     pool: &sqlx::PgPool,
     supervisor: &Arc<PipelineSupervisor>,
     claimed: ClaimedPipelineRun,
 ) -> Result<(), String> {
-    let renew_client = client.clone();
-    let renew_cfg = cfg.clone();
-    let renew_run = claimed.run_id;
-    let renew_epoch = claimed.lease_epoch;
-    let renew_instance = cfg.instance_id;
-    let renew_handle = tokio::spawn(async move {
-        let interval = Duration::from_secs(runner_lease_renew_interval_secs());
-        loop {
-            tokio::time::sleep(interval).await;
-            let url = format!(
-                "{}/api/v1/runner/pipeline-runs/{}/lease/renew",
-                renew_cfg.api_base, renew_run
-            );
-            let body = serde_json::json!({ "lease_epoch": renew_epoch });
-            let auth = match bearer(&renew_cfg.pat) {
-                Ok(h) => h,
-                Err(_) => break,
-            };
-            let resp = renew_client
-                .post(url)
-                .header(AUTHORIZATION, auth)
-                .header("x-musehub-runner-id", renew_instance.to_string())
-                .json(&body)
-                .send()
-                .await;
-            if resp.is_err() || !resp.unwrap().status().is_success() {
-                break;
-            }
-        }
-    });
+    let renew = spawn_renew(
+        client.clone(),
+        cfg.clone(),
+        "pipeline",
+        claimed.run_id,
+        claimed.lease_epoch,
+    );
     execute_pipeline_job(
         pool.clone(),
         cfg.git_root.clone(),
@@ -179,8 +221,77 @@ async fn run_claimed(
         claimed.run_kind,
     )
     .await;
-    renew_handle.abort();
+    renew.abort();
     Ok(())
+}
+
+async fn run_agent(
+    client: &reqwest::Client,
+    cfg: &Config,
+    pool: &sqlx::PgPool,
+    supervisor: &Arc<AgentSupervisor>,
+    claimed: ClaimedAgentRun,
+) -> Result<(), String> {
+    let renew = spawn_renew(
+        client.clone(),
+        cfg.clone(),
+        "agent",
+        claimed.run_id,
+        claimed.lease_epoch,
+    );
+    let budget = claimed.budget_tokens_limit.map(|v| v as u64);
+    execute_agent_job(
+        pool.clone(),
+        supervisor.clone(),
+        cfg.instance_id,
+        claimed.run_id,
+        claimed.repo_id,
+        claimed.storage_key,
+        cfg.git_root.clone(),
+        cfg.reference_adapter_bin.clone(),
+        claimed.work_branch,
+        claimed.task_message,
+        Duration::from_secs(120),
+        budget,
+    )
+    .await;
+    renew.abort();
+    Ok(())
+}
+
+fn spawn_renew(
+    client: reqwest::Client,
+    cfg: Config,
+    kind: &'static str,
+    run_id: Uuid,
+    lease_epoch: i64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(runner_lease_renew_interval_secs());
+        let path = match kind {
+            "agent" => format!("/api/v1/runner/agent-runs/{run_id}/lease/renew"),
+            _ => format!("/api/v1/runner/pipeline-runs/{run_id}/lease/renew"),
+        };
+        loop {
+            tokio::time::sleep(interval).await;
+            let url = format!("{}{}", cfg.api_base, path);
+            let body = serde_json::json!({ "lease_epoch": lease_epoch });
+            let auth = match bearer(&cfg.pat) {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+            let resp = client
+                .post(url)
+                .header(AUTHORIZATION, auth)
+                .header("x-musehub-runner-id", cfg.instance_id.to_string())
+                .json(&body)
+                .send()
+                .await;
+            if resp.is_err() || !resp.unwrap().status().is_success() {
+                break;
+            }
+        }
+    })
 }
 
 fn runner_lease_renew_interval_secs() -> u64 {

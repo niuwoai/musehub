@@ -13,13 +13,14 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
 COPY VERSION ./
-RUN cargo build --release -p musehub-server -p musehub-migrate \
+RUN cargo build --release -p musehub-server -p musehub-migrate -p musehub-runnerd \
   && cargo build --release -p musehub-agent-adapter \
     --bin musehub-agent-reference \
     --bin musehub-agent-codex-sim \
     --bin musehub-pipeline-reference \
     --bin musehub-pipeline-oci \
-    --bin musehub-compose-mock
+    --bin musehub-compose-mock \
+    --bin musehub-compose-runner
 
 FROM node:${NODE_VERSION} AS web-builder
 WORKDIR /web
@@ -46,25 +47,47 @@ COPY --from=rust-builder /build/target/release/musehub-agent-codex-sim /opt/muse
 COPY --from=rust-builder /build/target/release/musehub-pipeline-reference /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-pipeline-oci /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-compose-mock /opt/musehub/bin/
+COPY --from=rust-builder /build/target/release/musehub-compose-runner /opt/musehub/bin/
 COPY migrations /migrations
 COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 USER musehub
-ENV MUSEHUB_BIND=0.0.0.0:8080 \
+ENV MUSEHUB_PRODUCT_PROFILE=demo \
+    MUSEHUB_BIND=0.0.0.0:8080 \
     MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
     MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts \
     MUSEHUB_REFERENCE_ADAPTER_BIN=/opt/musehub/bin/musehub-agent-reference \
     MUSEHUB_AGENT_CODEX_SIM_BIN=/opt/musehub/bin/musehub-agent-codex-sim \
     MUSEHUB_PIPELINE_ADAPTER_BIN=/opt/musehub/bin/musehub-pipeline-reference \
     MUSEHUB_COMPOSE_ADAPTER_BIN=/opt/musehub/bin/musehub-compose-mock \
-    MUSEHUB_COMPOSE_RUNNER_BIN=/opt/musehub/bin/musehub-compose-mock \
-    MUSEHUB_COMPOSE_ADAPTER_MODE=mock
+    MUSEHUB_COMPOSE_RUNNER_BIN=/opt/musehub/bin/musehub-compose-runner \
+    MUSEHUB_COMPOSE_ADAPTER_MODE=mock \
+    MUSEHUB_AGENT_EXECUTOR=inprocess \
+    MUSEHUB_PIPELINE_EXECUTOR=inprocess
 VOLUME ["/var/lib/musehub/git", "/var/lib/musehub/artifacts"]
 EXPOSE 8080
 HEALTHCHECK --interval=5s --timeout=3s --start-period=40s --retries=20 \
   CMD wget -q -O- http://127.0.0.1:8080/readyz | grep -q '"product_api":"ok"' || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--", "/docker-entrypoint.sh"]
 CMD ["server"]
+
+FROM debian:${DEBIAN_VERSION} AS runner-runtime
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git docker.io tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd -r -u 10002 -d /var/lib/musehub-runner musehub \
+  && mkdir -p /opt/musehub/bin /var/lib/musehub/git /var/lib/musehub/artifacts \
+  && chown -R musehub:musehub /var/lib/musehub
+COPY --from=rust-builder /build/target/release/musehub-runnerd /usr/local/bin/
+COPY --from=rust-builder /build/target/release/musehub-agent-reference /opt/musehub/bin/
+COPY --from=rust-builder /build/target/release/musehub-agent-codex-sim /opt/musehub/bin/
+COPY --from=rust-builder /build/target/release/musehub-pipeline-oci /opt/musehub/bin/
+COPY --from=rust-builder /build/target/release/musehub-compose-runner /opt/musehub/bin/
+USER musehub
+ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
+    MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/musehub-runnerd"]
 
 FROM caddy:${CADDY_VERSION} AS gateway-runtime
 COPY --from=web-builder /web/dist /srv/web

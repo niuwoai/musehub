@@ -23,6 +23,13 @@ pub fn pipeline_executor_remote() -> bool {
     )
 }
 
+pub fn agent_executor_remote() -> bool {
+    matches!(
+        std::env::var("MUSEHUB_AGENT_EXECUTOR").as_deref(),
+        Ok("remote")
+    )
+}
+
 fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -43,7 +50,10 @@ fn runner_instance_id(headers: &HeaderMap) -> Result<Uuid, AppError> {
     Uuid::parse_str(raw.trim()).map_err(|_| AppError::Validation("invalid runner id".to_string()))
 }
 
-async fn require_runner_pat(state: &AppState, headers: &HeaderMap) -> Result<PatContext, AppError> {
+async fn require_pipeline_runner_pat(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<PatContext, AppError> {
     let token = bearer_token(headers)?;
     let pat = pat_auth::authenticate_pat_context(&state.pool, token).await?;
     if !pat_auth::scope_allows(&pat.scopes, "pipeline:execute")
@@ -59,9 +69,29 @@ async fn require_runner_pat(state: &AppState, headers: &HeaderMap) -> Result<Pat
     Ok(pat)
 }
 
+async fn require_agent_runner_pat(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<PatContext, AppError> {
+    let token = bearer_token(headers)?;
+    let pat = pat_auth::authenticate_pat_context(&state.pool, token).await?;
+    if !pat_auth::scope_allows(&pat.scopes, "agent:execute")
+        && !pat_auth::scope_allows(&pat.scopes, "checks:write")
+    {
+        return Err(AppError::Forbidden);
+    }
+    if pat.org_id.is_none() {
+        return Err(AppError::Validation(
+            "runner tokens require org binding".to_string(),
+        ));
+    }
+    Ok(pat)
+}
+
 #[derive(Serialize)]
 pub struct RunnerCapabilities {
     pub pipeline_executor: &'static str,
+    pub agent_executor: &'static str,
     pub lease_seconds: i64,
     pub scopes_accepted: &'static [&'static str],
     pub note: &'static str,
@@ -74,8 +104,13 @@ pub async fn capabilities() -> Json<RunnerCapabilities> {
         } else {
             "inprocess"
         },
+        agent_executor: if agent_executor_remote() {
+            "remote"
+        } else {
+            "inprocess"
+        },
         lease_seconds: lease::lease_secs(),
-        scopes_accepted: &["pipeline:execute", "checks:write"],
+        scopes_accepted: &["pipeline:execute", "agent:execute", "checks:write"],
         note: "Control plane does not mount a Docker socket; workers execute adapters locally.",
     })
 }
@@ -103,7 +138,7 @@ pub async fn claim_pipeline_run(
             "pipeline executor is in-process on this server".to_string(),
         ));
     }
-    let pat = require_runner_pat(&state, &headers).await?;
+    let pat = require_pipeline_runner_pat(&state, &headers).await?;
     let instance_id = runner_instance_id(&headers)?;
     let org_id = pat.org_id.unwrap();
     let candidate = sqlx::query_as::<_, (Uuid,)>(
@@ -174,7 +209,7 @@ pub async fn renew_pipeline_lease(
     Path(run_id): Path<Uuid>,
     Json(body): Json<RenewBody>,
 ) -> Result<StatusCode, AppError> {
-    let pat = require_runner_pat(&state, &headers).await?;
+    let pat = require_pipeline_runner_pat(&state, &headers).await?;
     let row = sqlx::query_as::<_, (Uuid,)>("SELECT repo_id FROM pipeline_runs WHERE id = $1")
         .bind(run_id)
         .fetch_optional(&state.pool)
@@ -192,6 +227,117 @@ pub async fn renew_pipeline_lease(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct ClaimedAgentRun {
+    pub run_id: Uuid,
+    pub org_id: Uuid,
+    pub org_slug: String,
+    pub repo_id: Uuid,
+    pub repo_slug: String,
+    pub storage_key: Uuid,
+    pub issue_id: Uuid,
+    pub work_branch: String,
+    pub adapter_kind: String,
+    pub task_message: String,
+    pub budget_tokens_limit: Option<i64>,
+    pub lease_epoch: i64,
+}
+
+pub async fn claim_agent_run(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<ClaimedAgentRun>), AppError> {
+    if !agent_executor_remote() {
+        return Err(AppError::Conflict(
+            "agent executor is in-process on this server".to_string(),
+        ));
+    }
+    let pat = require_agent_runner_pat(&state, &headers).await?;
+    let instance_id = runner_instance_id(&headers)?;
+    let org_id = pat.org_id.unwrap();
+    let candidate = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT ar.id FROM agent_runs ar
+         WHERE ar.org_id = $1 AND (
+           (ar.state = 'queued'
+             AND (ar.lease_holder IS NULL OR ar.lease_until < CURRENT_TIMESTAMP))
+           OR (ar.state IN ('running','cancel_requested')
+             AND ar.lease_until < CURRENT_TIMESTAMP)
+         )
+         ORDER BY ar.created_at
+         LIMIT 1",
+    )
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((run_id,)) = candidate else {
+        return Err(AppError::NotFound);
+    };
+    let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, String, String, Option<i64>)>(
+        "SELECT ar.org_id, ar.repo_id, ar.issue_id, ar.work_branch, ar.adapter_kind, ar.task_message,
+                ar.budget_tokens_limit
+         FROM agent_runs ar WHERE ar.id = $1",
+    )
+    .bind(run_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((row_org, repo_id, issue_id, work_branch, adapter_kind, task_message, budget)) = row
+    else {
+        return Err(AppError::NotFound);
+    };
+    grants::ensure_pat_repo_access(&state.pool, &pat, row_org, repo_id).await?;
+    let work = lease::try_begin_agent_work(&state.pool, run_id, instance_id).await?;
+    let meta = sqlx::query_as::<_, (String, String, Uuid)>(
+        "SELECT o.slug, r.slug, r.storage_key
+         FROM repositories r
+         JOIN organizations o ON o.id = r.org_id
+         WHERE r.id = $1",
+    )
+    .bind(repo_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok((
+        StatusCode::OK,
+        Json(ClaimedAgentRun {
+            run_id,
+            org_id: row_org,
+            org_slug: meta.0,
+            repo_id,
+            repo_slug: meta.1,
+            storage_key: meta.2,
+            issue_id,
+            work_branch,
+            adapter_kind,
+            task_message,
+            budget_tokens_limit: budget,
+            lease_epoch: work.epoch,
+        }),
+    ))
+}
+
+pub async fn renew_agent_lease(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+    Json(body): Json<RenewBody>,
+) -> Result<StatusCode, AppError> {
+    let pat = require_agent_runner_pat(&state, &headers).await?;
+    let row = sqlx::query_as::<_, (Uuid,)>("SELECT repo_id FROM agent_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    if let Some((repo_id,)) = row {
+        let org_id = sqlx::query_as::<_, (Uuid,)>("SELECT org_id FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&state.pool)
+            .await?
+            .0;
+        grants::ensure_pat_repo_access(&state.pool, &pat, org_id, repo_id).await?;
+    }
+    let instance_id = runner_instance_id(&headers)?;
+    lease::renew_agent_work_lease(&state.pool, run_id, instance_id, body.lease_epoch).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn list_runner_tokens_masked(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -206,7 +352,9 @@ pub async fn list_runner_tokens_masked(
     let rows = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, String)>(
         "SELECT id, name, token_prefix, scopes, scope_mode FROM access_tokens
          WHERE org_id = $1 AND revoked_at IS NULL
-           AND (scopes @> ARRAY['checks:write']::text[] OR scopes @> ARRAY['pipeline:execute']::text[])
+           AND (scopes @> ARRAY['checks:write']::text[]
+             OR scopes @> ARRAY['pipeline:execute']::text[]
+             OR scopes @> ARRAY['agent:execute']::text[])
          ORDER BY created_at DESC",
     )
     .bind(org_id)

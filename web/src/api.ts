@@ -274,6 +274,9 @@ export type OrgSettings = {
   display_name: string
   preferences: { default_collaborator_role: string }
   pipeline_executor: string
+  agent_executor: string
+  compose_adapter_mode: string
+  product_profile: string
   require_pipeline_oci: boolean
   runner_dependencies: string[]
 }

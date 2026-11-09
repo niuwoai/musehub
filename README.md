@@ -100,7 +100,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 
 | 步骤 | 状态 | 证据 |
 |------|------|------|
-| 参考 Agent 端到端 | `[x]` | `product_slice`、`run-web-e2e.sh` |
+| 参考 Agent 端到端 | `[x]` | `product_slice`、`run-web-e2e.sh`；远程 worker：`MUSEHUB_AGENT_EXECUTOR=remote` + `verify-remote-agent-e2e.sh` |
 | PR / 流水线 / mock 部署 / trace | `[x]` | `pipeline_delivery_e2e` |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |

@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use musehub_app::{
-    boot_reconcile, compose_mode_from_env, lease, prepare, product_router, runner_api,
-    AppState as ProductState, ComposeAdapterMode,
+    boot_reconcile, compose_mode_from_env, lease, prepare, product_profile, product_router,
+    runner_api, AppState as ProductState, ComposeAdapterMode,
 };
 use musehub_core::version;
 use serde::Serialize;
@@ -41,6 +41,8 @@ struct ReadinessChecks {
     /// `mock` default in product image; use `runner` + verified OCI path for real compose.
     compose_adapter_mode: &'static str,
     pipeline_executor: &'static str,
+    agent_executor: &'static str,
+    product_profile: &'static str,
 }
 
 fn compose_adapter_mode_label() -> &'static str {
@@ -121,6 +123,12 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 } else {
                     "in_process"
                 },
+                agent_executor: if runner_api::agent_executor_remote() {
+                    "remote"
+                } else {
+                    "in_process"
+                },
+                product_profile: product_profile::profile_label(),
             },
         }),
     )

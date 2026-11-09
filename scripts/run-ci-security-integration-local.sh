@@ -44,6 +44,8 @@ _one runner_daemon_acceptance_e2e
 _one runner_recovery_e2e
 _one runner_reclaim_build_e2e
 _one remote_pipeline_runner_e2e
+_one remote_agent_runner_e2e
+_one product_profile_e2e
 env "CARGO_BIN_EXE_musehub-agent-codex-sim=${_codex_sim}" \
   cargo test -p musehub-app --test agent_codex_mainline_select_e2e -- --test-threads=1
 env "CARGO_BIN_EXE_musehub-agent-codex-fixture=${_codex_fix}" \

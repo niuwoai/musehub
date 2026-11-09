@@ -13,6 +13,11 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> ExitCode {
     init_tracing();
 
+    if let Err(msg) = musehub_app::product_profile::validate_startup_profile() {
+        tracing::error!(error = %msg, "product profile validation failed");
+        return ExitCode::from(78);
+    }
+
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(error) => {

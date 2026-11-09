@@ -4,7 +4,7 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 
 | 组件 | 实际形态 | 隔离证据 |
 |------|----------|----------|
-| Agent 执行 | `musehub-server` 内 `AgentSupervisor` + 子进程适配器 | `agent_*_e2e`；**非** 远端 worker 注册 |
+| Agent 执行 | `MUSEHUB_AGENT_EXECUTOR=remote` 时 API 仅入队；`musehub-runnerd` claim + 本地适配器（reference / codex-sim / `MUSEHUB_AGENT_CODEX_BIN` live） | `remote_agent_runner_e2e`、`verify-remote-agent-e2e.sh`；demo 镜像默认 in-process |
 | Pipeline | 进程内 `PipelineSupervisor` + `musehub-pipeline-*` 子进程 | `pipeline_*_e2e` |
 | 部署 | `compose-mock` / `compose-runner` **子进程**（可配置二进制路径） | `compose-runner-e2e`（需 Docker）；产品栈镜像默认 **mock** |
 | `musehub-runner-probe` | 本地进程超时/取消探针 | `SCOPE=local_process_only`；**非** rootless/OCI 证明 |
@@ -23,7 +23,8 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 | `MUSEHUB_PIPELINE_EXECUTOR=remote` | `[x]` API 仅入队，不在进程内 `tokio::spawn` pipeline |
 | `musehub-runnerd` 常驻 worker | `[x]` PAT + `POST /api/v1/runner/pipeline-runs/claim`；lease renew；`execute_pipeline_job` 本地适配器 |
 | Worker 数据库 | `[~]` runner **需** `MUSEHUB_DATABASE_URL` 写 artifact 元数据（无纯 HTTP 上传链） |
-| Agent / Compose 远端化 | `[ ]` 仍在 API 进程内 supervisor |
+| Agent 远端 worker | `[x]` PAT `agent:execute` + `POST /api/v1/runner/agent-runs/claim`；共享 DB/git 卷 |
+| Compose 远端化 | `[~]` 子进程 `compose-runner`；生产 profile 要求 `runner` 模式 |
 
 诚实边界：runner 与 API 可分机部署，但 V1 仍共享 DB 与（通常）共享 `MUSEHUB_GIT_ROOT`/`MUSEHUB_ARTIFACT_ROOT` 挂载；非完全零信任 multi-tenant worker。
 

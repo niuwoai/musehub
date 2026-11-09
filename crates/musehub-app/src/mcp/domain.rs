@@ -202,49 +202,70 @@ pub async fn agent_run_start(
             .await?;
     security::validate_agent_work_branch(&branch, &default_branch.0)
         .map_err(AppError::Validation)?;
+    let remote_agent = crate::runner_api::agent_executor_remote();
     let instance_id = state.instance_id;
-    sqlx::query(
-        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, lease_holder, lease_until)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,
-           CURRENT_TIMESTAMP + ($10::text || ' seconds')::interval)",
-    )
-    .bind(run_id)
-    .bind(access.org_id)
-    .bind(access.repo_id)
-    .bind(issue_id)
-    .bind(principal_id)
-    .bind(crate::agent_adapter::adapter_kind_for_request(adapter))
-    .bind(&branch)
-    .bind(budget_tokens.map(|v| v as i64))
-    .bind(instance_id)
-    .bind(crate::lease::lease_secs())
-    .execute(&state.pool)
-    .await?;
-    let supervisor = state.supervisor.clone();
-    let pool = state.pool.clone();
-    let git_root = state.git_root.clone();
-    let reference_bin = state.reference_adapter_bin.clone();
+    let adapter_kind = crate::agent_adapter::adapter_kind_for_request(adapter);
     let message_owned = message.to_string();
-    let deadline = std::time::Duration::from_secs(120);
-    let repo_id = access.repo_id;
-    let storage = storage_key.0;
-    tokio::spawn(async move {
-        agent_supervisor::run_agent_job(
-            pool,
-            supervisor,
-            instance_id,
-            run_id,
-            repo_id,
-            storage,
-            git_root,
-            reference_bin,
-            branch,
-            message_owned,
-            deadline,
-            budget_tokens,
+    if remote_agent {
+        sqlx::query(
+            "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9)",
         )
-        .await;
-    });
+        .bind(run_id)
+        .bind(access.org_id)
+        .bind(access.repo_id)
+        .bind(issue_id)
+        .bind(principal_id)
+        .bind(adapter_kind)
+        .bind(&branch)
+        .bind(budget_tokens.map(|v| v as i64))
+        .bind(&message_owned)
+        .execute(&state.pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message, lease_holder, lease_until)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10,
+               CURRENT_TIMESTAMP + ($11::text || ' seconds')::interval)",
+        )
+        .bind(run_id)
+        .bind(access.org_id)
+        .bind(access.repo_id)
+        .bind(issue_id)
+        .bind(principal_id)
+        .bind(adapter_kind)
+        .bind(&branch)
+        .bind(budget_tokens.map(|v| v as i64))
+        .bind(&message_owned)
+        .bind(instance_id)
+        .bind(crate::lease::lease_secs())
+        .execute(&state.pool)
+        .await?;
+        let supervisor = state.supervisor.clone();
+        let pool = state.pool.clone();
+        let git_root = state.git_root.clone();
+        let reference_bin = state.reference_adapter_bin.clone();
+        let deadline = std::time::Duration::from_secs(120);
+        let repo_id = access.repo_id;
+        let storage = storage_key.0;
+        tokio::spawn(async move {
+            agent_supervisor::run_agent_job(
+                pool,
+                supervisor,
+                instance_id,
+                run_id,
+                repo_id,
+                storage,
+                git_root,
+                reference_bin,
+                branch,
+                message_owned,
+                deadline,
+                budget_tokens,
+            )
+            .await;
+        });
+    }
     let kind = crate::agent_adapter::adapter_kind_for_request(adapter);
     Ok(json!({
         "id": run_id.to_string(),

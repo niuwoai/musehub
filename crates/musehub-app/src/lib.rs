@@ -26,8 +26,10 @@ pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
+pub mod product_profile;
 mod recovery;
 pub mod runner_api;
+pub use agent_supervisor::run_agent_job as execute_agent_job;
 pub use artifacts::sha256_file as artifact_sha256_file;
 pub use pipeline::{
     execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
@@ -123,6 +125,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/runner/pipeline-runs/{run_id}/lease/renew",
             post(runner_api::renew_pipeline_lease),
+        )
+        .route(
+            "/api/v1/runner/agent-runs/claim",
+            post(runner_api::claim_agent_run),
+        )
+        .route(
+            "/api/v1/runner/agent-runs/{run_id}/lease/renew",
+            post(runner_api::renew_agent_lease),
         )
         .route(
             "/api/v1/orgs/{org}/repos",
@@ -600,48 +610,70 @@ async fn start_agent_run(
             .await?;
     security::validate_agent_work_branch(&branch, &default_branch.0)
         .map_err(AppError::Validation)?;
+    let remote_agent = runner_api::agent_executor_remote();
     let instance_id = state.instance_id;
-    sqlx::query(
-        "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, lease_holder, lease_until)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9,
-           CURRENT_TIMESTAMP + ($10::text || ' seconds')::interval)",
-    )
-    .bind(run_id)
-    .bind(org_id)
-    .bind(repo_id)
-    .bind(body.issue_id)
-    .bind(principal_id)
-    .bind(agent_adapter::adapter_kind_for_request(body.adapter.as_deref()))
-    .bind(&branch)
-    .bind(body.budget_tokens.map(|limit| limit as i64))
-    .bind(instance_id)
-    .bind(crate::lease::lease_secs())
-    .execute(&state.pool)
-    .await?;
-    let supervisor = state.supervisor.clone();
-    let pool = state.pool.clone();
-    let git_root = state.git_root.clone();
-    let reference_bin = state.reference_adapter_bin.clone();
-    let message = body.message.clone();
-    let deadline = std::time::Duration::from_secs(120);
-    let budget_tokens = body.budget_tokens;
-    tokio::spawn(async move {
-        agent_supervisor::run_agent_job(
-            pool,
-            supervisor,
-            instance_id,
-            run_id,
-            repo_id,
-            storage_key,
-            git_root,
-            reference_bin,
-            branch,
-            message,
-            deadline,
-            budget_tokens,
+    let adapter = agent_adapter::adapter_kind_for_request(body.adapter.as_deref());
+    let task_message = body.message.clone();
+    if remote_agent {
+        sqlx::query(
+            "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9)",
         )
-        .await;
-    });
+        .bind(run_id)
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(body.issue_id)
+        .bind(principal_id)
+        .bind(adapter)
+        .bind(&branch)
+        .bind(body.budget_tokens.map(|limit| limit as i64))
+        .bind(&task_message)
+        .execute(&state.pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message, lease_holder, lease_until)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9, $10,
+               CURRENT_TIMESTAMP + ($11::text || ' seconds')::interval)",
+        )
+        .bind(run_id)
+        .bind(org_id)
+        .bind(repo_id)
+        .bind(body.issue_id)
+        .bind(principal_id)
+        .bind(adapter)
+        .bind(&branch)
+        .bind(body.budget_tokens.map(|limit| limit as i64))
+        .bind(&task_message)
+        .bind(instance_id)
+        .bind(crate::lease::lease_secs())
+        .execute(&state.pool)
+        .await?;
+        let supervisor = state.supervisor.clone();
+        let pool = state.pool.clone();
+        let git_root = state.git_root.clone();
+        let reference_bin = state.reference_adapter_bin.clone();
+        let message = body.message.clone();
+        let deadline = std::time::Duration::from_secs(120);
+        let budget_tokens = body.budget_tokens;
+        tokio::spawn(async move {
+            agent_supervisor::run_agent_job(
+                pool,
+                supervisor,
+                instance_id,
+                run_id,
+                repo_id,
+                storage_key,
+                git_root,
+                reference_bin,
+                branch,
+                message,
+                deadline,
+                budget_tokens,
+            )
+            .await;
+        });
+    }
     let kind = agent_adapter::adapter_kind_for_request(body.adapter.as_deref()).to_string();
     Ok(Json(AgentRunView {
         id: run_id,
@@ -903,6 +935,9 @@ struct OrgSettingsView {
     pub display_name: String,
     pub preferences: org_config::OrgPreferences,
     pub pipeline_executor: String,
+    pub agent_executor: String,
+    pub compose_adapter_mode: String,
+    pub product_profile: String,
     pub require_pipeline_oci: bool,
     pub runner_dependencies: &'static [&'static str],
 }
@@ -924,6 +959,17 @@ async fn org_settings_handler(
         } else {
             "inprocess".to_string()
         },
+        agent_executor: if runner_api::agent_executor_remote() {
+            "remote".to_string()
+        } else {
+            "inprocess".to_string()
+        },
+        compose_adapter_mode: match compose_mode_from_env() {
+            ComposeAdapterMode::Mock => "mock".to_string(),
+            ComposeAdapterMode::Runner => "runner".to_string(),
+            ComposeAdapterMode::Auto => "auto".to_string(),
+        },
+        product_profile: product_profile::profile_label().to_string(),
         require_pipeline_oci: state.require_pipeline_oci,
         runner_dependencies: &[
             "MUSEHUB_DATABASE_URL",

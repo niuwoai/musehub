@@ -27,7 +27,7 @@ remote_runner_e2e_init() {
   mkdir -p "$ARTIFACT_ROOT"
   export MUSEHUB_GIT_ROOT="$GIT_ROOT"
   export MUSEHUB_ARTIFACT_ROOT="$ARTIFACT_ROOT"
-  export MUSEHUB_PIPELINE_EXECUTOR=remote
+  export MUSEHUB_PIPELINE_EXECUTOR="${MUSEHUB_PIPELINE_EXECUTOR:-remote}"
   export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-Remote-Runner-E2E-Strong-1!}"
   export MUSEHUB_SESSION_SECRET="${MUSEHUB_SESSION_SECRET:-$(openssl rand -hex 32)}"
   API_PORT="${MUSEHUB_API_PORT:-$((52000 + RANDOM % 10000))}"
@@ -72,6 +72,12 @@ remote_runner_start_server() {
   )
   if [[ -n "${MUSEHUB_LEASE_SECS:-}" ]]; then
     server_env+=(MUSEHUB_LEASE_SECS="$MUSEHUB_LEASE_SECS")
+  fi
+  if [[ -n "${MUSEHUB_AGENT_EXECUTOR:-}" ]]; then
+    server_env+=(MUSEHUB_AGENT_EXECUTOR="$MUSEHUB_AGENT_EXECUTOR")
+  fi
+  if [[ -n "${MUSEHUB_PIPELINE_EXECUTOR:-}" ]]; then
+    server_env+=(MUSEHUB_PIPELINE_EXECUTOR="$MUSEHUB_PIPELINE_EXECUTOR")
   fi
   env "${server_env[@]}" "$BIN_SERVER" &
   SERVER_PID=$!
@@ -131,15 +137,21 @@ remote_runner_start_runnerd() {
   local adapter_bin="$1"
   local instance_id="${2:-}"
   local env_extra=("${@:3}")
+  local ref_bin="${MUSEHUB_REFERENCE_ADAPTER_BIN:-${CARGO_TARGET_DIR:-$ROOT/target}/debug/musehub-agent-reference}"
+  local pipe_bin="${MUSEHUB_PIPELINE_ADAPTER_BIN:-$adapter_bin}"
   local runner_env=(
     MUSEHUB_API_BASE="$MUSEHUB_API_BASE"
     MUSEHUB_DATABASE_URL="$DATABASE_URL"
     MUSEHUB_GIT_ROOT="$GIT_ROOT"
     MUSEHUB_ARTIFACT_ROOT="$ARTIFACT_ROOT"
-    MUSEHUB_PIPELINE_ADAPTER_BIN="$adapter_bin"
+    MUSEHUB_PIPELINE_ADAPTER_BIN="$pipe_bin"
+    MUSEHUB_REFERENCE_ADAPTER_BIN="$ref_bin"
     MUSEHUB_RUNNER_PAT="$RUNNER_PAT"
     MUSEHUB_RUNNER_POLL_SECS="${MUSEHUB_RUNNER_POLL_SECS:-1}"
   )
+  if [[ -n "${MUSEHUB_RUNNER_WORK_KINDS:-}" ]]; then
+    runner_env+=(MUSEHUB_RUNNER_WORK_KINDS="$MUSEHUB_RUNNER_WORK_KINDS")
+  fi
   if [[ -n "${MUSEHUB_PIPELINE_HOLD_SECS:-}" ]]; then
     runner_env+=(MUSEHUB_PIPELINE_HOLD_SECS="$MUSEHUB_PIPELINE_HOLD_SECS")
   fi

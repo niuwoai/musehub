@@ -5,7 +5,12 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-const RUNNER_ALLOWED: &[&str] = &["checks:write", "repo:read", "pipeline:execute"];
+const RUNNER_ALLOWED: &[&str] = &[
+    "checks:write",
+    "repo:read",
+    "pipeline:execute",
+    "agent:execute",
+];
 
 pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
     for scope in scopes {
@@ -15,7 +20,7 @@ pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
     }
     let runner_scoped = scopes
         .iter()
-        .any(|s| s == "checks:write" || s == "pipeline:execute");
+        .any(|s| s == "checks:write" || s == "pipeline:execute" || s == "agent:execute");
     if runner_scoped {
         if scopes
             .iter()
@@ -45,7 +50,7 @@ pub async fn require_org_admin_to_issue_runner_token(
 ) -> Result<(), AppError> {
     if !scopes
         .iter()
-        .any(|s| s == "checks:write" || s == "pipeline:execute")
+        .any(|s| s == "checks:write" || s == "pipeline:execute" || s == "agent:execute")
     {
         return Ok(());
     }

@@ -86,6 +86,12 @@ pub async fn ensure_pat_repo_access(
         }
         return Ok(());
     }
+    if pat.scope_mode == "all_accessible"
+        && (crate::pat_auth::scope_allows(&pat.scopes, "pipeline:execute")
+            || crate::pat_auth::scope_allows(&pat.scopes, "agent:execute"))
+    {
+        return Ok(());
+    }
     ensure_principal_repo_access(pool, org_id, repo_id, pat.principal_id).await?;
     Ok(())
 }

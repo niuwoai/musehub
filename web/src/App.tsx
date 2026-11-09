@@ -105,8 +105,6 @@ export default function App() {
       setOrgDisplayName(s.display_name)
       const g = await listRepoGrants(DEFAULT_ORG, slug)
       setGrants(g)
-      const masked = await listRunnerTokens(DEFAULT_ORG)
-      setMintedTokenPrefix(masked[0]?.token_prefix ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to load repository')
     }
@@ -305,7 +303,9 @@ export default function App() {
                     Save org settings
                   </button>
                   <p>
-                    executor: {settings.pipeline_executor}
+                    pipeline: {settings.pipeline_executor} · agent:{' '}
+                    {settings.agent_executor} · compose:{' '}
+                    {settings.compose_adapter_mode} ({settings.product_profile})
                     {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
                   </p>
                 </div>

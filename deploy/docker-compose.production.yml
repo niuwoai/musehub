@@ -1,0 +1,40 @@
+# Production profile: control plane enqueue-only; worker service runs adapters (may use Docker on worker only).
+name: musehub-product-production
+
+services:
+  musehub-server:
+    environment:
+      MUSEHUB_PRODUCT_PROFILE: production
+      MUSEHUB_PIPELINE_EXECUTOR: remote
+      MUSEHUB_AGENT_EXECUTOR: remote
+      MUSEHUB_COMPOSE_ADAPTER_MODE: runner
+      MUSEHUB_REQUIRE_PIPELINE_OCI: ${MUSEHUB_REQUIRE_PIPELINE_OCI:-1}
+      MUSEHUB_COMPOSE_ADAPTER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_COMPOSE_RUNNER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_PIPELINE_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-oci
+
+  musehub-runner:
+    image: musehub-runner:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runner-runtime
+    environment:
+      DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@postgres:5432/musehub?sslmode=disable
+      MUSEHUB_API_BASE: http://musehub-server:8080
+      MUSEHUB_RUNNER_PAT: ${MUSEHUB_RUNNER_PAT:?set MUSEHUB_RUNNER_PAT for production worker}
+      MUSEHUB_GIT_ROOT: /var/lib/musehub/git
+      MUSEHUB_ARTIFACT_ROOT: /var/lib/musehub/artifacts
+      MUSEHUB_PIPELINE_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-oci
+      MUSEHUB_REFERENCE_ADAPTER_BIN: /opt/musehub/bin/musehub-agent-reference
+      MUSEHUB_AGENT_CODEX_SIM_BIN: /opt/musehub/bin/musehub-agent-codex-sim
+      MUSEHUB_RUNNER_POLL_SECS: 2
+      MUSEHUB_RUNNER_WORK_KINDS: both
+    volumes:
+      - gitdata:/var/lib/musehub/git
+      - artifacts:/var/lib/musehub/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      musehub-server:
+        condition: service_healthy
+    restart: unless-stopped
