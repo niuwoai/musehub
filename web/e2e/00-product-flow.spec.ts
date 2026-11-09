@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
+
+function repoNavButtons(page: Page) {
+  return page.locator('section > ul').first().getByRole('button')
+}
 
 test.describe('product slice browser flow', () => {
   test.skip(
@@ -15,18 +20,9 @@ test.describe('product slice browser flow', () => {
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(page.locator('ul li button').first()).toBeVisible({
-      timeout: 10_000,
-    })
-
-    const cookie = (await page.context().cookies()).find((c) =>
-      c.name.includes('musehub'),
-    )
-    expect(cookie).toBeTruthy()
-
-    const repoSlug = await page.locator('ul li button').first().textContent()
-    expect(repoSlug).toBeTruthy()
-    await page.locator('ul li button').first().click()
+    const repoButton = repoNavButtons(page).first()
+    await expect(repoButton).toBeVisible({ timeout: 15_000 })
+    await repoButton.click()
 
     await page
       .getByRole('button', { name: /create issue|创建 issue/i })

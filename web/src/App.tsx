@@ -84,10 +84,15 @@ export default function App() {
 
   async function loadIssues(slug: string) {
     setSelectedRepo(slug)
-    const data = await listIssues(DEFAULT_ORG, slug)
-    setIssues(data)
-    const prs = await listPullRequests(DEFAULT_ORG, slug)
-    setPulls(prs)
+    setError(null)
+    try {
+      const prs = await listPullRequests(DEFAULT_ORG, slug)
+      setPulls(prs)
+      const data = await listIssues(DEFAULT_ORG, slug)
+      setIssues(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed to load repository')
+    }
   }
 
   async function onCreateIssue() {
@@ -256,6 +261,13 @@ export default function App() {
           {selectedRepo ? (
             <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
+              <button
+                type="button"
+                data-testid="refresh-repo"
+                onClick={() => void loadIssues(selectedRepo)}
+              >
+                {t('app.refreshRepo')}
+              </button>
               <button type="button" onClick={() => void onCreateIssue()}>
                 {t('app.createIssue')}
               </button>
@@ -389,7 +401,8 @@ export default function App() {
 function Panel({
   children,
   style,
-}: {
+  ...rest
+}: React.HTMLAttributes<HTMLDivElement> & {
   children: React.ReactNode
   style?: React.CSSProperties
 }) {
@@ -402,6 +415,7 @@ function Panel({
         padding: '1rem',
         ...style,
       }}
+      {...rest}
     >
       {children}
     </div>

@@ -55,6 +55,7 @@ if ! curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
 fi
 
 yarn --cwd web install
+# Playwright page.request helpers hit the API directly; the browser UI uses Vite (/api proxy).
 export MUSEHUB_E2E_API=http://127.0.0.1:8080
 export MUSEHUB_E2E_BASE_URL=http://127.0.0.1:5173
 yarn --cwd web playwright install chromium

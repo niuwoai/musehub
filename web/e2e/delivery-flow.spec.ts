@@ -1,8 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, request as playwrightRequest, test } from '@playwright/test'
 import { randomUUID } from 'crypto'
+
+import type { Page } from '@playwright/test'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
+
+/** Repo picker in the sidebar — not issue/PR action buttons nested under the detail panel. */
+function repoNavButtons(page: Page) {
+  return page.locator('section > ul').first().getByRole('button')
+}
 
 test.describe('delivery chain browser flow', () => {
   test.skip(
@@ -22,15 +29,17 @@ test.describe('delivery chain browser flow', () => {
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
 
-    const cookies = await page.context().cookies()
-    const sessionCookie = cookies.find((c) => c.name.includes('musehub'))
-    expect(sessionCookie).toBeTruthy()
+    const adminSession = (await page.context().cookies()).find((c) =>
+      c.name.includes('musehub'),
+    )
+    expect(adminSession).toBeTruthy()
+    const adminCookieHeader = `${adminSession!.name}=${adminSession!.value}`
 
     const invite = async (handle: string, pass: string, role: string) => {
       const r = await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
         headers: {
           'Content-Type': 'application/json',
-          Cookie: `${sessionCookie!.name}=${sessionCookie!.value}`,
+          Cookie: adminCookieHeader,
         },
         data: { handle, password: pass, role },
       })
@@ -39,8 +48,10 @@ test.describe('delivery chain browser flow', () => {
     await invite('e2e-reviewer', reviewerPass, 'member')
     await invite('e2e-ci', ciPass, 'admin')
 
+    const repoCountBefore = await repoNavButtons(page).count()
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    const repoEntry = page.locator('ul li button').last()
+    await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
+    const repoEntry = repoNavButtons(page).last()
     await expect(repoEntry).toBeVisible({ timeout: 10_000 })
     const slug = (await repoEntry.textContent())?.trim() ?? ''
     await repoEntry.click()
@@ -55,16 +66,16 @@ test.describe('delivery chain browser flow', () => {
     await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
     await expect(page.getByTestId('pull-request-list')).toBeVisible()
 
-    const loginApi = async (handle: string, pass: string) => {
-      const r = await page.request.post(`${apiBase}/api/v1/auth/login`, {
-        data: { handle, password: pass },
-      })
+    const loginApiCookie = async (handle: string, pass: string) => {
+      const ctx = await playwrightRequest.newContext({ baseURL: apiBase })
+      const r = await ctx.post('/api/v1/auth/login', { data: { handle, password: pass } })
       expect(r.ok()).toBeTruthy()
       const setCookie = r.headers()['set-cookie'] ?? ''
+      await ctx.dispose()
       return setCookie.split(';')[0]
     }
-    const revCookie = await loginApi('e2e-reviewer', reviewerPass)
-    const ciCookie = await loginApi('e2e-ci', ciPass)
+    const revCookie = await loginApiCookie('e2e-reviewer', reviewerPass)
+    const ciCookie = await loginApiCookie('e2e-ci', ciPass)
 
     expect(slug).not.toEqual('')
     const collab = await page.request.post(
@@ -72,7 +83,7 @@ test.describe('delivery chain browser flow', () => {
       {
         headers: {
           'Content-Type': 'application/json',
-          Cookie: `${sessionCookie!.name}=${sessionCookie!.value}`,
+          Cookie: adminCookieHeader,
         },
         data: { handle: 'e2e-reviewer', role: 'maintainer' },
       },
@@ -80,7 +91,7 @@ test.describe('delivery chain browser flow', () => {
     expect(collab.ok()).toBeTruthy()
     const prs = await page.request
       .get(`${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
-        headers: { Cookie: `${sessionCookie!.name}=${sessionCookie!.value}` },
+        headers: { Cookie: adminCookieHeader },
       })
       .then((r) => r.json() as Promise<{ number: number }[]>)
     const prNumber = prs[0]!.number
@@ -108,15 +119,30 @@ test.describe('delivery chain browser flow', () => {
       { headers: { Cookie: revCookie } },
     )
     expect(merge.ok()).toBeTruthy()
+    const mergedView = (await merge.json()) as { state: string; head_oid?: string }
+    expect(mergedView.state).toBe('merged')
+    expect(mergedView.head_oid).toBeTruthy()
+    await expect
+      .poll(
+        async () => {
+          const list = await page.request.get(
+            `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`,
+            { headers: { Cookie: adminCookieHeader } },
+          )
+          const body = (await list.json()) as { number: number; state: string }[]
+          return body.find((p) => p.number === prNumber)?.state ?? ''
+        },
+        { timeout: 15_000 },
+      )
+      .toBe('merged')
 
-    await page.goto('/')
-    await page.getByLabel(/password|密码/i).fill(password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
-    await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
-    const repoOpen = page.locator('ul li button', { hasText: slug })
-    await expect(repoOpen).toBeVisible({ timeout: 30_000 })
-    await repoOpen.click()
-    await expect(page.getByTestId('delivery-panel')).toBeVisible()
+    await page.getByTestId('refresh-repo').click()
+    const deliveryPanel = page.getByTestId('delivery-panel')
+    await expect(page.getByTestId('pull-request-list')).toContainText(/merged/i, {
+      timeout: 30_000,
+    })
+    await expect(deliveryPanel).toBeVisible()
+    await expect(deliveryPanel).toContainText(/main @/, { timeout: 15_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
       timeout: 120_000,

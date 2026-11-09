@@ -10,6 +10,7 @@
     "signedInAs": "Signed in as",
     "createRepo": "Create repository",
     "createIssue": "Create issue",
+    "refreshRepo": "Refresh",
     "runReferenceAgent": "Run reference agent (no model)",
     "acceptPlan": "Accept plan",
     "cancelAgent": "Cancel agent run",

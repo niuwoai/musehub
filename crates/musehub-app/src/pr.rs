@@ -772,13 +772,12 @@ pub async fn merge_pull_request(
     let merged_oid = merge_with_cas(&bare, &target_branch, &base_oid, &live_head)?;
     sqlx::query(
         "UPDATE pull_requests SET state = 'merged', merged_oid = $2, merged_by = $3,
-         merged_at = CURRENT_TIMESTAMP, head_oid = $4, updated_at = CURRENT_TIMESTAMP
+         merged_at = CURRENT_TIMESTAMP, head_oid = $2, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND state = 'open'",
     )
     .bind(pr_id)
     .bind(&merged_oid)
     .bind(principal_id)
-    .bind(&live_head)
     .execute(&state.pool)
     .await?;
     let title: (String,) = sqlx::query_as("SELECT title FROM pull_requests WHERE id = $1")

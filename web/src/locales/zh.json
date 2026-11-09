@@ -10,6 +10,7 @@
     "signedInAs": "已登录",
     "createRepo": "创建仓库",
     "createIssue": "创建 Issue",
+    "refreshRepo": "刷新",
     "runReferenceAgent": "运行参考 Agent（无模型）",
     "acceptPlan": "接受计划",
     "cancelAgent": "取消 Agent",
