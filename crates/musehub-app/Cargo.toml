@@ -28,6 +28,7 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
+sha2 = "0.10"
 base64 = "0.22"
 tower = { workspace = true }
 http-body-util = { workspace = true }
