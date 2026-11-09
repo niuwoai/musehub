@@ -34,6 +34,9 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
 pub const V1_RESOURCE_READS_IMPLEMENTED: &[&str] = &[
     "musehub://deployments/{deployment_id}",
     "musehub://agent-runs/{agent_run_id}/summary",
+    "musehub://issues/{issue_id}/revisions/{n}",
+    "musehub://pull-requests/{pr_id}/revisions/{n}",
+    "musehub://repositories/{repository_id}/commits/{oid}/files/{encoded-path}",
 ];
 
 pub const V1_RESOURCE_URI_TEMPLATES: &[&str] = &[

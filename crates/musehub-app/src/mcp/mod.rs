@@ -8,6 +8,7 @@ mod http;
 mod idempotency;
 mod pagination;
 mod prompts;
+mod resource_reads;
 mod resources;
 mod server;
 

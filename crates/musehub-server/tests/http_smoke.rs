@@ -44,6 +44,8 @@ async fn readyz_without_deps() {
     let (status, body) = call("/readyz").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["checks"]["git_storage"], GIT_NOT_CONFIGURED);
+    assert_eq!(body["checks"]["product_api"], "error");
+    assert_eq!(body["ready"], false);
 }
 
 #[test]

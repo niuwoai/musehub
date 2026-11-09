@@ -14,5 +14,3 @@ services:
   gateway:
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - ./Caddyfile.ci.host.yml:/etc/caddy/Caddyfile:ro

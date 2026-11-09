@@ -109,23 +109,38 @@ pub async fn read_resource(state: &AppState, uri: &str) -> Result<ReadResourceRe
         )])
         .into());
     }
-    if uri.starts_with(ISSUE_REV_PREFIX) && uri.contains("/revisions/") {
-        return Err(ErrorData::invalid_params(
-            "issue revision reads are not implemented in V1 partial server",
-            None,
-        ));
+    if let Some(rest) = uri.strip_prefix(ISSUE_REV_PREFIX) {
+        if let Some((issue_str, rev_str)) = rest.split_once("/revisions/") {
+            let issue_id = Uuid::parse_str(issue_str)
+                .map_err(|_| ErrorData::invalid_params("invalid issue resource uri", None))?;
+            let revision: i32 = rev_str
+                .parse()
+                .map_err(|_| ErrorData::invalid_params("invalid issue revision", None))?;
+            return super::resource_reads::read_issue_revision(state, issue_id, revision, uri).await;
+        }
     }
-    if uri.starts_with(PR_REV_PREFIX) && uri.contains("/revisions/") {
-        return Err(ErrorData::invalid_params(
-            "pull-request revision reads are not implemented in V1 partial server",
-            None,
-        ));
+    if let Some(rest) = uri.strip_prefix(PR_REV_PREFIX) {
+        if let Some((pr_str, rev_str)) = rest.split_once("/revisions/") {
+            let pr_id = Uuid::parse_str(pr_str)
+                .map_err(|_| ErrorData::invalid_params("invalid pr resource uri", None))?;
+            let revision: i64 = rev_str
+                .parse()
+                .map_err(|_| ErrorData::invalid_params("invalid pr revision", None))?;
+            return super::resource_reads::read_pr_revision(state, pr_id, revision, uri).await;
+        }
     }
-    if uri.starts_with(REPO_FILE_PREFIX) && uri.contains("/commits/") {
-        return Err(ErrorData::invalid_params(
-            "repository file reads are not implemented in V1 partial server",
-            None,
-        ));
+    if let Some(rest) = uri.strip_prefix(REPO_FILE_PREFIX) {
+        if let Some(after_repo) = rest.split_once("/commits/") {
+            let (repo_str, tail) = after_repo;
+            let repo_id = Uuid::parse_str(repo_str)
+                .map_err(|_| ErrorData::invalid_params("invalid repository id", None))?;
+            if let Some((oid, enc_path)) = tail.split_once("/files/") {
+                return super::resource_reads::read_repo_commit_file(
+                    state, repo_id, oid, enc_path, uri,
+                )
+                .await;
+            }
+        }
     }
     Err(ErrorData::invalid_params("unsupported resource uri", None))
 }

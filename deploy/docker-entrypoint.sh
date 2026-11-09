@@ -5,6 +5,14 @@ set -eu
 : "${DATABASE_URL:?DATABASE_URL is required}"
 : "${MUSEHUB_GIT_ROOT:?MUSEHUB_GIT_ROOT is required}"
 : "${MUSEHUB_SESSION_SECRET:?MUSEHUB_SESSION_SECRET is required}"
+: "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD is required}"
+
+# Keep in sync with musehub_app::security::validate_bootstrap_password (min length).
+pw_len="$(printf '%s' "$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD" | wc -c | tr -d ' ')"
+if [ "$pw_len" -lt 16 ]; then
+  echo "musehub-entrypoint: bootstrap password must be at least 16 characters (got $pw_len)" >&2
+  exit 1
+fi
 
 mkdir -p "$MUSEHUB_GIT_ROOT" "${MUSEHUB_ARTIFACT_ROOT:-/var/lib/musehub/artifacts}"
 

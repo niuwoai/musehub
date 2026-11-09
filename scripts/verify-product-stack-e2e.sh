@@ -11,8 +11,7 @@ export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
 command -v docker >/dev/null || { echo "docker required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl required" >&2; exit 1; }
-command -v pg_dump >/dev/null || { echo "pg_dump required" >&2; exit 1; }
-command -v pg_restore >/dev/null || { echo "pg_restore required" >&2; exit 1; }
+export MUSEHUB_PG_CLIENT_IMAGE="${MUSEHUB_PG_CLIENT_IMAGE:-postgres:17-bookworm}"
 
 STACK_ID="musehub-stack-ci-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
@@ -54,6 +53,31 @@ SESSION_SECRET="$(grep '^MUSEHUB_SESSION_SECRET=' "$ENV_FILE" | cut -d= -f2-)"
 BOOTSTRAP_PW="$(grep '^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 MUSEHUB_GATEWAY_HTTP_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' "$ENV_FILE" | cut -d= -f2-)"
 export POSTGRES_PASSWORD SESSION_SECRET BOOTSTRAP_PW MUSEHUB_GATEWAY_HTTP_PORT
+# Prevent host env from overriding compose --env-file (short bootstrap ⇒ product_api=false ⇒ API 404).
+unset MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD MUSEHUB_SESSION_SECRET 2>/dev/null || true
+
+diagnose_gateway_failure() {
+  local reason=${1:-unknown}
+  echo "=== diagnose gateway ($reason) ===" >&2
+  echo "gateway_base=$BASE" >&2
+  echo "compose_project=$COMPOSE_PROJECT_NAME" >&2
+  ss -tlnp 2>/dev/null | grep ":${MUSEHUB_GATEWAY_HTTP_PORT} " >&2 || true
+  dc ps 2>/dev/null || true
+  echo "--- response headers: GET /readyz ---" >&2
+  curl -sS -D - -o /dev/null "$BASE/readyz" 2>&1 | head -20 >&2 || true
+  echo "--- response headers: GET / ---" >&2
+  curl -sS -D - -o /tmp/musehub-root.body "$BASE/" 2>&1 | head -20 >&2 || true
+  head -c 400 /tmp/musehub-root.body 2>/dev/null >&2 || true
+  echo >&2
+  echo "--- response headers: POST /api/v1/auth/login ---" >&2
+  curl -sS -D - -o /tmp/musehub-login.body -X POST -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
+    "$BASE/api/v1/auth/login" 2>&1 | head -20 >&2 || true
+  head -c 200 /tmp/musehub-login.body 2>/dev/null >&2 || true
+  echo >&2
+  dc logs musehub-server --tail=40 2>/dev/null >&2 || true
+  dc logs gateway --tail=20 2>/dev/null >&2 || true
+}
 
 cleanup() {
   dc down -v --remove-orphans 2>/dev/null || true
@@ -79,13 +103,12 @@ DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POS
 
 wait_ready() {
   for _ in $(seq 1 90); do
-    if curl -fsS "$BASE/readyz" | jq -e '.ready == true' >/dev/null 2>&1; then
+    if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
   done
-  dc logs --tail=80
-  echo "gateway not ready" >&2
+  diagnose_gateway_failure "readyz timeout"
   exit 1
 }
 wait_ready
@@ -98,7 +121,10 @@ for _ in $(seq 1 45); do
   fi
   sleep 2
 done
-[[ -n "$html" ]] || { dc logs --tail=40 gateway; echo "static index missing" >&2; exit 1; }
+if [[ -z "$html" ]]; then
+  diagnose_gateway_failure "static index"
+  exit 1
+fi
 echo "$html" | grep -q 'id="root"'
 echo "$html" | grep -qE '/assets/|MuseHub'
 [[ "$html" != *"/src/main.tsx"* ]] || { echo "dev index leaked into gateway" >&2; exit 1; }
@@ -107,7 +133,10 @@ COOKIE_JAR=$(mktemp)
 login_json=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
-  "$BASE/api/v1/auth/login")
+  "$BASE/api/v1/auth/login") || {
+  diagnose_gateway_failure "login"
+  exit 1
+}
 echo "$login_json" | jq -e '.ok == true' >/dev/null
 me_json=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/me")
 echo "$me_json" | jq -e '.handle == "admin"' >/dev/null
@@ -207,7 +236,7 @@ rm -f "$rev_tmp"
 
 echo "step=ci_check"
 attempt_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
-ci_chk=$(curl -sS -c "$CI_JAR" -b "$CI_JAR" -H 'Content-Type: application/json' \
+ci_chk=$(curl -sS -c "$CI_JAR" -b "$CI_JAR" -X PATCH -H 'Content-Type: application/json' \
   -d "$(jq -n --arg a "$attempt_id" '{state:"success",attempt_id:$a}')" \
   -o /dev/null -w "%{http_code}" \
   "$BASE/api/v1/orgs/demo/repos/stack-slice/pull-requests/${pr_n}/checks/product-ci")
@@ -277,7 +306,8 @@ chmod +x "$ROOT/scripts/backup-musehub-state.sh" "$ROOT/scripts/restore-musehub-
 "$ROOT/scripts/backup-musehub-state.sh" "$BACKUP_DIR"
 
 dc stop musehub-server gateway
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+docker run --rm --network host "$MUSEHUB_PG_CLIENT_IMAGE" \
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 rm -rf "$GIT_EX/git" "$ART_EX/artifacts"
 mkdir -p "$GIT_EX/git" "$ART_EX/artifacts"
 "$ROOT/scripts/restore-musehub-state.sh" "$BACKUP_DIR"

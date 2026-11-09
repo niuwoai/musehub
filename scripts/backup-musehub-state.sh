@@ -8,14 +8,28 @@ cd "$(dirname "$0")/.."
 MUSEHUB_ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-/tmp/musehub-artifacts}"
 BACKUP_DIR="${1:?usage: $0 <output-dir>}"
 
-command -v pg_dump >/dev/null || { echo "pg_dump required" >&2; exit 1; }
-
 mkdir -p "$BACKUP_DIR"
+run_pg() {
+  local tool=$1
+  shift
+  if [[ -n "${MUSEHUB_PG_CLIENT_IMAGE:-}" ]]; then
+    docker run --rm --network host \
+      -v "${BACKUP_DIR}:/backup" \
+      "$MUSEHUB_PG_CLIENT_IMAGE" "$tool" "$@"
+  else
+    command -v "$tool" >/dev/null || { echo "$tool required" >&2; exit 1; }
+    "$tool" "$@"
+  fi
+}
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 APP_VERSION=$(tr -d ' \n' < VERSION)
 
 echo "=== dumping database ==="
-pg_dump --no-owner --format=custom --file="$BACKUP_DIR/musehub-${TS}.pgdump" "$DATABASE_URL"
+if [[ -n "${MUSEHUB_PG_CLIENT_IMAGE:-}" ]]; then
+  run_pg pg_dump --no-owner --format=custom --file="/backup/musehub-${TS}.pgdump" "$DATABASE_URL"
+else
+  run_pg pg_dump --no-owner --format=custom --file="$BACKUP_DIR/musehub-${TS}.pgdump" "$DATABASE_URL"
+fi
 
 echo "=== archiving git + artifacts ==="
 tar -C "$(dirname "$MUSEHUB_GIT_ROOT")" -czf "$BACKUP_DIR/git-${TS}.tar.gz" "$(basename "$MUSEHUB_GIT_ROOT")"

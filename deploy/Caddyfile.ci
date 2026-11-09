@@ -3,7 +3,7 @@
 :8080 {
   encode gzip
 
-  @api path /api/* /git/* /mcp /mcp/*
+  @api path /api /api/* /git /git/* /mcp /mcp/*
   handle @api {
     reverse_proxy musehub-server:8080
   }

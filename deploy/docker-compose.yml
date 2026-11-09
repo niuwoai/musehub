@@ -37,7 +37,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/readyz"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/readyz | grep -q 'product_api\":\"ok'"]
       interval: 5s
       timeout: 3s
       retries: 60

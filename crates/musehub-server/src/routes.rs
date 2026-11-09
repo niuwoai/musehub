@@ -34,6 +34,7 @@ struct ReadinessChecks {
     process: &'static str,
     database: &'static str,
     git_storage: &'static str,
+    product_api: &'static str,
 }
 
 #[derive(Serialize)]
@@ -79,7 +80,12 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Some(_) => DATABASE_ERROR,
         None => NOT_CONFIGURED,
     };
-    let ready = database == PROCESS_OK && git_storage == PROCESS_OK;
+    let product_api = if state.product.is_some() {
+        PROCESS_OK
+    } else {
+        DATABASE_ERROR
+    };
+    let ready = database == PROCESS_OK && git_storage == PROCESS_OK && product_api == PROCESS_OK;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -94,6 +100,7 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 process: PROCESS_OK,
                 database,
                 git_storage,
+                product_api,
             },
         }),
     )

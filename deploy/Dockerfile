@@ -62,7 +62,7 @@ ENV MUSEHUB_BIND=0.0.0.0:8080 \
 VOLUME ["/var/lib/musehub/git", "/var/lib/musehub/artifacts"]
 EXPOSE 8080
 HEALTHCHECK --interval=5s --timeout=3s --start-period=40s --retries=20 \
-  CMD wget -q -O- http://127.0.0.1:8080/readyz | grep -q '"ready":true' || exit 1
+  CMD wget -q -O- http://127.0.0.1:8080/readyz | grep -q '"product_api":"ok"' || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--", "/docker-entrypoint.sh"]
 CMD ["server"]
 
