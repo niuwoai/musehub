@@ -15,7 +15,9 @@ use sqlx::ConnectOptions;
 use sqlx::Executor;
 use sqlx::Row;
 
-use musehub_migrate::{business_tables, check_schema, connect, load_migrations, migrate_down, migrate_up};
+use musehub_migrate::{
+    business_tables, check_schema, connect, load_migrations, migrate_down, migrate_up,
+};
 
 const POSTGRES_BIN: &str = "/opt/homebrew/opt/postgresql@17/bin";
 
@@ -151,7 +153,10 @@ async fn identity_migrations_go_up_down_and_up() {
     let pool = connect(&url).await.expect("connect");
     let migrations = load_migrations(&migrations_dir()).expect("load");
     assert_eq!(
-        migrations.iter().map(|item| item.version()).collect::<Vec<_>>(),
+        migrations
+            .iter()
+            .map(|item| item.version())
+            .collect::<Vec<_>>(),
         vec!["0001", "0002"]
     );
 

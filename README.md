@@ -1,6 +1,6 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc1`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc3`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
@@ -43,8 +43,8 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 
 ```text
 musehub/
-  VERSION                    # 单一版本源，当前 0.1.0-rc1
-  Cargo.toml                 # workspace：core、server、git-probe、migrate
+  VERSION                    # 单一版本源，当前 0.1.0-rc2
+  Cargo.toml                 # workspace：core、server、探针、migrate
   crates/musehub-core/       # 版本、配置与稳定错误码
   crates/musehub-server/     # /healthz、/readyz、/version
   crates/musehub-migrate/    # 显式 PostgreSQL migration；Web 启动不调用
@@ -54,6 +54,7 @@ musehub/
   crates/musehub-rootless-probe/ # Colima Linux VM 内的单用户 rootless 证据
   crates/musehub-ssh-probe/  # Colima Linux VM 内的单用户 OpenSSH forced command 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
+  crates/musehub-mcp-probe/  # M0 rmcp stdio + Streamable HTTP 互操作探针；不是生产 MCP 服务
   migrations/                # 0001 common、0002 identity；其余表尚未落地
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
@@ -69,6 +70,9 @@ musehub/
 
 ```sh
 cargo test --workspace
+# MCP 互操作（先准备 Python 依赖，见 docs/m0-rmcp-matrix.md）：
+./scripts/setup-mcp-matrix-python-deps.sh
+cargo test -p musehub-mcp-probe -- --test-threads=1
 cargo run -p musehub-server
 yarn --cwd web install --frozen-lockfile
 yarn --cwd web test
@@ -91,10 +95,13 @@ yarn --cwd web build
 - Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
 - Colima Linux VM 内的临时 OpenSSH 验证 forced command：服务端注入身份，客户端不能覆盖；只接受明确的 `git-upload-pack` / `git-receive-pack` 与一个逻辑路径；两个主体并发时各自看到自己的身份；客户端提前断开后没有仓库文件或提交。没有执行真实 Git pack。
 - `musehub-migrate` 对隔离的 PostgreSQL 17 执行 `0001_common` 与 `0002_identity` 的 up、down、up。身份表具备 `created_at`、`updated_at` 与更新触发器，外键有前缀索引。Web 启动不迁移；仓库、Issue、流水线等其余表仍未落地。
+- `musehub-mcp-probe` 在 Linux 本地用 **两种独立 SDK 客户端**（`rust-rmcp` 3.8.0 + 官方 Python `mcp` 2.3.0）各覆盖 stdio 与 Streamable HTTP；见 `docs/m0-rmcp-matrix.md`。这是 **M0 互操作探针**（`m0_mcp_interop_matrix_passed` 由 `cargo test -p musehub-mcp-probe --test matrix` 验证），不是生产 `/mcp`；写工具幂等 **未验证**；OAuth 不在范围。
 
 尚未完成，不能把 M0 标为通过：
 
 - 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
 - 生产级多租户隔离。当前 rootless 与 OpenSSH 证据只覆盖 Colima Linux VM 内的单个普通用户和临时 sshd，不代表不可信贡献者隔离，也不是选定的 Git 服务实现。
-- rmcp 的 stdio/HTTP 客户端兼容验证。
+- 生产 MCP 服务（完整工具目录、领域授权、写工具幂等、OAuth）与正式兼容矩阵发布。
 - 同类产品最小任务试用和差异结论。
+
+**环境相关测试（本机证据，Linux CI 可能失败且未用 skip 掩盖）：** Colima/Homebrew 绑定的 `musehub-container-probe`、`musehub-rootless-probe`、`musehub-ssh-probe` 集成测试，以及 Homebrew PostgreSQL@17 上的 `musehub-migrate` 集成测试。若在 macOS 开发者机上跑全量 `cargo test --workspace`，需具备对应路径的二进制。

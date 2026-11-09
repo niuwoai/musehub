@@ -1,0 +1,34 @@
+[package]
+name = "musehub-mcp-probe"
+version = "0.1.0-rc4"
+edition = "2021"
+description = "M0 rmcp stdio and Streamable HTTP interoperability probe for MuseHub"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "musehub-mcp-probe-stdio"
+path = "src/bin/musehub_mcp_probe_stdio.rs"
+
+[dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+musehub-core = { path = "../musehub-core" }
+rmcp = { workspace = true }
+schemars = { version = "1", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio-util = { workspace = true }
+tower = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+http-body-util = { workspace = true }
+musehub-mcp-probe = { path = "." }
+tower = { workspace = true }

@@ -1,8 +1,32 @@
 # Changelog
 
-## [Unreleased] — 0.1.0-rc1
+## [Unreleased] — 0.1.0-rc4
 
-开发中版本，不是产品发布。
+### Fixed
+
+- MCP 测试：默认禁止测试进程内 `pip`；新增 `scripts/setup-mcp-matrix-python-deps.sh`。
+- 静态 `m0-rmcp-matrix.json` 不再伪造 `negotiated_protocol`；Python Bearer 负例与 HTTP 一致使用 `legacy` 模式。
+- 增补 Bearer 门控、探针级 E2E mock 与 lib 单元测试。
+
+## [0.1.0-rc3]
+
+开发中版本，不是产品发布（`v0.1.0-rc2` Git 标签为历史推送，不代表本轮发布）。
+
+### Fixed
+
+- MCP 矩阵：改用 **rust-rmcp** 与 **Python mcp==2.3.0** 两种独立 SDK（禁止同 SDK 仅改 client 名称冒充双客户端）；Python HTTP 在 `spawn_blocking` 下运行以免阻塞 Tokio 探针服务。
+
+### Added
+
+- `crates/musehub-mcp-probe/python/`：`mcp_matrix_runner.py` + 锁定 `requirements.txt`。
+
+## [0.1.0-rc2]
+
+### Added
+
+- 新增 `musehub-mcp-probe`：基于 rmcp `3.8.0` 的 M0 stdio + Streamable HTTP 探针（初版矩阵口径不足，见 rc3 修正）。
+
+## [0.1.0-rc1]
 
 ### Added
 

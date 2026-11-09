@@ -108,11 +108,7 @@ pub fn load_migrations(directory: &Path) -> Result<Vec<Migration>, MigrateError>
     downs.sort();
     if ups.len() != downs.len() || ups.iter().zip(&downs).any(|(up, down)| up.0 != down.0) {
         return Err(MigrateError::Unpaired {
-            detail: format!(
-                "up={:?} down={:?}",
-                names_of(&ups),
-                names_of(&downs)
-            ),
+            detail: format!("up={:?} down={:?}", names_of(&ups), names_of(&downs)),
         });
     }
 
@@ -162,14 +158,20 @@ pub async fn migrate_up(
         skipped: Vec::new(),
     };
     for migration in migrations {
-        if applied_versions.iter().any(|version| version == &migration.version) {
+        if applied_versions
+            .iter()
+            .any(|version| version == &migration.version)
+        {
             report.skipped.push(migration.version.clone());
             continue;
         }
-        let mut tx = pool.begin().await.map_err(|source| MigrateError::Database {
-            step: "begin up",
-            source,
-        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|source| MigrateError::Database {
+                step: "begin up",
+                source,
+            })?;
         sqlx::raw_sql(&migration.up_sql)
             .execute(&mut *tx)
             .await
@@ -217,10 +219,13 @@ pub async fn migrate_down(
         let Some(migration) = migrations.iter().find(|item| item.version == version) else {
             return Err(MigrateError::MissingDown { version });
         };
-        let mut tx = pool.begin().await.map_err(|source| MigrateError::Database {
-            step: "begin down",
-            source,
-        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|source| MigrateError::Database {
+                step: "begin down",
+                source,
+            })?;
         sqlx::raw_sql(&migration.down_sql)
             .execute(&mut *tx)
             .await
@@ -359,8 +364,7 @@ fn split_stem(stem: &str) -> Result<(String, String), MigrateError> {
             name: stem.to_string(),
         });
     };
-    if version.len() != 4 || !version.chars().all(|char| char.is_ascii_digit()) || name.is_empty()
-    {
+    if version.len() != 4 || !version.chars().all(|char| char.is_ascii_digit()) || name.is_empty() {
         return Err(MigrateError::InvalidName {
             name: stem.to_string(),
         });
@@ -376,9 +380,7 @@ fn read_sql(path: &Path) -> Result<String, MigrateError> {
 }
 
 fn column(rows: &[sqlx::postgres::PgRow]) -> Vec<String> {
-    rows.iter()
-        .map(|row| row.get::<String, _>(0))
-        .collect()
+    rows.iter().map(|row| row.get::<String, _>(0)).collect()
 }
 
 async fn ensure_bookkeeping(pool: &PgPool) -> Result<(), MigrateError> {

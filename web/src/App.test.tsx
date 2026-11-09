@@ -9,7 +9,7 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('MuseHub')
     expect(screen.getByText(/未发布的开发版/)).toBeTruthy()
-    expect(screen.getByText('0.1.0-rc1')).toBeTruthy()
+    expect(screen.getByText('0.1.0-rc4')).toBeTruthy()
     expect(screen.getByText(/版本/)).toBeTruthy()
   })
 })

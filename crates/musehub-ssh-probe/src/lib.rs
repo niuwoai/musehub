@@ -345,7 +345,10 @@ impl ErrorCode for SshProbeError {
 /// fails the probe. Nothing is skipped.
 pub fn probe(config: &ProbeConfig) -> Result<SshReport, SshProbeError> {
     ensure_colima(config)?;
-    let accepted = call(config, &request("one", "alice", "git-upload-pack demo", None))?;
+    let accepted = call(
+        config,
+        &request("one", "alice", "git-upload-pack demo", None),
+    )?;
     let mut rejected = Vec::new();
     for command in [
         "git-upload-pack ../demo",
@@ -403,7 +406,12 @@ pub fn probe(config: &ProbeConfig) -> Result<SshReport, SshProbeError> {
     })
 }
 
-fn request(action: &str, principal: &str, command: &str, setenv: Option<&str>) -> serde_json::Value {
+fn request(
+    action: &str,
+    principal: &str,
+    command: &str,
+    setenv: Option<&str>,
+) -> serde_json::Value {
     let mut value = serde_json::json!({
         "action": action,
         "principal": principal,
@@ -474,8 +482,15 @@ fn parse_success(stdout: &str) -> Option<(String, String, String, String)> {
     ))
 }
 
-fn call(config: &ProbeConfig, request: &serde_json::Value) -> Result<serde_json::Value, SshProbeError> {
-    let line = format!("{} ssh -- {} -", config.colima_bin.display(), config.python_bin);
+fn call(
+    config: &ProbeConfig,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, SshProbeError> {
+    let line = format!(
+        "{} ssh -- {} -",
+        config.colima_bin.display(),
+        config.python_bin
+    );
     let mut child = Command::new(&config.colima_bin)
         .arg("ssh")
         .arg("--")
@@ -491,7 +506,10 @@ fn call(config: &ProbeConfig, request: &serde_json::Value) -> Result<serde_json:
             source,
         })?;
     {
-        let mut stdin = child.stdin.take().ok_or_else(|| failed("colima ssh", "stdin missing"))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| failed("colima ssh", "stdin missing"))?;
         let request_json = serde_json::to_string(request).unwrap_or_default();
         let payload = format!(
             "import os\nos.environ['MUSEHUB_REQUEST']={request_json}\n{VM_HARNESS}\n",
@@ -575,9 +593,9 @@ fn logical_allowed(logical: &str) -> bool {
         && !logical.is_empty()
         && logical != ".."
         && !logical.starts_with('/')
-        && logical
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+        && logical.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
 }
 
 #[cfg(test)]
