@@ -239,13 +239,8 @@ async fn mcp_read_agent_run_summary_requires_repo_access() {
         .await;
     assert!(deny.is_err());
     let listed = client_a.list_resources(None).await.expect("list");
-    assert!(
-        listed
-            .resources
-            .iter()
-            .any(|r| r.uri.as_str().contains("agent-runs")),
-        "template must advertise agent-run URIs"
-    );
+    use musehub_app::mcp::capabilities::V1_RESOURCE_URI_TEMPLATES;
+    assert_eq!(listed.resources.len(), V1_RESOURCE_URI_TEMPLATES.len());
     let _ = repo_b;
     client_a.cancel().await.ok();
 }

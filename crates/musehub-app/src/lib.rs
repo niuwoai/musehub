@@ -2,6 +2,7 @@
 
 #![allow(clippy::type_complexity)]
 
+pub mod agent_adapter;
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
 pub use git_http::{bare_repo_path, init_bare_repository};
@@ -39,7 +40,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use base64::Engine;
-use musehub_agent_adapter::REFERENCE_ADAPTER;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::fs;
@@ -468,6 +468,9 @@ async fn create_issue(
 struct StartAgentRunRequest {
     issue_id: Uuid,
     message: String,
+    /// `reference` (default) or `codex` (live binary when `MUSEHUB_AGENT_CODEX_BIN` set, else sim).
+    #[serde(default)]
+    adapter: Option<String>,
     budget_tokens: Option<u64>,
 }
 
@@ -534,7 +537,7 @@ async fn start_agent_run(
     .bind(repo_id)
     .bind(body.issue_id)
     .bind(principal_id)
-    .bind(REFERENCE_ADAPTER)
+    .bind(agent_adapter::adapter_kind_for_request(body.adapter.as_deref()))
     .bind(&branch)
     .bind(body.budget_tokens.map(|limit| limit as i64))
     .bind(instance_id)
@@ -549,7 +552,7 @@ async fn start_agent_run(
     let deadline = std::time::Duration::from_secs(120);
     let budget_tokens = body.budget_tokens;
     tokio::spawn(async move {
-        agent_supervisor::run_reference_job(
+        agent_supervisor::run_agent_job(
             pool,
             supervisor,
             instance_id,
@@ -565,9 +568,10 @@ async fn start_agent_run(
         )
         .await;
     });
+    let kind = agent_adapter::adapter_kind_for_request(body.adapter.as_deref()).to_string();
     Ok(Json(AgentRunView {
         id: run_id,
-        adapter_kind: REFERENCE_ADAPTER.to_string(),
+        adapter_kind: kind,
         state: "queued".to_string(),
         result_commit_oid: None,
         usage_tokens: 0,

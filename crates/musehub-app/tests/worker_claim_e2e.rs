@@ -2,7 +2,7 @@
 
 mod common;
 
-use musehub_app::agent_supervisor::{new_supervisor, run_reference_job};
+use musehub_app::agent_supervisor::{new_supervisor, run_agent_job};
 use musehub_app::reconcile_orphaned_work;
 use std::time::Duration;
 use uuid::Uuid;
@@ -77,7 +77,7 @@ async fn duplicate_worker_spawn_only_one_succeeds() {
     let branch2 = branch.clone();
     let msg2 = msg.clone();
     let j1 = tokio::spawn(async move {
-        run_reference_job(
+        run_agent_job(
             pool_a,
             sup_a,
             instance,
@@ -94,7 +94,7 @@ async fn duplicate_worker_spawn_only_one_succeeds() {
         .await;
     });
     let j2 = tokio::spawn(async move {
-        run_reference_job(
+        run_agent_job(
             pool_b,
             sup_b,
             instance,

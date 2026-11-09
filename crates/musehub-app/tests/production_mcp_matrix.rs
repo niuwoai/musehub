@@ -129,6 +129,11 @@ async fn product_mcp_rust_streamable_http_matrix() {
         Some(PRODUCTION_SCOPE)
     );
     assert!(data.get("production_claim").is_none());
+    let templates = data
+        .get("resource_uri_templates_v1")
+        .and_then(Value::as_array)
+        .expect("resource_uri_templates_v1");
+    assert!(templates.len() >= 5);
     let list = client
         .call_tool(
             CallToolRequestParams::new("musehub_repository_list").with_arguments({

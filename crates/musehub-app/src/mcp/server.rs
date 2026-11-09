@@ -176,6 +176,8 @@ struct AgentRunStartInput {
     issue_id: String,
     message: String,
     #[serde(default)]
+    adapter: Option<String>,
+    #[serde(default)]
     budget_tokens: Option<u64>,
     idempotency_key: String,
 }
@@ -998,6 +1000,7 @@ impl ProductionMcpServer {
             "repository_id": input.repo.repository_id,
             "issue_id": input.issue_id,
             "message": input.message,
+            "adapter": input.adapter,
             "budget_tokens": input.budget_tokens,
         });
         let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
@@ -1024,6 +1027,7 @@ impl ProductionMcpServer {
             issue_id,
             &input.message,
             input.budget_tokens,
+            input.adapter.as_deref(),
         )
         .await
         {

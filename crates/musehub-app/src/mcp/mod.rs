@@ -11,7 +11,7 @@ mod prompts;
 mod resources;
 mod server;
 
-pub use capabilities::IMPLEMENTED_TOOLS;
+pub use capabilities::{IMPLEMENTED_TOOLS, V1_RESOURCE_URI_TEMPLATES};
 pub use envelope::ToolEnvelope;
 pub use http::{merge_product_mcp, parse_bearer_token, product_mcp_enabled};
 

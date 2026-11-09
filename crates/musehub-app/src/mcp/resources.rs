@@ -8,19 +8,29 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::mcp::auth::{active_pat, resolve_repo};
+use crate::mcp::capabilities::V1_RESOURCE_URI_TEMPLATES;
 use crate::AppState;
 
 const DEPLOYMENT_URI_PREFIX: &str = "musehub://deployments/";
 const AGENT_RUN_URI_PREFIX: &str = "musehub://agent-runs/";
+const ISSUE_REV_PREFIX: &str = "musehub://issues/";
+const PR_REV_PREFIX: &str = "musehub://pull-requests/";
+const REPO_FILE_PREFIX: &str = "musehub://repositories/";
 
 pub fn list_static_resources() -> ListResourcesResult {
-    let templates = [
-        Resource::new("musehub://deployments/{id}", "Deployment summary")
-            .with_mime_type("application/json"),
-        Resource::new("musehub://agent-runs/{id}/summary", "Agent run summary")
-            .with_mime_type("application/json"),
-    ];
-    ListResourcesResult::with_all_items(templates.to_vec())
+    let templates = V1_RESOURCE_URI_TEMPLATES
+        .iter()
+        .map(|uri| {
+            let name = uri
+                .trim_start_matches("musehub://")
+                .split('/')
+                .next()
+                .unwrap_or("resource");
+            Resource::new(*uri, format!("MuseHub {name} (V1 template)"))
+                .with_mime_type("application/json")
+        })
+        .collect();
+    ListResourcesResult::with_all_items(templates)
 }
 
 fn map_access_err(e: AppError) -> ErrorData {
@@ -92,13 +102,30 @@ pub async fn read_resource(state: &AppState, uri: &str) -> Result<ReadResourceRe
             "state": state_name,
             "work_branch": work_branch,
             "budget_tokens_limit": budget,
-            "adapter_kind": "summary_only",
         });
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             body.to_string(),
             uri.to_string(),
         )])
         .into());
+    }
+    if uri.starts_with(ISSUE_REV_PREFIX) && uri.contains("/revisions/") {
+        return Err(ErrorData::invalid_params(
+            "issue revision reads are not implemented in V1 partial server",
+            None,
+        ));
+    }
+    if uri.starts_with(PR_REV_PREFIX) && uri.contains("/revisions/") {
+        return Err(ErrorData::invalid_params(
+            "pull-request revision reads are not implemented in V1 partial server",
+            None,
+        ));
+    }
+    if uri.starts_with(REPO_FILE_PREFIX) && uri.contains("/commits/") {
+        return Err(ErrorData::invalid_params(
+            "repository file reads are not implemented in V1 partial server",
+            None,
+        ));
     }
     Err(ErrorData::invalid_params("unsupported resource uri", None))
 }

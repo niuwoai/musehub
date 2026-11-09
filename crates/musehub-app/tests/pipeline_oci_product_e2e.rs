@@ -584,4 +584,56 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     let resources = mcp_client.list_resources(None).await.expect("resources");
     assert!(!resources.resources.is_empty());
     mcp_client.cancel().await.ok();
+
+    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python/mcp_product_oci_write.py");
+    let pydeps =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps");
+    let py_ok = std::process::Command::new("python3")
+        .args(["-c", "import mcp"])
+        .env("PYTHONPATH", &pydeps)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if py_ok && script.is_file() {
+        let py_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let py_addr = py_listener.local_addr().unwrap();
+        let py_router = app.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(py_listener, py_router).await;
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let url = format!("http://{py_addr}/mcp");
+        let mcp_token_own = mcp_token.to_string();
+        let deployment_id_own = deployment_id.to_string();
+        let org_s = org_uuid.0.to_string();
+        let repo_s = repo_uuid.0.to_string();
+        let out = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python3")
+                .env("PYTHONPATH", &pydeps)
+                .arg(&script)
+                .arg("--url")
+                .arg(&url)
+                .arg("--bearer")
+                .arg(&mcp_token_own)
+                .arg("--org-id")
+                .arg(org_s)
+                .arg("--repository-id")
+                .arg(repo_s)
+                .arg("--deployment-id")
+                .arg(&deployment_id_own)
+                .output()
+        })
+        .await
+        .expect("join python oci")
+        .expect("python oci mcp");
+        assert!(
+            out.status.success(),
+            "python oci write: stderr={} stdout={}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+    } else {
+        eprintln!("skip python oci mcp: SDK or script missing");
+    }
 }
