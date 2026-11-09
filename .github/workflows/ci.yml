@@ -2,9 +2,10 @@ name: ci
 
 on:
   push:
-    branches: [develop, main]
+    branches: [develop, main, "cursor/**"]
   pull_request:
-    branches: [develop, main]
+    # Stacked PRs often target another feature branch; still run CI on those heads.
+    branches: [develop, main, "cursor/**"]
 
 permissions:
   contents: read
