@@ -286,6 +286,7 @@ async fn spawn_pipeline_run(
     let artifact_root = state.artifact_root.clone();
     let pipeline_bin = state.pipeline_adapter_bin.clone();
     let supervisor = state.pipeline_supervisor.clone();
+    let instance_id = state.instance_id;
     let source_oid_spawn = source_oid.clone();
     let run_kind_owned = run_kind.to_string();
     tokio::spawn(async move {
@@ -295,6 +296,7 @@ async fn spawn_pipeline_run(
             artifact_root,
             pipeline_bin,
             supervisor,
+            instance_id,
             storage_key,
             run_id,
             job_id,
@@ -380,6 +382,7 @@ async fn run_pipeline_job(
     artifact_root: PathBuf,
     pipeline_bin: PathBuf,
     supervisor: Arc<PipelineSupervisor>,
+    instance_id: Uuid,
     storage_key: Uuid,
     run_id: Uuid,
     job_id: Uuid,
@@ -388,6 +391,14 @@ async fn run_pipeline_job(
     source_oid: String,
     run_kind: String,
 ) {
+    if crate::lease::claim_pipeline_run_lease(&pool, run_id, instance_id)
+        .await
+        .is_err()
+    {
+        mark_failed(&pool, run_id, job_id, "lease_held_by_peer").await;
+        return;
+    }
+
     let _ = sqlx::query(
         "UPDATE pipeline_runs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )

@@ -9,10 +9,12 @@ mod artifacts;
 mod auth;
 mod bootstrap;
 mod codex;
+mod compose;
 mod deployment;
 mod error;
 mod git_http;
 mod hooks;
+pub mod lease;
 mod members;
 pub mod pat;
 mod pat_auth;
@@ -63,6 +65,9 @@ pub struct AppState {
     pub reference_adapter_bin: PathBuf,
     pub pipeline_adapter_bin: PathBuf,
     pub compose_adapter_bin: PathBuf,
+    pub compose_runner_bin: PathBuf,
+    /// Control-plane instance identity for worker leases.
+    pub instance_id: Uuid,
     pub supervisor: Arc<AgentSupervisor>,
     pub pipeline_supervisor: Arc<PipelineSupervisor>,
 }
@@ -180,8 +185,12 @@ pub async fn prepare(
     fs::create_dir_all(&git_root)
         .await
         .map_err(|error| AppError::Other(error.to_string()))?;
-    reconcile_orphaned_work(&pool).await?;
     Ok(())
+}
+
+/// Run once at process boot (not on every `prepare` call).
+pub async fn boot_reconcile(pool: &PgPool) -> Result<ReconcileReport, AppError> {
+    reconcile_orphaned_work(pool).await
 }
 
 #[derive(Deserialize)]
@@ -512,6 +521,7 @@ async fn start_agent_run(
     let pool = state.pool.clone();
     let git_root = state.git_root.clone();
     let reference_bin = state.reference_adapter_bin.clone();
+    let instance_id = state.instance_id;
     let message = body.message.clone();
     let deadline = std::time::Duration::from_secs(120);
     let budget_tokens = body.budget_tokens;
@@ -519,6 +529,7 @@ async fn start_agent_run(
         agent_supervisor::run_reference_job(
             pool,
             supervisor,
+            instance_id,
             run_id,
             repo_id,
             storage_key,

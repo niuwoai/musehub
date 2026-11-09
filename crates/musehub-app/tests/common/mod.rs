@@ -8,7 +8,7 @@ use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use musehub_app::agent_supervisor::new_supervisor;
 use musehub_app::pipeline_supervisor::PipelineSupervisor;
-use musehub_app::{prepare, product_router, AppState};
+use musehub_app::{boot_reconcile, lease, prepare, product_router, AppState};
 use musehub_migrate::{load_migrations, migrate_down, migrate_up};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -58,6 +58,7 @@ pub async fn product_app(
     )
     .await
     .expect("prepare");
+    boot_reconcile(&pool).await.expect("boot reconcile");
     let state = Arc::new(AppState {
         pool,
         git_root: git_root.to_path_buf(),
@@ -76,6 +77,13 @@ pub async fn product_app(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../../target/debug/musehub-compose-mock")
             }),
+        compose_runner_bin: std::env::var("CARGO_BIN_EXE_musehub-compose-runner")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-compose-runner")
+            }),
+        instance_id: lease::parse_instance_id(),
         supervisor: new_supervisor(),
         pipeline_supervisor: PipelineSupervisor::new(),
     });

@@ -9,7 +9,7 @@ use http_body_util::BodyExt;
 use std::time::Duration;
 
 use musehub_app::agent_supervisor::new_supervisor;
-use musehub_app::{prepare, product_router, AppState};
+use musehub_app::{boot_reconcile, lease, prepare, product_router, AppState};
 use musehub_migrate::{load_migrations, migrate_up};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
@@ -39,6 +39,7 @@ async fn login_create_repo_issue_reference_agent() {
     )
     .await
     .expect("prepare");
+    boot_reconcile(&pool).await.expect("reconcile");
 
     let adapter = std::env::var("CARGO_BIN_EXE_musehub_agent_reference")
         .ok()
@@ -71,6 +72,13 @@ async fn login_create_repo_issue_reference_agent() {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("../../target/debug/musehub-compose-mock")
             }),
+        compose_runner_bin: std::env::var("CARGO_BIN_EXE_musehub-compose-runner")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/musehub-compose-runner")
+            }),
+        instance_id: lease::parse_instance_id(),
         supervisor: new_supervisor(),
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
     });

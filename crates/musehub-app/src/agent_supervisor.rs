@@ -57,6 +57,7 @@ pub fn kill_process_group(_pid: u32) {}
 pub async fn run_reference_job(
     pool: PgPool,
     supervisor: Arc<AgentSupervisor>,
+    instance_id: Uuid,
     run_id: Uuid,
     repo_id: Uuid,
     _storage_key: Uuid,
@@ -67,6 +68,14 @@ pub async fn run_reference_job(
     deadline: Duration,
     budget_tokens: Option<u64>,
 ) {
+    if crate::lease::claim_agent_run_lease(&pool, run_id, instance_id)
+        .await
+        .is_err()
+    {
+        let _ = mark_failed(&pool, run_id, "lease_held_by_peer").await;
+        return;
+    }
+
     let _ = sqlx::query(
         "UPDATE agent_runs SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
     )
