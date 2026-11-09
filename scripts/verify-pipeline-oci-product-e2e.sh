@@ -14,8 +14,10 @@ export MUSEHUB_REQUIRE_PIPELINE_OCI=1
 export MUSEHUB_COMPOSE_ADAPTER_MODE=runner
 export DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-postgres://musehub:musehub@localhost:5432/musehub}}"
 
+cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-pipeline-oci -q
 cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
+cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
 BIN_OCI="$PWD/target/debug/musehub-pipeline-oci"
 
 echo "=== two source oids → distinct image digests (build/push/pull) ==="
@@ -63,6 +65,9 @@ echo "digest1=$REF1"
 echo "digest2=$REF2 oid1=$OID1 oid2=$OID2"
 
 export MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-oci"
+export CARGO_BIN_EXE_musehub-agent-reference="$PWD/target/debug/musehub-agent-reference"
+export CARGO_BIN_EXE_musehub-compose-runner="$PWD/target/debug/musehub-compose-runner"
+export CARGO_BIN_EXE_musehub-compose-mock="$PWD/target/debug/musehub-compose-mock"
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo test -p musehub-app --test pipeline_oci_product_e2e -- --test-threads=1
 echo "pipeline_oci_product=ok"

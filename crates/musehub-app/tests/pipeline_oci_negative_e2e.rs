@@ -112,5 +112,5 @@ async fn publish_rejects_tampered_oci_image_ref() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
