@@ -39,6 +39,11 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
+if ! curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+  echo "musehub-server failed to start" >&2
+  tmux -f /exec-daemon/tmux.portal.conf capture-pane -pt "=$SESSION_NAME" -S -40 2>/dev/null || true
+  exit 1
+fi
 
 yarn --cwd web install
 export MUSEHUB_E2E_API=http://127.0.0.1:8080

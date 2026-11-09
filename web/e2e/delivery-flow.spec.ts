@@ -69,6 +69,17 @@ test.describe('delivery chain browser flow', () => {
       .then((repos: { slug: string }[]) => repos[0]!.slug)
 
     const slug = await repoSlug
+    const collab = await page.request.post(
+      `${apiBase}/api/v1/orgs/demo/repos/${slug}/collaborators`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `${sessionCookie!.name}=${sessionCookie!.value}`,
+        },
+        data: { handle: 'e2e-reviewer', role: 'maintainer' },
+      },
+    )
+    expect(collab.ok()).toBeTruthy()
     const prs = await page.request
       .get(`${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
         headers: { Cookie: `${sessionCookie!.name}=${sessionCookie!.value}` },
