@@ -11,7 +11,7 @@
 | `web` | `[x]` | Playwright `scripts/run-web-e2e.sh`（失败时 `collect-e2e-diagnostics.sh`）；`MUSEHUB_PRODUCT_OCI_E2E=1` 时 delivery 经 pipeline OCI 产品路径 |
 | `compose-runner-e2e` | `[x]` | `scripts/verify-compose-runner-e2e.sh`（真实 pull/up/inspect/rollback，**非** `docker info` 探针） |
 | `pipeline-oci-product` | `[x]` | rmcp 写 + Python **`mcp_product_oci_write_probe.py`（lite 在 e2e；full 在 verify 脚本）** + read probe |
-| `product-stack` | `[x]` | `verify-product-stack-e2e.sh`：多阶段镜像 + Compose + 静态网关 + 卷持久化/备份/升级 |
+| `product-stack` | `[~]` | VM 本地 `verify-product-stack-e2e.sh` **EXIT=0**（readyz 含 `product_api`）；GitHub Actions 待统一跑 |
 
 ## P0 清单（节选 — 领域）
 
@@ -38,7 +38,7 @@
 | 部署回滚操作 | `[~]` | REST + **`musehub_deployment_rollback` MCP** 经 compose 真实 runner（`deployment_rollback_runner_e2e` 在 VM 已跑通）；远端 Docker CI 未统一验收 |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | 环境变量为主；**无** 管理 UI 配置面 |
-| MCP V1 完整工具/Resources 读实现 | `[~]` | 19 工具 + 5 URI 模板；**仅 2** 个 `resource_reads_implemented_v1`；issue/PR/commit file 未实现 |
+| MCP V1 完整工具/Resources 读实现 | `[~]` | 21 工具；**5** 个 `resource_reads_implemented_v1`（含 issue/PR revision、commit file）；仍需更多资源与 grant |
 | Codex live 在线 | `[~]` | `adapter=codex` 仅 live；`codex-sim` 显式；**无** CI 在线凭据（刻意） |
 
 ## 未验证边界
