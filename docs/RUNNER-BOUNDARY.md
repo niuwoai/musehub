@@ -22,4 +22,11 @@ P0 缺口：Runner 注册、心跳、租约、跨节点网络策略与不可信 
 ## MCP / 写路径诚实性
 
 - **Rust rmcp** 在 `pipeline-oci-product` job 内验收 `pipeline_run` / `deployment_start` 写路径。
-- **Python** `mcp_product_oci_read_probe.py` 仅 `deployment_trace` + `capabilities_get` — **不** 视为 Python 写验收。
+- **Python** `mcp_product_oci_read_probe.py`：`deployment_trace` + `capabilities_get`（只读）。
+- **Python** `mcp_product_oci_write_probe.py`：官方 MCP SDK 写链（`lite` = 负例 + `deployment_start` 幂等；`full` = 另加 `pipeline_run` 链 + REST 轮询状态），在 `pipeline_oci_product_e2e` 跑 **lite**；**full** 由 `verify-pipeline-oci-product-e2e.sh` 在同一 Docker job 内附加调用（需已发布 release 与 PAT 参数）。
+
+## 部署回滚（产品语义）
+
+- `POST .../deployments/rollback` **必须** 经与 `deployment` 相同的 compose 子进程（mock/runner），重新部署目标行的 **published release**（含 digest/OCI 校验）。
+- **禁止** 仅拷贝 `health_summary` 伪造 `succeeded`。
+- Runner 回滚路径：可选拆除上一 `compose_project`（`MUSEHUB_COMPOSE_TEARDOWN_PROJECT`），环境级项目名 `musehub-env-{environment_id}`，`LEAVE_STACK=1` 保持运行栈。

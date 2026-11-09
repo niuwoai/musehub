@@ -10,7 +10,7 @@
 | `rust-portable` | `[x]` | fmt/clippy/portable/acceptance/backup/安全 E2E |
 | `web` | `[x]` | Playwright `scripts/run-web-e2e.sh`（失败时 `collect-e2e-diagnostics.sh`）；`MUSEHUB_PRODUCT_OCI_E2E=1` 时 delivery 经 pipeline OCI 产品路径 |
 | `compose-runner-e2e` | `[x]` | `scripts/verify-compose-runner-e2e.sh`（真实 pull/up/inspect/rollback，**非** `docker info` 探针） |
-| `pipeline-oci-product` | `[x]` | rmcp 写验收 + Python **`mcp_product_oci_read_probe.py`（未验写）** |
+| `pipeline-oci-product` | `[x]` | rmcp 写 + Python **`mcp_product_oci_write_probe.py`（lite 在 e2e；full 在 verify 脚本）** + read probe |
 | `product-stack` | `[x]` | `verify-product-stack-e2e.sh`：多阶段镜像 + Compose + 静态网关 + 卷持久化/备份/升级 |
 
 ## P0 清单（节选 — 领域）
@@ -35,7 +35,7 @@
 | 最小 RBAC / PAT scope / 审计 | `[~]` | `audit_events` 表 + REST `GET .../audit/events`（login/deploy/rollback）；**无** `musehub_audit_list` MCP、细粒度 org grant |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[~]` | 见 `docs/RUNNER-BOUNDARY.md`；进程内 supervisor + 子进程；**无** 远端 worker |
-| 部署回滚操作 | `[~]` | REST `POST .../deployments/rollback`（mock 证据回放）；compose-runner **未**在此路径重跑；**无** `musehub_deployment_rollback` MCP |
+| 部署回滚操作 | `[~]` | REST rollback **经 compose 适配器重跑** release（mock e2e + runner 待 **GitHub Docker CI**）；trace/audit/attempt 幂等；**无** `musehub_deployment_rollback` MCP |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | 环境变量为主；**无** 管理 UI 配置面 |
 | MCP V1 完整工具/Resources 读实现 | `[~]` | 19 工具 + 5 URI 模板；**仅 2** 个 `resource_reads_implemented_v1`；issue/PR/commit file 未实现 |

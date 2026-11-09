@@ -76,4 +76,5 @@ env \
   CARGO_BIN_EXE_musehub_compose_runner="$PWD/target/debug/musehub-compose-runner" \
   CARGO_BIN_EXE_musehub_compose_mock="$PWD/target/debug/musehub-compose-mock" \
   cargo test -p musehub-app --test pipeline_oci_product_e2e -- --test-threads=1
-echo "pipeline_oci_product=ok"
+cargo test -p musehub-app --test deployment_rollback_e2e --test deployment_rollback_negative_e2e -- --test-threads=1
+echo "pipeline_oci_product=ok (includes deployment_rollback mock e2e; OCI runner rollback re-validate on CI docker)"

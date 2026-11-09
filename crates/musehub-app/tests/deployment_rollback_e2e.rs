@@ -161,6 +161,11 @@ async fn rollback_restores_prior_succeeded_deployment() {
     assert_eq!(rollback["state"], "succeeded");
     assert_eq!(rollback["release_id"], rel_id.to_string());
     let rb_id = rollback["id"].as_str().unwrap();
+    assert_ne!(rb_id, first_id, "rollback must create a new deployment row");
+    assert!(
+        rollback["health_summary"]["rollback"].as_bool() == Some(true),
+        "fresh adapter summary"
+    );
     let row: (Option<Uuid>,) =
         sqlx::query_as("SELECT rollback_of_id FROM deployments WHERE id = $1")
             .bind(Uuid::parse_str(rb_id).unwrap())

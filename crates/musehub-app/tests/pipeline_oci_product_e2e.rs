@@ -608,9 +608,10 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         let deployment_id_own = deployment_id.to_string();
         let org_s = org_uuid.0.to_string();
         let repo_s = repo_uuid.0.to_string();
+        let pydeps_read = pydeps.clone();
         let out = tokio::task::spawn_blocking(move || {
             std::process::Command::new("python3")
-                .env("PYTHONPATH", &pydeps)
+                .env("PYTHONPATH", &pydeps_read)
                 .arg(&script)
                 .arg("--url")
                 .arg(&url)
@@ -635,5 +636,61 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         );
     } else {
         eprintln!("skip python oci mcp: SDK or script missing");
+    }
+
+    let write_script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python/mcp_product_oci_write_probe.py");
+    if py_ok && write_script.is_file() {
+        let py_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let py_addr = py_listener.local_addr().unwrap();
+        let py_router = app.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(py_listener, py_router).await;
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let url = format!("http://{py_addr}/mcp");
+        let api_base = format!("http://{py_addr}");
+        let mcp_token_own = mcp_token.to_string();
+        let release_id_own = release_id.to_string();
+        let org_s = org_uuid.0.to_string();
+        let repo_s = repo_uuid.0.to_string();
+        let env_s = env_uuid.0.to_string();
+        let pydeps_owned = pydeps.clone();
+        let write_script_owned = write_script.clone();
+        let out = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python3")
+                .env("PYTHONPATH", &pydeps_owned)
+                .arg(&write_script_owned)
+                .arg("--url")
+                .arg(&url)
+                .arg("--bearer")
+                .arg(&mcp_token_own)
+                .arg("--api-base")
+                .arg(&api_base)
+                .arg("--org-slug")
+                .arg("demo")
+                .arg("--repo-slug")
+                .arg("oci-product")
+                .arg("--org-id")
+                .arg(org_s)
+                .arg("--repository-id")
+                .arg(repo_s)
+                .arg("--environment-id")
+                .arg(env_s)
+                .arg("--release-id")
+                .arg(release_id_own)
+                .arg("--mode")
+                .arg("lite")
+                .output()
+        })
+        .await
+        .expect("join python write probe")
+        .expect("python write probe");
+        assert!(
+            out.status.success(),
+            "python oci write probe (lite): stderr={} stdout={}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
     }
 }
