@@ -1,0 +1,5 @@
+# CI overlay: expose Postgres for host pg_dump/pg_restore during stack evidence.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:55432:5432"

@@ -28,6 +28,12 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
 ];
 
 /// Resource URI templates from `docs/04-mcp-api.md` §13 (V1 catalog; reads enforce PAT + repo scope).
+/// Resource URI reads actually implemented on `/mcp` (PAT + scope enforced).
+pub const V1_RESOURCE_READS_IMPLEMENTED: &[&str] = &[
+    "musehub://deployments/{deployment_id}",
+    "musehub://agent-runs/{agent_run_id}/summary",
+];
+
 pub const V1_RESOURCE_URI_TEMPLATES: &[&str] = &[
     "musehub://repositories/{repository_id}/commits/{oid}/files/{encoded-path}",
     "musehub://issues/{issue_id}/revisions/{n}",
@@ -57,6 +63,7 @@ pub fn capability_payload() -> Value {
         "maturity": "partial_implementation",
         "implemented_tools": IMPLEMENTED_TOOLS,
         "resource_uri_templates_v1": V1_RESOURCE_URI_TEMPLATES,
+        "resource_reads_implemented_v1": V1_RESOURCE_READS_IMPLEMENTED,
         "write_idempotency_tools": WRITE_IDEMPOTENCY_TOOLS,
         "authentication": {
             "http_bearer_pat": true,

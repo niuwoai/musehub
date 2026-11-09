@@ -63,7 +63,7 @@ musehub/
   docs/
 ```
 
-规划中的完整 `runner`、`mcp` 生产服务、`cli`、`deploy/` 流水线与追溯链仍在推进；见 `docs/PROGRESS.md`。
+产品栈安装见 `deploy/`（`docker-compose.yml`、`RUNBOOK.md`、TLS `Caddyfile` 示例）；CI `product-stack` 从干净构建验网关静态站 + API 主线。独立 `runner`、审计、回滚等见 `docs/PROGRESS.md`。
 
 初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
 
@@ -106,7 +106,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
 | Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
-| OCI / 多环境 / 业务 MCP | `[~]` | OCI：`pipeline-oci-product` 内 **rmcp 写** `pipeline_run`/`deployment_start`；生产 `/mcp`：`production_mcp_*` + agent-run Resources；Python SDK **M0 probe** 矩阵仍独立；**无** 远程 OAuth |
+| OCI / 多环境 / 业务 MCP | `[~]` | OCI：`pipeline-oci-product` 内 **rmcp 写** `pipeline_run`/`deployment_start`；Python 产品探针 **`mcp_product_oci_read_probe.py`（只读）**；生产 `/mcp`：`production_mcp_*` + 2 个资源读；**无** 远程 OAuth |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200。
 

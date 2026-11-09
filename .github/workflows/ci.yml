@@ -190,3 +190,16 @@ jobs:
         run: |
           chmod +x ./scripts/verify-compose-runner-e2e.sh
           ./scripts/verify-compose-runner-e2e.sh
+
+  product-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: product Docker stack E2E
+        run: |
+          chmod +x ./scripts/verify-product-stack-e2e.sh
+          ./scripts/verify-product-stack-e2e.sh

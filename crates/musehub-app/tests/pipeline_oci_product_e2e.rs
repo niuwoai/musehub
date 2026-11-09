@@ -586,7 +586,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     mcp_client.cancel().await.ok();
 
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("python/mcp_product_oci_write.py");
+        .join("python/mcp_product_oci_read_probe.py");
     let pydeps =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps");
     let py_ok = std::process::Command::new("python3")
@@ -625,11 +625,11 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
                 .output()
         })
         .await
-        .expect("join python oci")
-        .expect("python oci mcp");
+        .expect("join python oci read probe")
+        .expect("python oci read probe");
         assert!(
             out.status.success(),
-            "python oci write: stderr={} stdout={}",
+            "python oci read probe: stderr={} stdout={}",
             String::from_utf8_lossy(&out.stderr),
             String::from_utf8_lossy(&out.stdout)
         );
