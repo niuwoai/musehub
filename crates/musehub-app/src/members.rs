@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
@@ -124,7 +124,7 @@ pub struct GrantRepoRequest {
 fn parse_repo_role(role: Option<String>) -> Result<&'static str, AppError> {
     match role.as_deref().unwrap_or("reader") {
         "reader" => Ok("reader"),
-        "contributor" => Ok("contributor"),
+        "developer" => Ok("developer"),
         "maintainer" => Ok("maintainer"),
         other => Err(AppError::Validation(format!("invalid repo role: {other}"))),
     }
@@ -151,6 +151,46 @@ pub async fn grant_repo_collaborator(
     let role = parse_repo_role(body.role)?;
     grant_repo_access(&state.pool, org_id, repo_id, member_id, role).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_repo_grants(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+) -> Result<Json<Vec<crate::grants::RepoGrantView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let grants = crate::grants::list_repo_grants(&state.pool, org_id, repo_id).await?;
+    Ok(Json(grants))
+}
+
+#[derive(Deserialize)]
+pub struct RevokeGrantQuery {
+    pub principal_id: Uuid,
+}
+
+pub async fn revoke_repo_grant(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+    Query(query): Query<RevokeGrantQuery>,
+) -> Result<StatusCode, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let removed = crate::grants::revoke_repo_grant(
+        &state.pool,
+        org_id,
+        repo_id,
+        query.principal_id,
+    )
+    .await?;
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 pub async fn grant_repo_access(

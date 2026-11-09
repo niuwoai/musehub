@@ -47,15 +47,19 @@ pub async fn create_pat_with_scopes(
     org_id: Option<Uuid>,
     name: &str,
     scopes: &[&str],
+    scope_mode: &str,
 ) -> Result<(Uuid, String), AppError> {
+    if scope_mode != "selected" && scope_mode != "all_accessible" {
+        return Err(AppError::Validation("invalid scope_mode".to_string()));
+    }
     let plain = generate_pat();
     let token_hash = hash_pat(&plain);
     let prefix: String = plain.chars().take(12).collect();
     let id = Uuid::new_v4();
     let expires = OffsetDateTime::now_utc() + time::Duration::days(90);
     sqlx::query(
-        "INSERT INTO access_tokens (id, principal_id, org_id, name, token_prefix, token_hash, scopes, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)",
+        "INSERT INTO access_tokens (id, principal_id, org_id, name, token_prefix, token_hash, scopes, scope_mode, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9)",
     )
     .bind(id)
     .bind(principal_id)
@@ -64,6 +68,7 @@ pub async fn create_pat_with_scopes(
     .bind(prefix)
     .bind(token_hash)
     .bind(scopes)
+    .bind(scope_mode)
     .bind(expires)
     .execute(pool)
     .await?;
@@ -82,6 +87,7 @@ pub async fn create_pat(
         org_id,
         name,
         &["repo:read", "repo:write"],
+        "all_accessible",
     )
     .await
 }

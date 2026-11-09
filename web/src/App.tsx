@@ -11,6 +11,10 @@ import {
   createRelease,
   createRepo,
   DeploymentTrace,
+  getOrgSettings,
+  grantRepoCollaborator,
+  listRepoGrants,
+  listRunnerTokens,
   getAgentRun,
   getDeploymentTrace,
   Issue,
@@ -51,6 +55,10 @@ export default function App() {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
+  const [settings, setSettings] = useState<{ pipeline_executor: string } | null>(null)
+  const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
+  const [grantHandle, setGrantHandle] = useState('')
+  const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
 
   useEffect(() => {
     me()
@@ -90,6 +98,11 @@ export default function App() {
       setPulls(prs)
       const data = await listIssues(DEFAULT_ORG, slug)
       setIssues(data)
+      setSettings(await getOrgSettings(DEFAULT_ORG))
+      const g = await listRepoGrants(DEFAULT_ORG, slug)
+      setGrants(g)
+      const masked = await listRunnerTokens(DEFAULT_ORG)
+      setMintedTokenPrefix(masked[0]?.token_prefix ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to load repository')
     }
@@ -261,6 +274,43 @@ export default function App() {
           {selectedRepo ? (
             <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
+              {settings ? (
+                <p data-testid="org-settings">
+                  executor: {settings.pipeline_executor}
+                  {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
+                </p>
+              ) : null}
+              <div data-testid="repo-grants" style={{ marginBottom: '1rem' }}>
+                <strong>Repo grants</strong>
+                <ul>
+                  {grants.map((g) => (
+                    <li key={g.handle}>
+                      {g.handle} ({g.role})
+                    </li>
+                  ))}
+                </ul>
+                <input
+                  placeholder="handle"
+                  value={grantHandle}
+                  onChange={(e) => setGrantHandle(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!selectedRepo || !grantHandle.trim()) return
+                    await grantRepoCollaborator(
+                      DEFAULT_ORG,
+                      selectedRepo,
+                      grantHandle.trim(),
+                      'reader',
+                    )
+                    setGrants(await listRepoGrants(DEFAULT_ORG, selectedRepo))
+                    setGrantHandle('')
+                  }}
+                >
+                  Grant reader
+                </button>
+              </div>
               <button
                 type="button"
                 data-testid="refresh-repo"

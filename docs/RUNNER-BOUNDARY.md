@@ -15,9 +15,17 @@ MuseHub 首版在 **同一 API 进程** 内调度以下工作负载，**不等�
 - **不** 将任意 HTTP 请求映射为 shell 执行。
 - Compose 适配器为 **编译进镜像的固定二进制**（默认 `compose-mock`）。
 
-## 远程 Runner（未交付）
+## 远程 Pipeline Runner（V1 局部交付）
 
-P0 缺口：Runner 注册、心跳、租约、跨节点网络策略与不可信 job 隔离仍在 `docs/PROGRESS.md` 标注为未产品化。
+| 能力 | V1 状态 |
+|------|---------|
+| 控制面不挂载 `docker.sock` | `[x]` 产品镜像/compose 均无 socket 卷 |
+| `MUSEHUB_PIPELINE_EXECUTOR=remote` | `[x]` API 仅入队，不在进程内 `tokio::spawn` pipeline |
+| `musehub-runnerd` 常驻 worker | `[x]` PAT + `POST /api/v1/runner/pipeline-runs/claim`；lease renew；`execute_pipeline_job` 本地适配器 |
+| Worker 数据库 | `[~]` runner **需** `MUSEHUB_DATABASE_URL` 写 artifact 元数据（无纯 HTTP 上传链） |
+| Agent / Compose 远端化 | `[ ]` 仍在 API 进程内 supervisor |
+
+诚实边界：runner 与 API 可分机部署，但 V1 仍共享 DB 与（通常）共享 `MUSEHUB_GIT_ROOT`/`MUSEHUB_ARTIFACT_ROOT` 挂载；非完全零信任 multi-tenant worker。
 
 ## MCP / 写路径诚实性
 

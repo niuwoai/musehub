@@ -249,29 +249,56 @@ pub(crate) async fn spawn_pipeline_run(
     let run_id = Uuid::new_v4();
     let attempt_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
-    let instance_id = state.instance_id;
+    let remote = crate::runner_api::pipeline_executor_remote();
+    let instance_id = if remote {
+        None
+    } else {
+        Some(state.instance_id)
+    };
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
+    let lease_sql = if remote {
+        "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
+         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11)"
+    } else {
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
          requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind, lease_holder, lease_until)
          VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11,$12,
-           CURRENT_TIMESTAMP + ($13::text || ' seconds')::interval)",
-    )
-    .bind(run_id)
-    .bind(org_id)
-    .bind(repo_id)
-    .bind(&source_oid)
-    .bind(&workflow)
-    .bind(principal_id)
-    .bind(attempt_id)
-    .bind(pr_id)
-    .bind(issue_id)
-    .bind(agent_run_id)
-    .bind(run_kind)
-    .bind(instance_id)
-    .bind(crate::lease::LEASE_SECS)
-    .execute(&mut *tx)
-    .await?;
+           CURRENT_TIMESTAMP + ($13::text || ' seconds')::interval)"
+    };
+    if remote {
+        sqlx::query(lease_sql)
+            .bind(run_id)
+            .bind(org_id)
+            .bind(repo_id)
+            .bind(&source_oid)
+            .bind(&workflow)
+            .bind(principal_id)
+            .bind(attempt_id)
+            .bind(pr_id)
+            .bind(issue_id)
+            .bind(agent_run_id)
+            .bind(run_kind)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(lease_sql)
+            .bind(run_id)
+            .bind(org_id)
+            .bind(repo_id)
+            .bind(&source_oid)
+            .bind(&workflow)
+            .bind(principal_id)
+            .bind(attempt_id)
+            .bind(pr_id)
+            .bind(issue_id)
+            .bind(agent_run_id)
+            .bind(run_kind)
+            .bind(instance_id.unwrap())
+            .bind(crate::lease::LEASE_SECS)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         "INSERT INTO pipeline_jobs (id, org_id, repo_id, pipeline_run_id, job_key, state)
          VALUES ($1,$2,$3,$4,$5,'queued')",
@@ -285,32 +312,34 @@ pub(crate) async fn spawn_pipeline_run(
     .await?;
     tx.commit().await?;
 
-    let pool = state.pool.clone();
-    let git_root = state.git_root.clone();
-    let artifact_root = state.artifact_root.clone();
-    let pipeline_bin = state.pipeline_adapter_bin.clone();
-    let supervisor = state.pipeline_supervisor.clone();
-    let instance_id = state.instance_id;
-    let source_oid_spawn = source_oid.clone();
-    let run_kind_owned = run_kind.to_string();
-    tokio::spawn(async move {
-        run_pipeline_job(
-            pool,
-            git_root,
-            artifact_root,
-            pipeline_bin,
-            supervisor,
-            instance_id,
-            storage_key,
-            run_id,
-            job_id,
-            org_id,
-            repo_id,
-            source_oid_spawn,
-            run_kind_owned,
-        )
-        .await;
-    });
+    if !remote {
+        let pool = state.pool.clone();
+        let git_root = state.git_root.clone();
+        let artifact_root = state.artifact_root.clone();
+        let pipeline_bin = state.pipeline_adapter_bin.clone();
+        let supervisor = state.pipeline_supervisor.clone();
+        let instance_id = state.instance_id;
+        let source_oid_spawn = source_oid.clone();
+        let run_kind_owned = run_kind.to_string();
+        tokio::spawn(async move {
+            execute_pipeline_job(
+                pool,
+                git_root,
+                artifact_root,
+                pipeline_bin,
+                supervisor,
+                instance_id,
+                storage_key,
+                run_id,
+                job_id,
+                org_id,
+                repo_id,
+                source_oid_spawn,
+                run_kind_owned,
+            )
+            .await;
+        });
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -380,7 +409,7 @@ pub async fn cancel_pipeline_run(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_pipeline_job(
+pub async fn execute_pipeline_job(
     pool: PgPool,
     git_root: PathBuf,
     artifact_root: PathBuf,
@@ -398,14 +427,27 @@ async fn run_pipeline_job(
     let work_lease = match crate::lease::try_begin_pipeline_work(&pool, run_id, instance_id).await {
         Ok(lease) => lease,
         Err(_) => {
-            let _ = sqlx::query(
-                "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
-                 updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
+            let resumed = sqlx::query_as::<_, (i64,)>(
+                "SELECT lease_epoch FROM pipeline_runs
+                 WHERE id = $1 AND lease_holder = $2
+                   AND state IN ('running', 'cancel_requested')",
             )
             .bind(run_id)
-            .execute(&pool)
+            .bind(instance_id)
+            .fetch_optional(&pool)
             .await;
-            return;
+            if let Ok(Some((epoch,))) = resumed {
+                crate::lease::WorkLease { epoch }
+            } else {
+                let _ = sqlx::query(
+                    "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
+                     updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
+                )
+                .bind(run_id)
+                .execute(&pool)
+                .await;
+                return;
+            }
         }
     };
     let _renew_guard = crate::lease::pipeline_lease_renew_guard(

@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-const RUNNER_ALLOWED: &[&str] = &["checks:write", "repo:read"];
+const RUNNER_ALLOWED: &[&str] = &["checks:write", "repo:read", "pipeline:execute"];
 
 pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
     for scope in scopes {
@@ -13,19 +13,22 @@ pub fn validate_scope_issuance(scopes: &[String]) -> Result<(), AppError> {
             return Err(AppError::Validation("invalid scope".to_string()));
         }
     }
-    if scopes.iter().any(|s| s == "checks:write") {
+    let runner_scoped = scopes
+        .iter()
+        .any(|s| s == "checks:write" || s == "pipeline:execute");
+    if runner_scoped {
         if scopes
             .iter()
             .any(|s| s == "repo:write" || s == "repo:admin")
         {
             return Err(AppError::Validation(
-                "checks:write runner tokens cannot include repo:write or repo:admin".to_string(),
+                "runner tokens cannot include repo:write or repo:admin".to_string(),
             ));
         }
         for scope in scopes {
             if !RUNNER_ALLOWED.contains(&scope.as_str()) {
                 return Err(AppError::Validation(format!(
-                    "checks:write tokens may only include: {}",
+                    "runner tokens may only include: {}",
                     RUNNER_ALLOWED.join(", ")
                 )));
             }
@@ -40,7 +43,10 @@ pub async fn require_org_admin_to_issue_runner_token(
     principal_id: Uuid,
     scopes: &[String],
 ) -> Result<(), AppError> {
-    if !scopes.iter().any(|s| s == "checks:write") {
+    if !scopes
+        .iter()
+        .any(|s| s == "checks:write" || s == "pipeline:execute")
+    {
         return Ok(());
     }
     let row = sqlx::query_as::<_, (String,)>(

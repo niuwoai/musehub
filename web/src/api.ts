@@ -270,6 +270,74 @@ export async function publishRelease(org: string, repo: string, releaseId: strin
   })
 }
 
+export type OrgSettings = {
+  pipeline_executor: string
+  require_pipeline_oci: boolean
+}
+
+export type RepoGrant = {
+  principal_id: string
+  handle: string
+  role: string
+}
+
+export type RunnerTokenMasked = {
+  id: string
+  name: string
+  token_prefix: string
+  scopes: string[]
+  scope_mode: string
+}
+
+export type PatCreated = {
+  id: string
+  token: string
+  note: string
+}
+
+export async function getOrgSettings(org: string) {
+  return api<OrgSettings>(`/api/v1/orgs/${org}/settings`)
+}
+
+export async function listRepoGrants(org: string, repo: string) {
+  return api<RepoGrant[]>(`/api/v1/orgs/${org}/repos/${repo}/grants`)
+}
+
+export async function grantRepoCollaborator(
+  org: string,
+  repo: string,
+  handle: string,
+  role: string,
+) {
+  return api<void>(`/api/v1/orgs/${org}/repos/${repo}/collaborators`, {
+    method: 'POST',
+    body: JSON.stringify({ handle, role }),
+  })
+}
+
+export async function listRunnerTokens(org: string) {
+  return api<RunnerTokenMasked[]>(`/api/v1/orgs/${org}/runner-tokens`)
+}
+
+export async function createScopedPat(
+  org: string,
+  name: string,
+  scopes: string[],
+  opts: { scope_mode?: string; repo_ids?: string[]; runner_handle?: string },
+) {
+  return api<PatCreated>('/api/v1/tokens', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      org,
+      scopes,
+      scope_mode: opts.scope_mode ?? 'selected',
+      repo_ids: opts.repo_ids,
+      runner_handle: opts.runner_handle,
+    }),
+  })
+}
+
 export async function startDeployment(
   org: string,
   repo: string,

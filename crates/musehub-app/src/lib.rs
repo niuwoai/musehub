@@ -18,13 +18,15 @@ mod git_http;
 mod hooks;
 pub mod lease;
 pub mod mcp;
+mod grants;
 mod members;
+pub mod runner_api;
 pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
 mod recovery;
-pub use pipeline::seed_repo_environment;
+pub use pipeline::{execute_pipeline_job, seed_repo_environment};
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod pr;
 mod release;
@@ -95,6 +97,30 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/collaborators",
             post(members::grant_repo_collaborator),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/grants",
+            get(members::list_repo_grants).delete(members::revoke_repo_grant),
+        )
+        .route(
+            "/api/v1/orgs/{org}/settings",
+            get(org_settings_handler).patch(patch_org_settings_handler),
+        )
+        .route(
+            "/api/v1/orgs/{org}/runner-tokens",
+            get(runner_api::list_runner_tokens_masked),
+        )
+        .route(
+            "/api/v1/runner/capabilities",
+            get(runner_api::capabilities),
+        )
+        .route(
+            "/api/v1/runner/pipeline-runs/claim",
+            post(runner_api::claim_pipeline_run),
+        )
+        .route(
+            "/api/v1/runner/pipeline-runs/{run_id}/lease/renew",
+            post(runner_api::renew_pipeline_lease),
         )
         .route(
             "/api/v1/orgs/{org}/repos",
@@ -314,15 +340,30 @@ async fn list_repos(
 ) -> Result<Json<Vec<RepositoryView>>, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
     let org_id = org_id_for_member(&state.pool, &org, principal_id).await?;
-    let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT r.id, r.slug, r.state
-         FROM repositories r
-         WHERE r.org_id = $1
-         ORDER BY r.created_at",
-    )
-    .bind(org_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let privileged = grants::is_org_privileged(&state.pool, org_id, principal_id).await?;
+    let rows = if privileged {
+        sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT r.id, r.slug, r.state
+             FROM repositories r
+             WHERE r.org_id = $1
+             ORDER BY r.created_at",
+        )
+        .bind(org_id)
+        .fetch_all(&state.pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT r.id, r.slug, r.state
+             FROM repositories r
+             JOIN repository_grants g ON g.repo_id = r.id AND g.principal_id = $2
+             WHERE r.org_id = $1
+             ORDER BY r.created_at",
+        )
+        .bind(org_id)
+        .bind(principal_id)
+        .fetch_all(&state.pool)
+        .await?
+    };
     Ok(Json(
         rows.into_iter()
             .map(|(id, slug, repo_state)| RepositoryView {
@@ -670,7 +711,7 @@ async fn git_smart_http(
 ) -> Result<Response, AppError> {
     let (user, pass) = basic_auth(&headers)?;
     let org_id = org_id_from_slug(&state.pool, &org).await?;
-    let principal_id = if pass.starts_with("mhp_") {
+    let (principal_id, pat_ctx) = if pass.starts_with("mhp_") {
         let pat_ctx = pat_auth::authenticate_pat_context(&state.pool, &pass).await?;
         if !pat_auth::pat_org_allowed(pat_ctx.org_id, org_id) {
             return Err(AppError::Forbidden);
@@ -688,16 +729,18 @@ async fn git_smart_http(
         if needs_read && !pat_auth::scope_allows(&pat_ctx.scopes, "repo:read") {
             return Err(AppError::Forbidden);
         }
-        pat_ctx.principal_id
+        (pat_ctx.principal_id, Some(pat_ctx))
     } else {
-        authenticate_basic(&state.pool, &user, &pass).await?
+        (authenticate_basic(&state.pool, &user, &pass).await?, None)
     };
     let repo = repo_git.strip_suffix(".git").ok_or(AppError::Validation(
         "repository URL must end with .git".to_string(),
     ))?;
-    let storage_key = repo_storage_for_member(&state.pool, &org, repo, principal_id)
-        .await?
-        .2;
+    let (row_org_id, repo_id, storage_key) =
+        repo_storage_for_member(&state.pool, &org, repo, principal_id).await?;
+    if let Some(pat) = pat_ctx {
+        grants::ensure_pat_repo_access(&state.pool, &pat, row_org_id, repo_id).await?;
+    }
     let remote_user = user;
     let query_string = serde_urlencoded::to_string(&query).unwrap_or_default();
     security::validate_git_suffix(&git_path).map_err(AppError::Validation)?;
@@ -782,11 +825,15 @@ async fn create_pat_handler(
     } else {
         None
     };
+    let scope_mode = body.scope_mode.as_deref().unwrap_or("selected");
     let (id, token) = if let Some(scopes) = &body.scopes {
         pat_policy::validate_scope_issuance(scopes)?;
-        let token_owner = if scopes.iter().any(|s| s == "checks:write") {
+        let runner_token = scopes
+            .iter()
+            .any(|s| s == "checks:write" || s == "pipeline:execute");
+        let token_owner = if runner_token {
             let org = org_id.ok_or_else(|| {
-                AppError::Validation("checks:write tokens require org binding".to_string())
+                AppError::Validation("runner tokens require org binding".to_string())
             })?;
             pat_policy::require_org_admin_to_issue_runner_token(
                 &state.pool,
@@ -797,7 +844,7 @@ async fn create_pat_handler(
             .await?;
             let handle = body.runner_handle.as_deref().ok_or_else(|| {
                 AppError::Validation(
-                    "checks:write tokens require runner_handle for the delegated runner principal"
+                    "runner tokens require runner_handle for the delegated runner principal"
                         .to_string(),
                 )
             })?;
@@ -806,7 +853,28 @@ async fn create_pat_handler(
             principal_id
         };
         let refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        pat::create_pat_with_scopes(&state.pool, token_owner, org_id, &body.name, &refs).await?
+        let (id, token) = pat::create_pat_with_scopes(
+            &state.pool,
+            token_owner,
+            org_id,
+            &body.name,
+            &refs,
+            scope_mode,
+        )
+        .await?;
+        if scope_mode == "selected" {
+            let org = org_id.ok_or_else(|| {
+                AppError::Validation("selected scope_mode requires org".to_string())
+            })?;
+            let repo_ids = body.repo_ids.as_deref().unwrap_or_default();
+            if repo_ids.is_empty() {
+                return Err(AppError::Validation(
+                    "selected tokens require repo_ids".to_string(),
+                ));
+            }
+            grants::insert_token_repo_grants(&state.pool, id, org, repo_ids).await?;
+        }
+        (id, token)
     } else {
         pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?
     };
@@ -822,8 +890,49 @@ struct CreatePatRequest {
     name: String,
     org: Option<String>,
     scopes: Option<Vec<String>>,
-    /// Required when issuing `checks:write`: non-admin member who will use the token.
+    scope_mode: Option<String>,
+    repo_ids: Option<Vec<Uuid>>,
+    /// Required when issuing runner tokens: non-admin member who will use the token.
     runner_handle: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OrgSettingsView {
+    pub pipeline_executor: String,
+    pub require_pipeline_oci: bool,
+}
+
+async fn org_settings_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<String>,
+) -> Result<Json<OrgSettingsView>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let org_id = org_id_for_member(&state.pool, &org, principal_id).await?;
+    let _ = org_id;
+    Ok(Json(OrgSettingsView {
+        pipeline_executor: if runner_api::pipeline_executor_remote() {
+            "remote".to_string()
+        } else {
+            "inprocess".to_string()
+        },
+        require_pipeline_oci: state.require_pipeline_oci,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PatchOrgSettingsRequest {
+    /// Reserved for future mutable org flags (V1: read-only except grants via other routes).
+    _noop: Option<bool>,
+}
+
+async fn patch_org_settings_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<String>,
+    Json(_body): Json<PatchOrgSettingsRequest>,
+) -> Result<Json<OrgSettingsView>, AppError> {
+    org_settings_handler(State(state), headers, Path(org)).await
 }
 
 #[derive(Serialize)]
@@ -992,15 +1101,16 @@ async fn repo_org_ids_for_member(
     let org_id = org_id_for_member(pool, org_slug, principal_id).await?;
     let row = sqlx::query_as::<_, (Uuid,)>(
         "SELECT r.id FROM repositories r
-         JOIN repository_grants g ON g.repo_id = r.id
-         WHERE r.org_id = $1 AND r.slug_normalized = $2 AND g.principal_id = $3",
+         WHERE r.org_id = $1 AND r.slug_normalized = $2",
     )
     .bind(org_id)
     .bind(repo_slug.to_lowercase())
-    .bind(principal_id)
     .fetch_optional(pool)
     .await?;
-    let repo_id = row.map(|(id,)| id).ok_or(AppError::Forbidden)?;
+    let Some((repo_id,)) = row else {
+        return Err(AppError::NotFound);
+    };
+    grants::ensure_principal_repo_access(pool, org_id, repo_id, principal_id).await?;
     Ok((org_id, repo_id))
 }
 
@@ -1011,19 +1121,15 @@ pub(crate) async fn repo_storage_for_member(
     repo_slug: &str,
     principal_id: Uuid,
 ) -> Result<(Uuid, Uuid, Uuid), AppError> {
-    let org_id = org_id_for_member(pool, org_slug, principal_id).await?;
-    let row = sqlx::query_as::<_, (Uuid, Uuid)>(
-        "SELECT r.id, r.storage_key FROM repositories r
-         JOIN repository_grants g ON g.repo_id = r.id
-         WHERE r.org_id = $1 AND r.slug_normalized = $2 AND g.principal_id = $3",
+    let (org_id, repo_id) =
+        repo_org_ids_for_member(pool, org_slug, repo_slug, principal_id).await?;
+    let row = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT storage_key FROM repositories WHERE id = $1",
     )
-    .bind(org_id)
-    .bind(repo_slug.to_lowercase())
-    .bind(principal_id)
-    .fetch_optional(pool)
+    .bind(repo_id)
+    .fetch_one(pool)
     .await?;
-    let (repo_id, storage_key) = row.ok_or(AppError::Forbidden)?;
-    Ok((org_id, repo_id, storage_key))
+    Ok((org_id, repo_id, row.0))
 }
 
 fn normalize_slug(slug: &str) -> Result<String, AppError> {
