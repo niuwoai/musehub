@@ -30,6 +30,7 @@ jobs:
       DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
+      MUSEHUB_ARTIFACT_ROOT: /tmp/musehub-ci-artifacts
       MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
       MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
       RUST_BACKTRACE: 1
@@ -53,6 +54,8 @@ jobs:
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
           cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
+          cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
+          cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
       - name: product acceptance
@@ -68,6 +71,7 @@ jobs:
           cargo test -p musehub-app --test pr_security_e2e -- --test-threads=1
           cargo test -p musehub-app --test agent_budget -- --test-threads=1
           cargo test -p musehub-app --test pat_scope -- --test-threads=1
+          cargo test -p musehub-app --test pipeline_delivery_e2e -- --test-threads=1
 
   web:
     runs-on: ubuntu-latest
