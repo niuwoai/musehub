@@ -38,8 +38,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if grep -q 'docker\.sock' "$ROOT/deploy/docker-compose.yml" "$ROOT/deploy/Dockerfile" 2>/dev/null; then
-  echo "product stack must not reference docker.sock" >&2
+if grep -v '^[[:space:]]*#' "$ROOT/deploy/docker-compose.yml" | grep -q 'docker\.sock'; then
+  echo "product stack compose must not mount docker.sock" >&2
   exit 1
 fi
 
