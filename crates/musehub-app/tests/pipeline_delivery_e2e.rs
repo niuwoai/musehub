@@ -428,11 +428,7 @@ async fn merge_then_pipeline_release_deploy_trace() {
     assert_eq!(trace["plan_accepted"].as_bool(), Some(true));
     let gaps = trace["gaps"].as_array().unwrap();
     let gap_text: Vec<&str> = gaps.iter().filter_map(|g| g.as_str()).collect();
-    for expected in [
-        "deploy_not_isolated_compose",
-        "deploy_no_oci_registry",
-        "mcp_production_not_wired",
-    ] {
+    for expected in ["deploy_not_isolated_compose", "deploy_no_oci_registry"] {
         assert!(
             gap_text.contains(&expected),
             "missing trace gap {expected}: {gap_text:?}"

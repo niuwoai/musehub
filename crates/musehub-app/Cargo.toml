@@ -26,10 +26,17 @@ tokio = { workspace = true, features = ["process", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
+rmcp = { workspace = true }
+schemars = { version = "1", features = ["derive"] }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 sha2 = "0.10"
 base64 = "0.22"
+http = { workspace = true }
+rmcp = { workspace = true }
+tokio-util = { workspace = true }
 tower = { workspace = true }
 http-body-util = { workspace = true }
 musehub-migrate = { path = "../musehub-migrate" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

@@ -476,5 +476,8 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         !gap_text.contains(&"deploy_no_oci_registry"),
         "product path should not report deploy_no_oci_registry: {gap_text:?}"
     );
-    assert!(gap_text.contains(&"mcp_production_not_wired"));
+    assert!(
+        !gap_text.contains(&"mcp_production_not_wired"),
+        "product MCP slice removes stale mcp_production_not_wired gap"
+    );
 }
