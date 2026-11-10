@@ -8,16 +8,18 @@ import {
   STALE_PLAN_PREFIX,
 } from './fixtures/stale-deployment-view'
 import { expectLoggedInAs } from './helpers/session'
+import {
+  createRepoViaUi,
+  repoNavButtonForSlug,
+  repoNavButtons,
+  waitForDemoRepoNavHydrated,
+} from './helpers/repo'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 
 const HISTORY_DEPLOY_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const HISTORY_DEPLOY_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ALL_TAB_ROW_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
-
-function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
-}
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
   const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
@@ -38,12 +40,9 @@ async function loginAndCreateRepo(page: Page) {
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
-  const before = await repoNavButtons(page).count()
-  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-  const slugBtn = repoNavButtons(page).last()
-  const slug = (await slugBtn.textContent())?.trim() ?? ''
-  await slugBtn.click()
+  await waitForDemoRepoNavHydrated(page)
+  const { slug, repoEntry } = await createRepoViaUi(page)
+  await repoEntry.click()
   return slug
 }
 
@@ -226,14 +225,12 @@ test.describe('deployment history console', () => {
     })
 
     repoASlug = await loginAndCreateRepo(page)
-    const repoCount = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(repoCount + 1, { timeout: 15_000 })
-    await repoNavButtons(page).filter({ hasText: repoASlug }).click()
+    const { repoEntry: repoBEntry } = await createRepoViaUi(page)
+    await repoNavButtonForSlug(page, repoASlug).click()
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toBeVisible({
       timeout: 15_000,
     })
-    await repoNavButtons(page).last().click()
+    await repoBEntry.click()
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toHaveCount(0, {
       timeout: 10_000,
     })
@@ -301,6 +298,7 @@ test.describe('deployment history console', () => {
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await waitForDemoRepoNavHydrated(page)
 
     const reselect = page.getByRole('button', { name: savedSlug, exact: true })
     await expect(reselect).toBeVisible({ timeout: 15_000 })
