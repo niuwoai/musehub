@@ -22,11 +22,14 @@ async function installPausedPostAgentRunRoute(page: import('@playwright/test').P
   const postSeen = new Promise<void>((resolve) => {
     postSeenResolve = resolve
   })
+  let pauseFirstPost = true
 
-  await page.route('**/api/v1/orgs/demo/repos/*/agent-runs', async (route) => {
-    if (route.request().method() === 'POST') {
+  const pattern = '**/api/v1/orgs/demo/repos/*/agent-runs'
+  await page.route(pattern, async (route) => {
+    if (route.request().method() === 'POST' && pauseFirstPost) {
       postSeenResolve()
       await gate
+      pauseFirstPost = false
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -40,19 +43,55 @@ async function installPausedPostAgentRunRoute(page: import('@playwright/test').P
   return {
     postSeen,
     release: () => releaseGate!(),
-    unroute: () => page.unroute('**/api/v1/orgs/demo/repos/*/agent-runs'),
+    unroute: async () => {
+      pauseFirstPost = false
+      releaseGate?.()
+      await page.unroute(pattern)
+    },
   }
 }
+
+const runReferenceAgentButton = (page: import('@playwright/test').Page) =>
+  page.getByRole('button', {
+    name: /run reference agent|运行参考 agent/i,
+  })
 
 async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page) {
   const repoCountBefore = await repoNavButtons(page).count()
   await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
   await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
   const repoEntry = repoNavButtons(page).last()
+  const slug = (await repoEntry.textContent())?.trim() ?? ''
   await repoEntry.click()
+  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
+    timeout: 15_000,
+  })
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
+  const planAccepted = page.waitForResponse(
+    (r) =>
+      r.url().includes(`/repos/${slug}/issues/`) &&
+      r.url().includes('/plans') &&
+      r.request().method() === 'PATCH' &&
+      r.ok(),
+  )
   await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
-  await expect(page.getByRole('button', { name: /run agent|运行/i }).first()).toBeVisible({
+  await planAccepted
+  await expect(runReferenceAgentButton(page).first()).toBeVisible({
+    timeout: 15_000,
+  })
+  return slug
+}
+
+async function openRepoWithSlug(page: import('@playwright/test').Page, slug: string) {
+  const issuesLoaded = page.waitForResponse(
+    (r) => r.url().includes(`/repos/${slug}/issues`) && r.request().method() === 'GET' && r.ok(),
+  )
+  await repoNavButtons(page).filter({ hasText: slug }).click()
+  await issuesLoaded
+  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(runReferenceAgentButton(page).first()).toBeVisible({
     timeout: 15_000,
   })
 }
@@ -71,7 +110,7 @@ test.describe('agent run start session guard', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await prepareRepoWithAcceptedPlan(page)
+    const repoSlug = await prepareRepoWithAcceptedPlan(page)
 
     const responseDone = page.waitForResponse(
       (r) =>
@@ -80,7 +119,7 @@ test.describe('agent run start session guard', () => {
         r.request().method() === 'POST',
     )
 
-    await page.getByRole('button', { name: /run agent|运行/i }).first().click()
+    await runReferenceAgentButton(page).first().click()
     await paused.postSeen
 
     await page.getByTestId('logout').click()
@@ -102,15 +141,13 @@ test.describe('agent run start session guard', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await expect(repoNavButtons(page).first()).toBeVisible({ timeout: 15_000 })
-    await repoNavButtons(page).first().click()
-    const runAgentButton = page.getByRole('button', { name: /run agent|运行/i }).first()
-    await expect(runAgentButton).toBeVisible({ timeout: 15_000 })
+    await openRepoWithSlug(page, repoSlug)
+    const runAgentButton = runReferenceAgentButton(page).first()
+    await expect(runAgentButton).toBeEnabled({ timeout: 15_000 })
 
     const realStart = page.waitForResponse(
       (r) =>
-        r.url().includes('/api/v1/orgs/demo/repos/') &&
-        r.url().includes('/agent-runs') &&
+        r.url().includes(`/repos/${repoSlug}/agent-runs`) &&
         r.request().method() === 'POST',
       { timeout: 180_000 },
     )
