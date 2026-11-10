@@ -4,13 +4,10 @@ import { randomUUID } from 'crypto'
 import type { Page } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
+import { createRepoViaUi, repoNavButtons } from './helpers/repo'
 
 const adminPassword = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
-
-function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
-}
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
   const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
@@ -28,11 +25,7 @@ async function loginCookie(handle: string, pass: string) {
 }
 
 async function deliveryThroughRelease(page: Page, adminCookie: string) {
-  const repoCountBefore = await repoNavButtons(page).count()
-  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
-  const repoEntry = repoNavButtons(page).last()
-  const slug = (await repoEntry.textContent())?.trim() ?? ''
+  const { slug, repoEntry } = await createRepoViaUi(page)
   await repoEntry.click()
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
