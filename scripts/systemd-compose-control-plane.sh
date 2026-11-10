@@ -10,13 +10,14 @@ cd "$DEPLOY_DIR"
   exit 1
 }
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file .env)
+# shellcheck source=lib/production-compose.sh
+source "$ROOT/scripts/lib/production-compose.sh"
 case "$ACTION" in
   start)
-    "${COMPOSE[@]}" up -d postgres musehub-server gateway
+    production_compose up -d postgres musehub-server gateway
     ;;
   stop)
-    "${COMPOSE[@]}" stop postgres musehub-server gateway
+    production_compose stop postgres musehub-server gateway
     ;;
   *)
     echo "systemd_control_plane=fail unknown action $ACTION" >&2

@@ -90,10 +90,13 @@ mv "${ENV_FILE}.new" "$ENV_FILE"
 echo "configure_runner_pat=ok env=$ENV_FILE runner_handle=$RUNNER_MEMBER"
 
 if [[ "$START_RUNNER" -eq 1 ]]; then
+  # shellcheck source=lib/production-compose.sh
+  source "$ROOT/scripts/lib/production-compose.sh"
+  export MUSEHUB_ENV_FILE="$ENV_FILE"
   if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && getent group docker >/dev/null 2>&1; then
-    exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1; cd '$ROOT/deploy' && docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file '$ENV_FILE' up -d musehub-runner"
+    exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1 MUSEHUB_ENV_FILE='$ENV_FILE'; cd '$ROOT/deploy' && source '$ROOT/scripts/lib/production-compose.sh' && production_compose up -d musehub-runner"
   fi
   cd "$ROOT/deploy"
-  docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file "$ENV_FILE" up -d musehub-runner
+  production_compose up -d musehub-runner
   echo "configure_runner_pat=musehub-runner started"
 fi

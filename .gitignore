@@ -22,6 +22,10 @@ web/dist/
 .yarn/install-state.gz
 .pnp.*
 
+# Rendered production gateway config (generated on host)
+deploy/Caddyfile.live
+deploy/tls/*.pem
+
 # Local runtime data and logs
 /data/
 /tmp/

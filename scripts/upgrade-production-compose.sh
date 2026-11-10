@@ -8,33 +8,34 @@ if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && getent group docker >/dev/null 2>
 fi
 
 [[ -f .env ]] || { echo "upgrade=fail missing deploy/.env" >&2; exit 1; }
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file .env)
+# shellcheck source=lib/production-compose.sh
+source "$ROOT/scripts/lib/production-compose.sh"
 
 echo "upgrade=hint run ./scripts/backup-musehub-state.sh before major upgrades"
 echo "upgrade=phase build"
-"${COMPOSE[@]}" build musehub-server gateway musehub-runner
+production_compose build musehub-server gateway musehub-runner
 
 echo "upgrade=phase migrate"
-"${COMPOSE[@]}" run --rm --no-deps --entrypoint /docker-entrypoint.sh musehub-server migrate-only
+production_compose run --rm --no-deps --entrypoint /docker-entrypoint.sh musehub-server migrate-only
 
 echo "upgrade=phase recreate control plane"
-"${COMPOSE[@]}" up -d --force-recreate postgres musehub-server gateway
+production_compose up -d --force-recreate postgres musehub-server gateway
 
-GW_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' .env | cut -d= -f2 | tr -d '\r')"
-GW_PORT="${GW_PORT:-8080}"
-BASE="http://127.0.0.1:${GW_PORT}"
+export MUSEHUB_ENV_FILE="$ROOT/deploy/.env"
+BASE="$(production_gateway_base_url)"
+mapfile -t CURL_TLS < <(production_gateway_local_tls_curl_opts)
 for _ in $(seq 1 90); do
-  if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
+  if curl -fsS "${CURL_TLS[@]}" "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
     echo "upgrade=ready gateway=$BASE"
     break
   fi
   sleep 2
 done
-curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null
+curl -fsS "${CURL_TLS[@]}" "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null
 
 RUNNER_PAT=$(grep -E '^MUSEHUB_RUNNER_PAT=' .env | cut -d= -f2- | tr -d '\r' || true)
 if [[ -n "$RUNNER_PAT" && "$RUNNER_PAT" != placeholder-set-after-bootstrap ]]; then
   echo "upgrade=phase recreate musehub-runner"
-  "${COMPOSE[@]}" up -d --force-recreate musehub-runner
+  production_compose up -d --force-recreate musehub-runner
 fi
 echo "upgrade_production_compose=ok"
