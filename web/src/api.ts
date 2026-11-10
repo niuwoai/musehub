@@ -104,6 +104,16 @@ export async function me() {
   return api<Principal>('/api/v1/me')
 }
 
+export async function changePassword(currentPassword: string, newPassword: string) {
+  return api<void>('/api/v1/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
+}
+
 export async function listRepos(org: string) {
   return api<Repository[]>(`/api/v1/orgs/${org}/repos`)
 }

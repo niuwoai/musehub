@@ -98,6 +98,55 @@ pub async fn revoke_all_sessions_for_principal(
     Ok(updated.rows_affected())
 }
 
+/// Self-service password change: updates hash and revokes all sessions except the current one.
+pub async fn change_password(
+    pool: &PgPool,
+    principal_id: Uuid,
+    current_session_token: &str,
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), AppError> {
+    crate::security::validate_bootstrap_password(new_password).map_err(AppError::Validation)?;
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT password_hash FROM user_credentials WHERE principal_id = $1",
+    )
+    .bind(principal_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((password_hash,)) = row else {
+        return Err(AppError::Forbidden);
+    };
+    if !verify_password(current_password, &password_hash)? {
+        return Err(AppError::Unauthorized);
+    };
+    if verify_password(new_password, &password_hash)? {
+        return Err(AppError::Validation(
+            "new password must differ from current password".to_string(),
+        ));
+    }
+    let new_hash = hash_password(new_password)?;
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE user_credentials SET password_hash = $2, password_changed_at = CURRENT_TIMESTAMP
+         WHERE principal_id = $1",
+    )
+    .bind(principal_id)
+    .bind(&new_hash)
+    .execute(&mut *tx)
+    .await?;
+    let keep_hash = hash_token(current_session_token);
+    sqlx::query(
+        "UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP
+         WHERE principal_id = $1 AND token_hash != $2 AND revoked_at IS NULL",
+    )
+    .bind(principal_id)
+    .bind(&keep_hash)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn logout(pool: &PgPool, token: &str) -> Result<(), AppError> {
     let token_hash = hash_token(token);
     sqlx::query(
