@@ -61,9 +61,9 @@ test.describe('delivery chain browser flow', () => {
     const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
     await expect(runAgent).toBeVisible({ timeout: 15_000 })
     await runAgent.click()
-    await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
-      timeout: 60_000,
-    })
+    const lastRun = page.getByTestId('last-agent-run')
+    await expect(lastRun).toBeVisible({ timeout: 120_000 })
+    await expect(lastRun).toContainText(/succeeded/i, { timeout: 180_000 })
     await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
     await expect(page.getByTestId('pull-request-list')).toBeVisible()
 

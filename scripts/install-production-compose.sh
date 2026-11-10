@@ -38,6 +38,7 @@ for _ in $(seq 1 90); do
   if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
     echo "install_production=ready gateway=$BASE"
     echo "install_production=next ./scripts/configure-production-runner-pat.sh --start"
+    echo "install_production=boot_persistence sudo ./scripts/install-musehub-systemd.sh && systemctl enable --now musehub-control-plane"
     echo "install_production=acceptance ./scripts/verify-product-production-stack-e2e.sh"
     exit 0
   fi

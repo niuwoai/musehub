@@ -1,0 +1,21 @@
+[Unit]
+Description=MuseHub control plane (PostgreSQL, API, gateway via Docker Compose)
+Documentation=file://@REPO_ROOT@/deploy/RUNBOOK.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@DEPLOY_DIR@
+# Credentials live only in deploy/.env (EnvironmentFile not used here to avoid duplicate load).
+ExecStart=@REPO_ROOT@/scripts/systemd-compose-control-plane.sh start
+ExecStop=@REPO_ROOT@/scripts/systemd-compose-control-plane.sh stop
+TimeoutStartSec=900
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
