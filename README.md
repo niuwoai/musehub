@@ -57,7 +57,7 @@ musehub/
   crates/musehub-ssh-probe/  # Colima Linux VM 内的单用户 OpenSSH forced command 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
   crates/musehub-mcp-probe/  # M0 rmcp stdio + Streamable HTTP 互操作探针；不是生产 MCP 服务
-  migrations/                # 0001–0004（identity、repositories、issues/agent_runs）
+  migrations/                # 0001–0027（身份、仓库、Issue、流水线、MCP 契约等）
   docs/PROGRESS.md           # 真实 P0 进度清单
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
@@ -124,7 +124,8 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 - Colima Docker VM 上按 busybox digest 启动 Compose，实际运行镜像 ID 与请求 digest 的镜像 ID 一致，容器没有挂载 Docker socket。
 - Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
 - Colima Linux VM 内的临时 OpenSSH 验证 forced command：服务端注入身份，客户端不能覆盖；只接受明确的 `git-upload-pack` / `git-receive-pack` 与一个逻辑路径；两个主体并发时各自看到自己的身份；客户端提前断开后没有仓库文件或提交。没有执行真实 Git pack。
-- `musehub-migrate` 对隔离的 PostgreSQL 17 执行 `0001_common` 与 `0002_identity` 的 up、down、up。身份表具备 `created_at`、`updated_at` 与更新触发器，外键有前缀索引。Web 启动不迁移；仓库、Issue、流水线等其余表仍未落地。
+- **Linux CI / 本地 Postgres**：`verify-product-acceptance.sh` 与 `musehub-migrate` 测试对 **全量** migration（0001–0027）执行 up → 产品切片 → down → up；`0001_common.down.sql` 先按函数名显式拆除 `musehub_set_updated_at` 触发器再 `DROP FUNCTION`（不用 `CASCADE`）。可选 `MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS=1` 仅结束本库 **空闲** 客户端连接，缓解 acceptance 并发池化导致的 down 偶发失败，不默认在生产开启。
+- **macOS 开发者机**（Homebrew PostgreSQL@17）：`musehub-migrate` 隔离集群测试仍只捆绑 `0001`+`0002` 子集（见 `up_down.rs`），与全量 acceptance 路径不同。
 - `musehub-mcp-probe` 在 Linux 本地用 **两种独立 SDK 客户端**（`rust-rmcp` 3.8.0 + 官方 Python `mcp` 2.3.0）各覆盖 stdio 与 Streamable HTTP；见 `docs/m0-rmcp-matrix.md`。这是 **M0 互操作探针**（`m0_mcp_interop_matrix_passed` 由 `cargo test -p musehub-mcp-probe --test matrix` 验证），不是生产 `/mcp`；写工具幂等 **未验证**；OAuth 不在范围。
 
 尚未完成，不能把 M0 标为通过：

@@ -25,6 +25,7 @@ pub async fn migrated_pool() -> PgPool {
     let migrations =
         load_migrations(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations"))
             .expect("migrations");
+    std::env::set_var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS", "1");
     let _ = migrate_down(&pool, &migrations).await;
     let _ = migrate_up(&pool, &migrations).await.expect("migrate");
     pool

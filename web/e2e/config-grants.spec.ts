@@ -41,8 +41,20 @@ test.describe('org config and grants UI', () => {
     await expect(page.getByTestId('org-settings')).not.toContainText(tokenLike)
     const name = `Demo Org ${Date.now()}`
     await page.getByTestId('org-display-name').fill(name)
-    await page.getByTestId('save-org-settings').click()
-    const settings = await page.request.get(`${apiBase}/api/v1/orgs/demo/settings`)
+    const settingsPath = '/api/v1/orgs/demo/settings'
+    const [saveResponse] = await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PATCH' &&
+          response.url().includes(settingsPath) &&
+          response.ok(),
+        { timeout: 15_000 },
+      ),
+      page.getByTestId('save-org-settings').click(),
+    ])
+    const patched = await saveResponse.json()
+    expect(patched.display_name).toBe(name)
+    const settings = await page.request.get(`${apiBase}${settingsPath}`)
     expect(settings.ok()).toBeTruthy()
     const body = await settings.json()
     expect(body.display_name).toBe(name)

@@ -206,23 +206,39 @@ pub async fn migrate_up(
 ///
 /// Returns an error when a recorded version has no matching down migration,
 /// or when a statement fails. A failed down migration stays recorded.
+/// When `MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS=1`, ends other **idle** client backends on this
+/// database before revert. Avoids acceptance/CI flakes from pooled test connections without
+/// terminating in-flight queries on a shared production database.
+pub async fn maybe_terminate_idle_peer_backends(pool: &PgPool) -> Result<(), MigrateError> {
+    let enabled = std::env::var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(());
+    }
+    sqlx::query(
+        "SELECT pg_terminate_backend(pid)
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()
+           AND backend_type = 'client backend'
+           AND state IN ('idle', 'idle in transaction', 'idle in transaction (aborted)')",
+    )
+    .execute(pool)
+    .await
+    .map_err(|source| MigrateError::Database {
+        step: "terminate idle peer backends",
+        source,
+    })?;
+    Ok(())
+}
+
 pub async fn migrate_down(
     pool: &PgPool,
     migrations: &[Migration],
 ) -> Result<MigrationReport, MigrateError> {
     ensure_bookkeeping(pool).await?;
-    sqlx::query(
-        "SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-         WHERE datname = current_database()
-           AND pid <> pg_backend_pid()",
-    )
-    .execute(pool)
-    .await
-    .map_err(|source| MigrateError::Database {
-        step: "terminate other backends",
-        source,
-    })?;
+    maybe_terminate_idle_peer_backends(pool).await?;
     let applied_versions = applied_versions(pool).await?;
     let mut report = MigrationReport {
         applied: Vec::new(),
@@ -484,5 +500,14 @@ mod tests {
         assert!(split_stem("0001_common").is_ok());
         assert!(split_stem("1_common").is_err());
         assert!(split_stem("0001").is_err());
+    }
+
+    #[test]
+    fn terminate_idle_peers_env_parsing() {
+        std::env::set_var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS", "1");
+        assert!(std::env::var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false));
+        std::env::remove_var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS");
     }
 }

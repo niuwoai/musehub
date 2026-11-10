@@ -15,6 +15,8 @@ export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-Acc
 export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 mkdir -p "$MUSEHUB_GIT_ROOT"
 export MUSEHUB_TEST_DATABASE_URL="$DATABASE_URL"
+# Test/acceptance only: release idle pool connections that block 0001 down teardown.
+export MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS=1
 
 cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
@@ -39,6 +41,9 @@ cargo run -p musehub-migrate -- down migrations "$DATABASE_URL"
 
 echo "=== migrate up (again) ==="
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+
+echo "=== migrate integration (full up/down + idle peer) ==="
+cargo test -p musehub-migrate --test full_up_down -- --test-threads=1
 
 echo "=== caddy gateway layout ==="
 bash scripts/verify-caddyfile-layout.sh
