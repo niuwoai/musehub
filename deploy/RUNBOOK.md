@@ -54,7 +54,7 @@ sudo systemctl enable --now musehub-control-plane.service
 sudo systemctl enable musehub-runner.service   # unit enabled; worker starts only when PAT is set
 ```
 
-Units **After=docker.service**; secrets remain in `deploy/.env` only. Re-run `install-musehub-systemd.sh` if you move the git checkout. **Reboot after enable has not been validated in CI** — validate on your host before calling it production-ready.
+Units **After=docker.service**; secrets remain in `deploy/.env` only. Re-run `install-musehub-systemd.sh` if you move the git checkout. If you **enable** `musehub-runner` before `MUSEHUB_RUNNER_PAT` is set, the start unit exits cleanly without starting a worker; after you configure the PAT (e.g. `configure-production-runner-pat.sh`), run `sudo systemctl restart musehub-runner` — **enable alone does not retry** a previously skipped worker start. **Reboot after enable has not been validated in CI** — validate on your host before calling it production-ready.
 
 ## Persistence
 
