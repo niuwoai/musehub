@@ -133,6 +133,7 @@ pub fn load_migrations(directory: &Path) -> Result<Vec<Migration>, MigrateError>
 pub async fn connect(database_url: &str) -> Result<PgPool, MigrateError> {
     PgPoolOptions::new()
         .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(60))
         .connect(database_url)
         .await
         .map_err(|source| MigrateError::Database {

@@ -1,0 +1,28 @@
+# CI overlay when container bridge DNS/routing is unreliable (e.g. some cloud VMs).
+# API is published on the host at MUSEHUB_API_HOST_PORT (default 58080); gateway reaches it via host-gateway.
+:8080 {
+  encode gzip
+
+  @api path /api/* /git/* /mcp /mcp/*
+  handle @api {
+    reverse_proxy host.docker.internal:58080
+  }
+
+  handle /healthz {
+    reverse_proxy host.docker.internal:58080
+  }
+
+  handle /readyz {
+    reverse_proxy host.docker.internal:58080
+  }
+
+  handle /version {
+    reverse_proxy host.docker.internal:58080
+  }
+
+  handle {
+    root * /srv/web
+    try_files {path} /index.html
+    file_server
+  }
+}
