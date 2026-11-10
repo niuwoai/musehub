@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -76,8 +76,8 @@ export default function App() {
   const [orgDisplayName, setOrgDisplayName] = useState('')
   const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
   const [grantHandle, setGrantHandle] = useState('')
-  const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
   const [mintedPatFull, setMintedPatFull] = useState<string | null>(null)
+  const sessionEpochRef = useRef(0)
   const [orgMembers, setOrgMembers] = useState<OrgMember[]>([])
   const [membersAdmin, setMembersAdmin] = useState(false)
   const [memberHandle, setMemberHandle] = useState('')
@@ -99,7 +99,17 @@ export default function App() {
       .catch(() => setSession(null))
   }, [])
 
+  function bumpSessionEpoch() {
+    sessionEpochRef.current += 1
+    return sessionEpochRef.current
+  }
+
+  function sessionEpochActive(epoch: number) {
+    return sessionEpochRef.current === epoch
+  }
+
   useEffect(() => {
+    const epoch = bumpSessionEpoch()
     if (!session) {
       setAuditEvents([])
       setRunnerCaps(null)
@@ -108,23 +118,42 @@ export default function App() {
       setOrgMembers([])
       setMembersAdmin(false)
       setMintedPatFull(null)
-      setMintedTokenPrefix(null)
       return
     }
     void (async () => {
-      setMyTokens((await listMyTokens().catch(() => [])) as PatMasked[])
-      setRunnerCaps(await getRunnerCapabilities().catch(() => null))
-      setAuditEvents((await listAuditEvents(DEFAULT_ORG, 30).catch(() => [])) as AuditEvent[])
-      setRunnerTokens(
-        (await listRunnerTokens(DEFAULT_ORG).catch(() => [])) as Awaited<
-          ReturnType<typeof listRunnerTokens>
-        >,
+      const pats = await listMyTokens().catch(() => [] as PatMasked[])
+      if (!sessionEpochActive(epoch)) {
+        return
+      }
+      setMyTokens(pats)
+      const caps = await getRunnerCapabilities().catch(() => null)
+      if (!sessionEpochActive(epoch)) {
+        return
+      }
+      setRunnerCaps(caps)
+      const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => [] as AuditEvent[])
+      if (!sessionEpochActive(epoch)) {
+        return
+      }
+      setAuditEvents(audit)
+      const runner = await listRunnerTokens(DEFAULT_ORG).catch(
+        () => [] as Awaited<ReturnType<typeof listRunnerTokens>>,
       )
+      if (!sessionEpochActive(epoch)) {
+        return
+      }
+      setRunnerTokens(runner)
       try {
         const members = await listOrgMembers(DEFAULT_ORG)
+        if (!sessionEpochActive(epoch)) {
+          return
+        }
         setOrgMembers(members)
         setMembersAdmin(true)
       } catch {
+        if (!sessionEpochActive(epoch)) {
+          return
+        }
         setOrgMembers([])
         setMembersAdmin(false)
       }
@@ -132,23 +161,41 @@ export default function App() {
   }, [session])
 
   async function refreshIamPanels() {
-    setMyTokens(await listMyTokens())
-    setAuditEvents(await listAuditEvents(DEFAULT_ORG, 40))
+    const epoch = sessionEpochRef.current
+    try {
+      const pats = await listMyTokens()
+      if (!sessionEpochActive(epoch)) {
+        return
+      }
+      setMyTokens(pats)
+    } catch (err) {
+      if (sessionEpochActive(epoch)) {
+        setError(err instanceof Error ? err.message : 'PAT list failed')
+      }
+      return
+    }
+    const audit = await listAuditEvents(DEFAULT_ORG, 40).catch(() => null)
+    if (sessionEpochActive(epoch) && audit) {
+      setAuditEvents(audit)
+    }
     if (membersAdmin) {
-      setOrgMembers(await listOrgMembers(DEFAULT_ORG))
+      const members = await listOrgMembers(DEFAULT_ORG).catch(() => null)
+      if (sessionEpochActive(epoch) && members) {
+        setOrgMembers(members)
+      }
     }
   }
 
   async function onLogout() {
     setError(null)
+    bumpSessionEpoch()
+    setMintedPatFull(null)
     try {
       await logout()
     } catch {
       /* cookie may already be cleared */
     }
     setSession(null)
-    setMintedPatFull(null)
-    setMintedTokenPrefix(null)
   }
 
   async function refreshRepos() {
@@ -162,8 +209,8 @@ export default function App() {
     try {
       await login(loginForm.handle, loginForm.password)
       const principal = await me()
+      bumpSessionEpoch()
       setMintedPatFull(null)
-      setMintedTokenPrefix(null)
       setSession(principal.handle)
       await refreshRepos()
     } catch (err) {
@@ -350,6 +397,11 @@ export default function App() {
 
       {session ? (
         <section>
+          {error ? (
+            <p role="alert" data-testid="app-alert">
+              {error}
+            </p>
+          ) : null}
           <p>
             {t('app.signedInAs')}{' '}
             <strong data-testid="session-handle">{session}</strong>
@@ -392,11 +444,25 @@ export default function App() {
                             <select
                               aria-label={`role-${m.handle}`}
                               value={m.org_role}
-                              onChange={(e) =>
-                                void patchOrgMemberRole(DEFAULT_ORG, m.handle, e.target.value).then(
-                                  () => refreshIamPanels(),
-                                )
-                              }
+                              onChange={(e) => {
+                                void (async () => {
+                                  setError(null)
+                                  try {
+                                    await patchOrgMemberRole(
+                                      DEFAULT_ORG,
+                                      m.handle,
+                                      e.target.value,
+                                    )
+                                    await refreshIamPanels()
+                                  } catch (err) {
+                                    setError(
+                                      err instanceof Error
+                                        ? err.message
+                                        : 'role update failed',
+                                    )
+                                  }
+                                })()
+                              }}
                             >
                               <option value="member">member</option>
                               <option value="admin">admin</option>
@@ -404,11 +470,19 @@ export default function App() {
                             </select>
                             <button
                               type="button"
-                              onClick={() =>
-                                void disableOrgMember(DEFAULT_ORG, m.handle).then(() =>
-                                  refreshIamPanels(),
-                                )
-                              }
+                              onClick={() => {
+                                void (async () => {
+                                  setError(null)
+                                  try {
+                                    await disableOrgMember(DEFAULT_ORG, m.handle)
+                                    await refreshIamPanels()
+                                  } catch (err) {
+                                    setError(
+                                      err instanceof Error ? err.message : 'disable failed',
+                                    )
+                                  }
+                                })()
+                              }}
                             >
                               Disable
                             </button>
@@ -482,12 +556,26 @@ export default function App() {
                     <button
                       type="button"
                       data-testid={`revoke-pat-${t.id}`}
-                      onClick={() =>
-                        void revokePat(t.id).then(() => {
-                          setMintedPatFull(null)
-                          return refreshIamPanels()
-                        })
-                      }
+                      onClick={() => {
+                        void (async () => {
+                          const epoch = sessionEpochRef.current
+                          setError(null)
+                          try {
+                            await revokePat(t.id)
+                            if (!sessionEpochActive(epoch)) {
+                              return
+                            }
+                            setMintedPatFull(null)
+                            await refreshIamPanels()
+                          } catch (err) {
+                            if (sessionEpochActive(epoch)) {
+                              setError(
+                                err instanceof Error ? err.message : 'PAT revoke failed',
+                              )
+                            }
+                          }
+                        })()
+                      }}
                     >
                       Revoke
                     </button>
@@ -536,6 +624,7 @@ export default function App() {
                 disabled={iamBusy}
                 onClick={() => {
                   void (async () => {
+                    const epoch = sessionEpochRef.current
                     setError(null)
                     setIamBusy(true)
                     const name = patName.trim() || 'console-pat'
@@ -553,14 +642,20 @@ export default function App() {
                       } else {
                         created = await createUserPat(DEFAULT_ORG, name)
                       }
+                      if (!sessionEpochActive(epoch)) {
+                        return
+                      }
                       setMintedPatFull(created.token)
                       setPatName('')
-                      setMintedTokenPrefix(created.token.slice(0, 12))
                       await refreshIamPanels()
                     } catch (err) {
-                      setError(err instanceof Error ? err.message : 'PAT create failed')
+                      if (sessionEpochActive(epoch)) {
+                        setError(err instanceof Error ? err.message : 'PAT create failed')
+                      }
                     } finally {
-                      setIamBusy(false)
+                      if (sessionEpochActive(epoch)) {
+                        setIamBusy(false)
+                      }
                     }
                   })()
                 }}
@@ -638,10 +733,9 @@ export default function App() {
                     Save org settings
                   </button>
                   <p>
-                    pipeline: {settings.pipeline_executor} · agent:{' '}
+                    pipeline:                     {settings.pipeline_executor} · agent:{' '}
                     {settings.agent_executor} · compose:{' '}
                     {settings.compose_adapter_mode} ({settings.product_profile})
-                    {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
                   </p>
                 </div>
               ) : null}
@@ -798,6 +892,7 @@ export default function App() {
           <label>
             {t('app.loginHandle')}
             <input
+              data-testid="login-handle-input"
               value={loginForm.handle}
               onChange={(e) =>
                 setLoginForm({ ...loginForm, handle: e.target.value })
