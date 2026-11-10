@@ -22,6 +22,7 @@
 | DEP-01 | `[x]` | `attempt_id` 409/幂等；`deployment_conflict_e2e` |
 | DEP-02 | `[x]` 控制台 | 受保护环境会话审批 + ID 加载；`deployment_approval_console` / `deployment-view-epoch` Playwright |
 | DEP-02b | `[x]` 控制台 | 仓库范围列表：待审批发现 + **全部历史**分页（`offset`）、load more；`deployment_list_http_e2e` + `deployment-history-console` Playwright |
+| DEP-03 | `[x]` 控制台 | 失败摘要 + **回滚**（`POST .../deployments/rollback`，复用会话写权限）；`deployment_rollback_e2e` + `deployment-rollback-console` Playwright |
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
 | IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |

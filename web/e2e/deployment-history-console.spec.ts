@@ -414,7 +414,7 @@ test.describe('deployment history console', () => {
       (req) =>
         req.url().includes(`${STALE_DEPLOYMENT_ID}/approval`) && req.method() === 'POST',
     )
-    const listAllAfter = page.waitForResponse(
+    const tabAllList = page.waitForResponse(
       (r) =>
         r.url().includes('/deployments?') &&
         r.request().method() === 'GET' &&
@@ -423,8 +423,21 @@ test.describe('deployment history console', () => {
     await page.getByRole('button', { name: /approve deployment|批准部署/i }).click({ noWaitAfter: true })
     await approvalReq
     await page.getByTestId('deployment-view-all').click()
+    await tabAllList
+    const approvalDone = page.waitForResponse(
+      (r) =>
+        r.url().includes(`${STALE_DEPLOYMENT_ID}/approval`) &&
+        r.request().method() === 'POST',
+    )
+    const postDecisionList = page.waitForResponse(
+      (r) =>
+        r.url().includes('/deployments?') &&
+        r.request().method() === 'GET' &&
+        !r.url().includes('state=awaiting_approval'),
+    )
     release()
-    await listAllAfter
+    await approvalDone
+    await postDecisionList
 
     await expect(page.getByTestId('deployment-view-all')).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId(`deployment-list-item-${ALL_TAB_ROW_ID}`)).toBeVisible()
