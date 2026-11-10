@@ -1,6 +1,6 @@
 # MuseHub 开发与验证计划
 
-> 2026-10-30｜规划基线 0.1。当前仅完成设计文档；下面的工作包、工期、验收结果均不是已完成事项。
+> 2026-10-30｜规划基线 0.1。设计文档之外，BOOT-01 和 BOOT-02 已有实现与验证；其余工作包、工期和验收结果均不是已完成事项。
 
 ## 1. 组织方式与估算前提
 
@@ -29,7 +29,7 @@ M1 起每个领域同时提供 REST、Web 必要操作与 MCP 适配，不把整
 | ID | 工作包 | 依赖 | 交付证据 |
 |---|---|---|---|
 | BOOT-01 | workspace、配置、错误模型、版本源、日志、最小 Web | 无 | cargo/yarn 构建、版本一致检查 |
-| BOOT-02 | PostgreSQL migration 管理与隔离测试库 | BOOT-01 | up/down/up 报告、时间戳/FK 索引检查 |
+| BOOT-02 | PostgreSQL migration 管理与隔离测试库 | BOOT-01 | 已完成：`musehub-migrate` 在隔离 PostgreSQL 17 上对 `0001_common`、`0002_identity` 执行 up/down/up，并检查时间戳与外键索引。其余表未落地 |
 | AUTH-01 | principal/org/membership、登录与会话 | BOOT-02 | 角色/禁用/CSRF 用例 |
 | AUTH-02 | PAT、SSH key、scope、审计 | AUTH-01 | token 撤销与跨租户测试 |
 | GIT-IMP-01 | 仓库创建、受控 Git 子进程、HTTPS | AUTH-02 | 标准客户端 clone/fetch/push |
@@ -55,11 +55,11 @@ M1 起每个领域同时提供 REST、Web 必要操作与 MCP 适配，不把整
 
 ## 4. M0 必须做出的选择
 
-1. 用 Linux 验证 OpenSSH + forced command + Rust gateway 的身份传递、并发与取消。
+1. 用 Linux 验证 OpenSSH + forced command + Rust gateway 的身份传递、并发与取消。Colima Linux VM 内的单用户临时 sshd 已给出这项证据；它不传输真实 Git pack，也不是生产 Git 服务。
 2. 选择 Agent：以 headless 运行、结构化输出、可配置端点、工具权限、取消、预算观测和许可证为筛选条件。最终至少一个组合通过真实任务；尚未指定某个品牌默认获胜。
 3. 验证隔离构建与 rootless 镜像构建，不把宿主 Docker socket 暴露给 PR/Agent。
 4. 验证一个 OCI 镜像按 digest 部署 Compose，并确认实际运行摘要。
-5. 通过两个客户端检查 rmcp 协议和 stdio/HTTP 接入；需要 OAuth 的客户端单独记录为后续。
+5. 通过两个客户端检查 rmcp 协议和 stdio/HTTP 接入；需要 OAuth 的客户端单独记录为后续。— **M0 互操作矩阵**已由 `rust-rmcp` 与 Python `mcp` 双 SDK 自动化测试覆盖（`docs/m0-rmcp-matrix.md`）；生产 `/mcp`、第三方闭源宿主、写工具幂等与 OAuth 未验收，**不算 M0 退出**。
 6. 跑同类产品体验中的最小任务集，确认 MuseHub 值得优先解决的差异。
 
 任何一项失败都应修改设计或范围后再开工大规模实现，不能用 mock 演示替代可行性证据。

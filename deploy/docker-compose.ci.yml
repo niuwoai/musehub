@@ -1,0 +1,16 @@
+# CI / local overlay: host-reachable Postgres + host-loopback API when bridge is broken.
+services:
+  postgres:
+    # Publish on all interfaces so other containers can reach DB via host.docker.internal (bridge gateway).
+    ports:
+      - "${MUSEHUB_CI_POSTGRES_PORT:-55432}:5432"
+  musehub-server:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${MUSEHUB_CI_API_HOST_PORT:-58080}:8080"
+    environment:
+      DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@host.docker.internal:${MUSEHUB_CI_POSTGRES_PORT:-55432}/musehub?sslmode=disable
+  gateway:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

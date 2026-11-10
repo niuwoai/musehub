@@ -1,10 +1,10 @@
 # MuseHub 数据库设计
 
-> 设计基线 0.1｜2026-10-30。逻辑模型与关键约束供实施使用；不是已执行的数据库 schema。完整 DDL 在对应里程碑用成对 migration 落地并验证。
+> 设计基线 0.1｜2026-10-30。逻辑模型与关键约束供实施使用。`migrations/0001_common` 与 `migrations/0002_identity` 已在隔离 PostgreSQL 17 上完成 up、down、up；第 4 节及之后的表仍是设计，不是已执行 schema。
 
 ## 1. 通用约定
 
-- 业务存储选 PostgreSQL；所有表（包括关联表）都有 `id UUID PRIMARY KEY`、`created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`、`updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`。ID 使用应用生成 UUIDv7，数据库 PK 保证唯一。
+- 业务存储只支持 PostgreSQL，不提供 SQLite、MySQL 或其他数据库后端；所有表（包括关联表）都有 `id UUID PRIMARY KEY`、`created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`、`updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`。ID 使用应用生成 UUIDv7，数据库 PK 保证唯一。
 - `updated_at` 由数据库 BEFORE UPDATE trigger 维护；不可变记录禁止业务 UPDATE，保留其创建时间作为 updated_at。禁止依赖客户端自报时间作为租约/审批期限依据。
 - 下列字典省略通用三列。字段默认 NOT NULL，`?` 表示 nullable；`FK` 表示外键。字符串状态使用 TEXT + CHECK，避免 PostgreSQL enum 演进成本。
 - 表格未重复标类型的字段按约定展开：`*_id` 为 UUID，`*_at`/`*_until` 为 TIMESTAMPTZ，`row_version`/`policy_version`/`*_number`/`byte_length` 为 BIGINT，布尔显式 BOOL；name/slug/path/state/kind/ref/OID/hash 等其余标量为 TEXT（OID/hash 另受格式约束）。已标 JSONB 的字段按专用 schema 校验。
@@ -198,8 +198,10 @@ LIMIT 1;
 
 ## 13. Migration 分组与验证
 
-建议顺序：001 identity；002 repositories/permissions；003 issues/plans；004 PR/reviews；005 agent；006 workflow/jobs/artifacts；007 releases/environments；008 evidence/cross-reference constraints；009 outbox/audit/idempotency。循环 FK 在父表就绪后追加。
+已落地：`0001_common` 提供 `musehub_set_updated_at()`；`0002_identity` 创建 `principals`、`user_credentials`、`sessions`、`organizations`、`memberships`、`access_tokens`、`ssh_keys`。两者都有成对 down。`musehub-migrate up` 会检查业务表的非空 `created_at`/`updated_at` 和每个外键的前缀索引。隔离 PostgreSQL 17 已执行 up、down、up。
 
-每组提供 up/down；业务表 created_at/updated_at 与 trigger 静态检查；外键索引和命名自动检查。全新库 up→down→up，在隔离数据库运行；生产 down 涉及删除数据时必须先备份，不能把“存在 down 文件”当作无损回滚。
+尚未落地：`token_repository_grants`、`repository_grants`，以及仓库、Issue、PR、Agent、workflow、Release、环境和 outbox/audit。建议继续按 repositories/permissions、issues/plans、PR/reviews、agent、workflow/jobs/artifacts、releases/environments、evidence/cross-reference constraints、outbox/audit/idempotency 分组。循环 FK 在父表就绪后追加。
+
+每组提供 up/down。全新库 up→down→up，只在隔离数据库运行；生产 down 涉及删除数据时必须先备份，不能把“存在 down 文件”当作无损回滚。Web 启动不调用 migration。
 
 必测：跨组织/跨仓库 FK、重复编号、错误 current_revision、过期 attempt 回报、空 owner job、多 owner job、循环依赖、同环境并发部署、审批失效、幂等 key 冲突。所有测试不连接生产数据库。

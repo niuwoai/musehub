@@ -1,0 +1,28 @@
+name: evidence-macos
+
+# Colima / Homebrew integration probes — not required for product CI green.
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - "crates/musehub-container-probe/**"
+      - "crates/musehub-rootless-probe/**"
+      - "crates/musehub-ssh-probe/**"
+      - "crates/musehub-migrate/tests/up_down.rs"
+
+permissions:
+  contents: read
+
+jobs:
+  colima-evidence:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Colima/Homebrew probes (best effort)
+        run: |
+          echo "This job records macOS evidence only. Failure does not block product CI."
+          cargo test -p musehub-container-probe -p musehub-rootless-probe -p musehub-ssh-probe -- --test-threads=1 || true
+          cargo test -p musehub-migrate --test up_down -- --test-threads=1 || true

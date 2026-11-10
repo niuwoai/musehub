@@ -1,0 +1,45 @@
+[package]
+name = "musehub-agent-adapter"
+version = "0.1.0-rc4"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+tempfile = "3"
+musehub-core = { path = "../musehub-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+
+[[bin]]
+name = "musehub-agent-reference"
+path = "src/bin/musehub_agent_reference.rs"
+
+[[bin]]
+name = "musehub-agent-codex-sim"
+path = "src/bin/musehub_agent_codex_sim.rs"
+
+[[bin]]
+name = "musehub-agent-codex-fixture"
+path = "src/bin/musehub_agent_codex_fixture.rs"
+
+[[bin]]
+name = "musehub-pipeline-reference"
+path = "src/bin/musehub_pipeline_reference.rs"
+
+[[bin]]
+name = "musehub-pipeline-slow"
+path = "src/bin/musehub_pipeline_slow.rs"
+
+[[bin]]
+name = "musehub-pipeline-oci"
+path = "src/bin/musehub_pipeline_oci.rs"
+
+[[bin]]
+name = "musehub-compose-mock"
+path = "src/bin/musehub_compose_mock.rs"
+
+[[bin]]
+name = "musehub-compose-runner"
+path = "src/bin/musehub_compose_runner.rs"

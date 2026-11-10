@@ -1,0 +1,10 @@
+# Explicit demo/lab profile: in-process agents, mock compose (not production-complete).
+name: musehub-product-demo
+
+services:
+  musehub-server:
+    environment:
+      MUSEHUB_PRODUCT_PROFILE: demo
+      MUSEHUB_COMPOSE_ADAPTER_MODE: mock
+      MUSEHUB_PIPELINE_EXECUTOR: inprocess
+      MUSEHUB_AGENT_EXECUTOR: inprocess

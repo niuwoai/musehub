@@ -1,0 +1,3 @@
+# Pinned for M0 MCP client-matrix evidence (official Python MCP SDK).
+# Install with: pip3 install --target <dir> -r requirements.txt
+mcp==2.3.0

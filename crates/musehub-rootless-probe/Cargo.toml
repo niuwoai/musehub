@@ -1,0 +1,9 @@
+[package]
+name = "musehub-rootless-probe"
+version = "0.1.0-rc4"
+edition = "2021"
+
+[dependencies]
+musehub-core = { path = "../musehub-core" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

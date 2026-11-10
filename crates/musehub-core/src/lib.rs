@@ -2,12 +2,25 @@
 
 use std::env::VarError;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 const VERSION_SOURCE: &str = include_str!("../../../VERSION");
 
 /// Environment variable that holds the HTTP listen address.
 pub const BIND_ENV: &str = "MUSEHUB_BIND";
+
+/// Environment variable that holds the PostgreSQL connection URL.
+pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
+
+/// Root directory for bare Git repositories (`<storage_key>.git`).
+pub const GIT_ROOT_ENV: &str = "MUSEHUB_GIT_ROOT";
+
+/// Secret for signing session cookies (required when the API is enabled).
+pub const SESSION_SECRET_ENV: &str = "MUSEHUB_SESSION_SECRET";
+
+/// One-time bootstrap password for the default org admin (optional).
+pub const BOOTSTRAP_ADMIN_PASSWORD_ENV: &str = "MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD";
 
 /// Listen address used when [`BIND_ENV`] is unset or blank.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -26,17 +39,46 @@ pub trait ErrorCode {
 }
 
 /// Process configuration derived from the environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     bind: SocketAddr,
+    database_url: Option<String>,
+    git_root: Option<PathBuf>,
+    session_secret: Option<String>,
+    bootstrap_admin_password: Option<String>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Config")
+            .field("bind", &self.bind)
+            .field(
+                "database_url",
+                &self.database_url.as_ref().map(|_| "<configured>"),
+            )
+            .field("git_root", &self.git_root)
+            .field(
+                "session_secret",
+                &self.session_secret.as_ref().map(|_| "<configured>"),
+            )
+            .field(
+                "bootstrap_admin_password",
+                &self
+                    .bootstrap_admin_password
+                    .as_ref()
+                    .map(|_| "<configured>"),
+            )
+            .finish()
+    }
 }
 
 impl Config {
-    /// Reads [`BIND_ENV`] from the process environment.
+    /// Reads [`BIND_ENV`] and [`DATABASE_URL_ENV`] from the process environment.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let value = match std::env::var(BIND_ENV) {
-            Ok(value) => value,
-            Err(VarError::NotPresent) => return Self::from_bind_value(None),
+        let bind = match std::env::var(BIND_ENV) {
+            Ok(value) => Some(value),
+            Err(VarError::NotPresent) => None,
             Err(VarError::NotUnicode(_)) => {
                 return Err(ConfigError::InvalidBind {
                     value: "<non-unicode>".to_string(),
@@ -44,7 +86,22 @@ impl Config {
                 })
             }
         };
-        Self::from_bind_value(Some(&value))
+        let config = Self::from_bind_value(bind.as_deref())?;
+        let database_url = match std::env::var(DATABASE_URL_ENV) {
+            Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+            Ok(_) | Err(VarError::NotPresent) => None,
+            Err(VarError::NotUnicode(_)) => return Err(ConfigError::InvalidDatabaseUrl),
+        };
+        let git_root = optional_nonempty_path(GIT_ROOT_ENV)?;
+        let session_secret = optional_nonempty_string(SESSION_SECRET_ENV)?;
+        let bootstrap_admin_password = optional_nonempty_string(BOOTSTRAP_ADMIN_PASSWORD_ENV)?;
+        Ok(Self {
+            bind: config.bind,
+            database_url,
+            git_root,
+            session_secret,
+            bootstrap_admin_password,
+        })
     }
 
     /// Parses a listen address, falling back to [`DEFAULT_BIND`] when absent.
@@ -57,12 +114,67 @@ impl Config {
             value: raw.to_string(),
             reason: error.to_string(),
         })?;
-        Ok(Self { bind })
+        Ok(Self {
+            bind,
+            database_url: None,
+            git_root: None,
+            session_secret: None,
+            bootstrap_admin_password: None,
+        })
     }
 
     /// The validated listen address.
-    pub fn bind(self) -> SocketAddr {
+    pub fn bind(&self) -> SocketAddr {
         self.bind
+    }
+
+    /// The configured PostgreSQL URL, if present.
+    pub fn database_url(&self) -> Option<&str> {
+        self.database_url.as_deref()
+    }
+
+    /// Bare repository storage root, if configured.
+    pub fn git_root(&self) -> Option<&PathBuf> {
+        self.git_root.as_ref()
+    }
+
+    /// Session signing secret for cookies.
+    pub fn session_secret(&self) -> Option<&str> {
+        self.session_secret.as_deref()
+    }
+
+    /// Optional password used once to seed the default admin.
+    pub fn bootstrap_admin_password(&self) -> Option<&str> {
+        self.bootstrap_admin_password.as_deref()
+    }
+
+    /// Whether product API routes should be active.
+    pub fn product_api_enabled(&self) -> bool {
+        self.database_url.is_some() && self.git_root.is_some() && self.session_secret.is_some()
+    }
+}
+
+fn optional_nonempty_string(name: &str) -> Result<Option<String>, ConfigError> {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value.trim().to_owned())),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(ConfigError::InvalidEnv {
+            variable: name.to_string(),
+            reason: "value is not valid unicode".to_string(),
+        }),
+    }
+}
+
+fn optional_nonempty_path(name: &str) -> Result<Option<PathBuf>, ConfigError> {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(PathBuf::from(value.trim()))),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(ConfigError::InvalidEnv {
+            variable: name.to_string(),
+            reason: "value is not valid unicode".to_string(),
+        }),
     }
 }
 
@@ -71,12 +183,18 @@ impl Config {
 pub enum ConfigError {
     #[error("invalid {BIND_ENV} value {value:?}: {reason}")]
     InvalidBind { value: String, reason: String },
+    #[error("{DATABASE_URL_ENV} must be valid unicode")]
+    InvalidDatabaseUrl,
+    #[error("invalid {variable} value: {reason}")]
+    InvalidEnv { variable: String, reason: String },
 }
 
 impl ErrorCode for ConfigError {
     fn code(&self) -> &'static str {
         match self {
-            Self::InvalidBind { .. } => "invalid_config",
+            Self::InvalidBind { .. } | Self::InvalidDatabaseUrl | Self::InvalidEnv { .. } => {
+                "invalid_config"
+            }
         }
     }
 }

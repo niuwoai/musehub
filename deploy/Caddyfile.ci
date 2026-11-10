@@ -1,0 +1,28 @@
+# CI / lab: HTTP on :8080, static web + API same as production paths (no Vite dev server).
+
+:8080 {
+  encode gzip
+
+  @api path /api /api/* /git /git/* /mcp /mcp/*
+  handle @api {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /healthz {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /readyz {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /version {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle {
+    root * /srv/web
+    try_files {path} /index.html
+    file_server
+  }
+}

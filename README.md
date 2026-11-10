@@ -1,12 +1,12 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc1`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc4`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
 MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台的私有部署项目，连接 Git 托管、Issue、Agent 开发、PR、流水线、Release 和部署。它是独立项目，模型网关只是可配置的外部依赖。
 
-当前已有设计文档、最小 Rust 服务和最小 Web。没有账号、Git 托管、数据库 migration、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
+当前已有设计文档、最小 Rust 服务、最小 Web，以及只覆盖身份表的 PostgreSQL migration。没有账号功能、Git 托管、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
 
 ## 文档导航
 
@@ -33,7 +33,7 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 
 - 服务端、调度器、Runner、MCP 适配层使用 Rust；React + TypeScript + i18n 负责 Web。
 - 第一版使用标准 Git 子进程实现协议与写操作，不从零实现 pack/协议引擎。
-- PostgreSQL 保存业务与调度状态；bare Git 仓库保存代码；本地制品存储作为首版默认，OCI 镜像放外部私有 Registry。
+- 业务数据库只支持 PostgreSQL，保存业务与调度状态；bare Git 仓库保存代码；本地制品存储作为首版默认，OCI 镜像放外部私有 Registry。
 - 模块化单体控制面 + 独立 Linux Runner；构建与 Agent 工作空间隔离；部署 Runner 独立授权。
 - 第一版部署目标为单台 Linux 上的 Docker Compose 应用；先支持测试环境与人工批准的受保护环境。
 - 一个通用受控进程适配协议，一个完成实测的 Agent 集成；不承诺所有 CLI、模型通用。
@@ -43,35 +43,73 @@ MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台
 
 ```text
 musehub/
-  VERSION                    # 单一版本源，当前 0.1.0-rc1
-  Cargo.toml                 # workspace：core、server、git-probe
+  VERSION                    # 单一版本源（当前见 VERSION 文件）
+  Cargo.toml                 # workspace：core、server、探针、migrate
   crates/musehub-core/       # 版本、配置与稳定错误码
-  crates/musehub-server/     # /healthz、/readyz、/version
+  crates/musehub-server/     # 健康检查 + 产品 API（登录/仓库/Git HTTP/Issue/Agent）
+  crates/musehub-app/        # 产品领域逻辑（REST）
+  crates/musehub-agent-adapter/ # Agent 适配层 + reference 二进制
+  crates/musehub-migrate/    # 显式 PostgreSQL migration；Web 启动不调用
   crates/musehub-git-probe/  # 本地 bare 仓库 clone/commit/push 探针
   crates/musehub-runner-probe/ # 本地进程隔离、超时与取消；不是 rootless 证据
   crates/musehub-container-probe/ # Colima Docker digest 与 socket 检查；不是 rootless 证据
+  crates/musehub-rootless-probe/ # Colima Linux VM 内的单用户 rootless 证据
+  crates/musehub-ssh-probe/  # Colima Linux VM 内的单用户 OpenSSH forced command 证据
   crates/musehub-agent-probe/  # 本地 fixture 契约；不是生产 Agent 集成
+  crates/musehub-mcp-probe/  # M0 rmcp stdio + Streamable HTTP 互操作探针；不是生产 MCP 服务
+  migrations/                # 0001–0004（identity、repositories、issues/agent_runs）
+  docs/PROGRESS.md           # 真实 P0 进度清单
   web/                       # React / Vite / TypeScript / yarn / i18n
   docs/
 ```
 
-规划中的 `application`、`store`、完整 Git 服务、`runner`、`agent`、`mcp`、`cli`、`migrations/` 和 `deploy/` 都还没有。
+产品栈安装见 `deploy/`（`docker-compose.yml`、`RUNBOOK.md`、TLS `Caddyfile` 示例）；CI `product-stack` 从干净构建验网关静态站 + API 主线。独立 `runner`、审计、回滚等见 `docs/PROGRESS.md`。
 
 初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
 
 ## 本地验证
 
-复制 `.env.example` 了解可选配置。当前只读取 `MUSEHUB_BIND`，默认 `127.0.0.1:8080`，不需要数据库。
+复制 `.env.example` 了解配置。产品 API 需要 **`DATABASE_URL` + `MUSEHUB_GIT_ROOT` + `MUSEHUB_SESSION_SECRET`**；一次性引导可设 `MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD`（创建 `demo` 组织与 `admin` 用户）。服务启动**不**自动 migration。
 
 ```sh
-cargo test --workspace
+# 数据库（示例）
+export DATABASE_URL=postgres://localhost/musehub
+export MUSEHUB_GIT_ROOT=/tmp/musehub-git
+export MUSEHUB_SESSION_SECRET=$(openssl rand -hex 32)
+export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=dev-change-me
+
+cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo run -p musehub-server
+
 yarn --cwd web install --frozen-lockfile
-yarn --cwd web test
-yarn --cwd web build
+yarn --cwd web dev   # 代理 /api 与 /git
+
+# 测试
+./scripts/cargo-test-portable.sh
+./scripts/setup-mcp-matrix-python-deps.sh   # MCP 矩阵所需
+cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
+
+# 状态备份/恢复（运维首版；需 pg_dump/pg_restore）
+./scripts/backup-musehub-state.sh /tmp/musehub-backup
+./scripts/restore-musehub-state.sh /tmp/musehub-backup   # 破坏性恢复
+./scripts/verify-backup-restore.sh                        # PG + bare main OID + artifact SHA
+./scripts/verify-compose-runner-e2e.sh                    # 需 Docker：真实 pull/up/安全 inspect（CI 门禁）
 ```
 
-`/healthz` 只表示进程存活。数据库和 Git 存储尚未接入，所以 `/readyz` 返回 HTTP 503，不会把服务报告为就绪。
+## 验收主线（已跑 vs 未跑）
+
+| 步骤 | 状态 | 证据 |
+|------|------|------|
+| 参考 Agent 端到端 | `[x]` | `product_slice`、`run-web-e2e.sh`；远程 worker：`MUSEHUB_AGENT_EXECUTOR=remote` + `verify-remote-agent-e2e.sh` |
+| PR / 流水线 / mock 部署 / trace | `[x]` | `pipeline_delivery_e2e` |
+| 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
+| **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
+| **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
+| Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
+| **生产 compose 远程 worker 全链** | `[x]` 本地 | `verify-product-production-stack-e2e.sh`；`install-production-compose.sh` |
+| OCI / 多环境 / 业务 MCP | `[~]` | **51** 工具 + **22** 写幂等 + **5** §13 读；`writes_thin`（merge/respond/pipeline 幂等）+ `resources_v1_*`（含跨 org）；**无** OAuth 远程 |
+
+`/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200，并暴露 `compose_adapter_mode`（产品镜像默认 **mock**）与 `pipeline_executor`（默认 **in_process**；远程 worker 为 `MUSEHUB_PIPELINE_EXECUTOR=remote`）。
 
 ## M0 进度
 
@@ -84,11 +122,16 @@ yarn --cwd web build
 - 本地进程探针覆盖工作目录约束、超时终止和取消后不再写文件。
 - 本地 fixture 覆盖 NDJSON 事件、空 diff 拒绝，以及取消后没有新文件或提交。
 - Colima Docker VM 上按 busybox digest 启动 Compose，实际运行镜像 ID 与请求 digest 的镜像 ID 一致，容器没有挂载 Docker socket。
+- Colima Linux VM 内的独立 rootless Docker 报告 `name=rootless`，数据目录位于用户目录，BuildKit 构建成功，容器内看不到 Docker socket。
+- Colima Linux VM 内的临时 OpenSSH 验证 forced command：服务端注入身份，客户端不能覆盖；只接受明确的 `git-upload-pack` / `git-receive-pack` 与一个逻辑路径；两个主体并发时各自看到自己的身份；客户端提前断开后没有仓库文件或提交。没有执行真实 Git pack。
+- `musehub-migrate` 对隔离的 PostgreSQL 17 执行 `0001_common` 与 `0002_identity` 的 up、down、up。身份表具备 `created_at`、`updated_at` 与更新触发器，外键有前缀索引。Web 启动不迁移；仓库、Issue、流水线等其余表仍未落地。
+- `musehub-mcp-probe` 在 Linux 本地用 **两种独立 SDK 客户端**（`rust-rmcp` 3.8.0 + 官方 Python `mcp` 2.3.0）各覆盖 stdio 与 Streamable HTTP；见 `docs/m0-rmcp-matrix.md`。这是 **M0 互操作探针**（`m0_mcp_interop_matrix_passed` 由 `cargo test -p musehub-mcp-probe --test matrix` 验证），不是生产 `/mcp`；写工具幂等 **未验证**；OAuth 不在范围。
 
 尚未完成，不能把 M0 标为通过：
 
-- OpenSSH forced command 与 Rust 网关的身份传递、并发和取消。
 - 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
-- Linux rootless 隔离构建。当前 Docker 证据来自 Colima VM，不是 rootless；它只证明 digest 一致且容器未挂载 Docker socket。
-- rmcp 的 stdio/HTTP 客户端兼容验证。
+- 生产级多租户隔离。当前 rootless 与 OpenSSH 证据只覆盖 Colima Linux VM 内的单个普通用户和临时 sshd，不代表不可信贡献者隔离，也不是选定的 Git 服务实现。
+- 生产 MCP 服务（完整工具目录、领域授权、写工具幂等、OAuth）与正式兼容矩阵发布。
 - 同类产品最小任务试用和差异结论。
+
+**环境相关测试（本机证据，Linux CI 可能失败且未用 skip 掩盖）：** Colima/Homebrew 绑定的 `musehub-container-probe`、`musehub-rootless-probe`、`musehub-ssh-probe` 集成测试，以及 Homebrew PostgreSQL@17 上的 `musehub-migrate` 集成测试。若在 macOS 开发者机上跑全量 `cargo test --workspace`，需具备对应路径的二进制。

@@ -34,7 +34,7 @@ V1 不引入 Kafka、Redis、Elasticsearch 或 Kubernetes 作为必需基础设�
 | 层 | 选择 | 责任与限制 |
 |---|---|---|
 | Rust HTTP | Tokio + Axum + Tower | REST、会话、限流、超时、追踪；版本在 M0 固定 |
-| 数据访问 | SQLx + PostgreSQL | 显式 SQL、事务、up/down migration；不由 Web 启动隐式迁移 |
+| 数据访问 | SQLx + 仅 PostgreSQL | 显式 SQL、事务、up/down migration；不由 Web 启动隐式迁移；不做多数据库适配 |
 | Git | 标准 Git CLI / git-http-backend / OpenSSH | 不拼 shell；参数数组、路径白名单、受限环境变量 |
 | MCP | 官方 Rust SDK rmcp | 适配应用服务；协议能力按实际协商与测试公布 |
 | Web | React + Vite + TypeScript + yarn | TanStack Query、i18n；制品可内嵌服务端 |

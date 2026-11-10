@@ -1,0 +1,35 @@
+# Example production gateway: static SPA + reverse proxy to API (TLS).
+# Replace example.local with your hostname and use real certificates (not `tls internal`).
+
+{
+  admin off
+}
+
+example.local {
+  tls internal
+
+  encode gzip
+
+  @api path /api /api/* /git /git/* /mcp /mcp/*
+  handle @api {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /healthz {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /readyz {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle /version {
+    reverse_proxy musehub-server:8080
+  }
+
+  handle {
+    root * /srv/web
+    try_files {path} /index.html
+    file_server
+  }
+}
