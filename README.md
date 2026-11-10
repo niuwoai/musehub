@@ -4,9 +4,25 @@
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
-MuseHub 是一个计划采用 Rust 服务端、独立 Runner 和 React 控制台的私有部署项目，连接 Git 托管、Issue、Agent 开发、PR、流水线、Release 和部署。它是独立项目，模型网关只是可配置的外部依赖。
+MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc4`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。
 
-当前已有设计文档、最小 Rust 服务、最小 Web，以及只覆盖身份表的 PostgreSQL migration。没有账号功能、Git 托管、流水线、Agent、Release 或部署，也没有已验证的性能结果。下述范围仍是首版目标；商业定位、许可证和正式版本日期仍待决定。
+**诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、**Live Codex** 在线凭据、OAuth/SAML、多区域 HA。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
+
+## 自托管安装（单机 Linux · Compose）
+
+面向首名付费租户的推荐路径（真实产品栈，非演示 mock profile）：
+
+| 步骤 | 命令 / 文档 |
+|------|----------------|
+| 1. 克隆与依赖 | Docker Engine + Compose v2、`jq`、`curl` |
+| 2. 生产控制面 | `./scripts/install-production-compose.sh` → 生成 `deploy/.env`（**保存输出的 admin 密码**） |
+| 3. Runner PAT + worker | `./scripts/configure-production-runner-pat.sh --start`（写入 `MUSEHUB_RUNNER_PAT` 并启动 `musehub-runner`） |
+| 4. 打开 UI | 浏览器访问 `http://<主机>:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}`，使用 `admin` 登录 |
+| 5. 升级 / 迁移 / 备份 | [deploy/RUNBOOK.md](deploy/RUNBOOK.md)；迁移由容器 entrypoint 自动 `up`；`scripts/backup-musehub-state.sh` |
+
+实验室 **demo profile**（API 进程内执行器、compose-mock）：`deploy/RUNBOOK.md` Quick start 或 `./scripts/verify-clean-install-runbook.sh`。
+
+**尚未包含 systemd 单元**；Compose `restart: unless-stopped` 承担进程守护。外置 OCI Registry 地址在 `deploy/.env` 设置 `MUSEHUB_OCI_REGISTRY`（生产 profile 默认要求 pipeline OCI）。
 
 ## 文档导航
 

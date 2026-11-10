@@ -41,7 +41,7 @@ Git LFS、跨仓库 fork PR、持续镜像、代码语义索引、原生 K8s/Hel
 
 ## 当前实现
 
-已完成最小服务、单一版本源、本地 Git 探针、本地进程探针、Agent fixture、rmcp M0 互操作探针（stdio + Streamable HTTP，见 `docs/m0-rmcp-matrix.md`）、Colima Docker digest 探针、Colima Linux VM 内的单用户 rootless 探针、Colima Linux VM 内的单用户 OpenSSH forced command 探针和最小 Web。还没有用户、仓库托管、Issue、PR、流水线、真实 Agent、Release、生产 MCP 或生产部署。rootless、OpenSSH 与 MCP 探针都不是生产能力。
+**产品路径（Linux CI / Compose）：** 账号与组织、Git HTTP、Issue/计划、参考 Agent 与 codex-sim、PR/流水线/Release/Compose 部署、备份恢复、产品 MCP 与多数 REST 已在 acceptance 与安全 E2E 中验证；单机安装见 README「自托管安装」与 `deploy/RUNBOOK.md`。**仍未验收：** 公网真实 TLS、物理双机长期运行、Live Codex 在线、OAuth。**探针层（M0）：** Colima digest/rootless/SSH、rmcp 互操作探针（`musehub-mcp-probe`）与 Agent fixture — 不代表生产能力。
 
 ## 当前待办
 
