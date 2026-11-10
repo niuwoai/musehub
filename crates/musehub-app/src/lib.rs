@@ -98,7 +98,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
-        .route("/api/v1/auth/change-password", post(change_password_handler))
+        .route(
+            "/api/v1/auth/change-password",
+            post(change_password_handler),
+        )
         .route("/api/v1/me", get(me_handler))
         .route(
             "/api/v1/tokens",
