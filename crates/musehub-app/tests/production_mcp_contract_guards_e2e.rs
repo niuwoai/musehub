@@ -20,7 +20,10 @@ use tokio::net::TcpListener;
 use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
-async fn mcp_client(app: &axum::Router, token: &str) -> rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig> {
+async fn mcp_client(
+    app: &axum::Router,
+    token: &str,
+) -> rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = app.clone();
@@ -132,13 +135,15 @@ async fn contract_repository_tree_rejects_foreign_repo() {
     };
     let client = mcp_client(&app, &token).await;
     let denied = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_tree").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_b.0.to_string())),
-                ("commit_oid".into(), json!(main_oid)),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_tree").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_b.0.to_string())),
+                    ("commit_oid".into(), json!(main_oid)),
+                ]),
+            ),
+        )
         .await
         .expect("call");
     assert!(

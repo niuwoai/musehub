@@ -25,8 +25,8 @@ use crate::mcp::auth::{self, deny_runner_only_pat, require_scope, resolve_repo};
 use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
     agent_run_cancel, agent_run_start, deployment_rollback, deployment_start, issue_create,
-    issue_update, pr_create, repository_create, IssueUpdatePatch, pipeline_run, plan_accept,
-    plan_create, pr_review, repo_summary_json, PlanStepInput,
+    issue_update, pipeline_run, plan_accept, plan_create, pr_create, pr_review, repo_summary_json,
+    repository_create, IssueUpdatePatch, PlanStepInput,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{

@@ -303,6 +303,7 @@ dc cp \
   musehub-server:/var/lib/musehub/artifacts/. "$ART_EX/artifacts"
 export MUSEHUB_GIT_ROOT="$GIT_EX/git"
 export MUSEHUB_ARTIFACT_ROOT="$ART_EX/artifacts"
+export DATABASE_URL
 chmod +x "$ROOT/scripts/backup-musehub-state.sh" "$ROOT/scripts/restore-musehub-state.sh"
 "$ROOT/scripts/backup-musehub-state.sh" "$BACKUP_DIR"
 

@@ -68,10 +68,8 @@ async fn issue_pat(app: &axum::Router, cookie: &str, body: String) -> String {
         )
         .await
         .unwrap();
-    let pat_json: serde_json::Value = serde_json::from_slice(
-        &pat_resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let pat_json: serde_json::Value =
+        serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     pat_json["token"].as_str().unwrap().to_string()
 }
 
@@ -89,11 +87,7 @@ fn push_feature_branch(git_root: &std::path::Path, storage_key: Uuid, branch: &s
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     assert!(Command::new("git")
-        .args([
-            "clone",
-            bare.to_str().unwrap(),
-            work.to_str().unwrap(),
-        ])
+        .args(["clone", bare.to_str().unwrap(), work.to_str().unwrap(),])
         .status()
         .unwrap()
         .success());
@@ -112,7 +106,15 @@ fn push_feature_branch(git_root: &std::path::Path, storage_key: Uuid, branch: &s
         .success());
     assert!(Command::new("git")
         .current_dir(work)
-        .args(["-c", "user.email=itest@musehub.local", "-c", "user.name=itest", "commit", "-m", "feat"])
+        .args([
+            "-c",
+            "user.email=itest@musehub.local",
+            "-c",
+            "user.name=itest",
+            "commit",
+            "-m",
+            "feat"
+        ])
         .status()
         .unwrap()
         .success());
@@ -158,7 +160,9 @@ async fn mcp_repository_create_idempotent_and_issue_update_revision() {
         ("description".into(), json!("via mcp")),
     ]);
     let first = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(args.clone()))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(args.clone()),
+        )
         .await
         .expect("create");
     assert!(!first.is_error.unwrap_or(true));
@@ -168,10 +172,7 @@ async fn mcp_repository_create_idempotent_and_issue_update_revision() {
         .await
         .expect("replay");
     assert!(!second.is_error.unwrap_or(true));
-    assert_eq!(
-        tool_data(&second)["id"].as_str().unwrap(),
-        repo_id.as_str()
-    );
+    assert_eq!(tool_data(&second)["id"].as_str().unwrap(), repo_id.as_str());
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM repositories WHERE org_id = $1 AND slug_normalized = $2",
     )
@@ -253,13 +254,15 @@ async fn mcp_repository_create_member_forbidden_and_cross_org() {
         .unwrap();
     let client = mcp_client(&app, &member_token).await;
     let denied = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("slug".into(), json!("member-denied")),
-                ("idempotency_key".into(), json!("denied-key")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("slug".into(), json!("member-denied")),
+                    ("idempotency_key".into(), json!("denied-key")),
+                ]),
+            ),
+        )
         .await
         .expect("call");
     assert!(
@@ -276,13 +279,15 @@ async fn mcp_repository_create_member_forbidden_and_cross_org() {
     let admin_client = mcp_client(&app, &admin_token).await;
     let other_org = Uuid::new_v4();
     let cross = admin_client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(other_org.to_string())),
-                ("slug".into(), json!("cross-org")),
-                ("idempotency_key".into(), json!("cross-key")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(other_org.to_string())),
+                    ("slug".into(), json!("cross-org")),
+                    ("idempotency_key".into(), json!("cross-key")),
+                ]),
+            ),
+        )
         .await
         .expect("cross");
     assert!(
@@ -314,13 +319,15 @@ async fn mcp_pr_create_and_list_on_branch() {
     let client = mcp_client(&app, &token).await;
     let slug = format!("mcp-pr-{}", Uuid::new_v4().simple());
     let create_repo = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("slug".into(), json!(slug.clone())),
-                ("idempotency_key".into(), json!("pr-repo-key")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("slug".into(), json!(slug.clone())),
+                    ("idempotency_key".into(), json!("pr-repo-key")),
+                ]),
+            ),
+        )
         .await
         .expect("repo");
     assert!(!create_repo.is_error.unwrap_or(true));
@@ -333,31 +340,35 @@ async fn mcp_pr_create_and_list_on_branch() {
         .unwrap();
     let head = push_feature_branch(git_root.path(), storage_key.0, "feature/mcp");
     let pr = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("title".into(), json!("MCP PR")),
-                ("body".into(), json!("")),
-                ("source_branch".into(), json!("feature/mcp")),
-                ("target_branch".into(), json!("main")),
-                ("expected_head_oid".into(), json!(head)),
-                ("issue_revision_ids".into(), json!([])),
-                ("draft".into(), json!(false)),
-                ("idempotency_key".into(), json!("pr-create-key")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("title".into(), json!("MCP PR")),
+                    ("body".into(), json!("")),
+                    ("source_branch".into(), json!("feature/mcp")),
+                    ("target_branch".into(), json!("main")),
+                    ("expected_head_oid".into(), json!(head)),
+                    ("issue_revision_ids".into(), json!([])),
+                    ("draft".into(), json!(false)),
+                    ("idempotency_key".into(), json!("pr-create-key")),
+                ]),
+            ),
+        )
         .await
         .expect("pr create");
     assert!(!pr.is_error.unwrap_or(true), "{pr:?}");
     let listed = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_list").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("state".into(), json!("open")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_list").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("state".into(), json!("open")),
+                ]),
+            ),
+        )
         .await
         .expect("pr list");
     assert!(!listed.is_error.unwrap_or(true));

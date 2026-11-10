@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use axum::body::Body;
 use axum::http::{header, Request};
-use http_body_util::BodyExt;
 use http::HeaderValue;
+use http_body_util::BodyExt;
 use rmcp::model::{ReadResourceRequestParams, ResourceContents};
 use rmcp::{
     transport::{
@@ -208,7 +208,9 @@ async fn mcp_v1_resource_reads_match_capabilities_catalog() {
     .unwrap();
 
     let client = mcp_client(&app, &token).await;
-    use musehub_app::mcp::capabilities::{V1_RESOURCE_READS_IMPLEMENTED, V1_RESOURCE_URI_TEMPLATES};
+    use musehub_app::mcp::capabilities::{
+        V1_RESOURCE_READS_IMPLEMENTED, V1_RESOURCE_URI_TEMPLATES,
+    };
     let listed = client.list_resources(None).await.expect("list");
     assert_eq!(listed.resources.len(), V1_RESOURCE_URI_TEMPLATES.len());
 
@@ -395,13 +397,12 @@ async fn mcp_v1_resource_reads_denied_for_other_org_pat() {
     let dep_id = Uuid::new_v4();
     let rel_id = Uuid::new_v4();
     let pipe_id = Uuid::new_v4();
-    let env_id: (Uuid,) = sqlx::query_as(
-        "SELECT id FROM environments WHERE repo_id = $1 AND slug = 'test'",
-    )
-    .bind(repo_id.0)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let env_id: (Uuid,) =
+        sqlx::query_as("SELECT id FROM environments WHERE repo_id = $1 AND slug = 'test'")
+            .bind(repo_id.0)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state, requested_by, run_attempt_id, run_kind)
          VALUES ($1,$2,$3,$4,'ci','succeeded',$5,$6,'release_build')",

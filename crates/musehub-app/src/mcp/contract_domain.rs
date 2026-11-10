@@ -74,7 +74,10 @@ pub async fn copy_criteria_to_revision(
     Ok(())
 }
 
-pub async fn criteria_for_revision(pool: &sqlx::PgPool, revision_id: Uuid) -> Result<Vec<Value>, AppError> {
+pub async fn criteria_for_revision(
+    pool: &sqlx::PgPool,
+    revision_id: Uuid,
+) -> Result<Vec<Value>, AppError> {
     let rows = sqlx::query_as::<_, (i32, String, String, bool)>(
         "SELECT ordinal, description, verification_method, required
          FROM issue_acceptance_criteria WHERE issue_revision_id = $1 ORDER BY ordinal",
@@ -119,9 +122,8 @@ pub async fn issue_criteria_replace(
     let Some((id, number, title, issue_state, current_revision_id)) = row else {
         return Err(AppError::NotFound);
     };
-    let revision_id = current_revision_id.ok_or_else(|| {
-        AppError::Validation("issue has no current revision".to_string())
-    })?;
+    let revision_id = current_revision_id
+        .ok_or_else(|| AppError::Validation("issue has no current revision".to_string()))?;
     let rev = sqlx::query_as::<_, (i32, String, String)>(
         "SELECT revision, title, body FROM issue_revisions WHERE id = $1 AND issue_id = $2",
     )
@@ -157,7 +159,9 @@ pub async fn issue_criteria_replace(
     for (idx, c) in criteria.iter().enumerate() {
         let desc = c.description.trim();
         if desc.is_empty() {
-            return Err(AppError::Validation("criterion description required".to_string()));
+            return Err(AppError::Validation(
+                "criterion description required".to_string(),
+            ));
         }
         sqlx::query(
             "INSERT INTO issue_acceptance_criteria
@@ -203,16 +207,17 @@ pub async fn discussion_list(
     limit: i64,
 ) -> Result<(Vec<Value>, bool), AppError> {
     if !matches!(target_kind, "issue" | "pr") {
-        return Err(AppError::Validation("invalid discussion target kind".to_string()));
+        return Err(AppError::Validation(
+            "invalid discussion target kind".to_string(),
+        ));
     }
     if target_kind == "issue" {
-        let ok = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT id FROM issues WHERE id = $1 AND repo_id = $2",
-        )
-        .bind(target_id)
-        .bind(access.repo_id)
-        .fetch_optional(&state.pool)
-        .await?;
+        let ok =
+            sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
+                .bind(target_id)
+                .bind(access.repo_id)
+                .fetch_optional(&state.pool)
+                .await?;
         if ok.is_none() {
             return Err(AppError::NotFound);
         }
@@ -273,7 +278,9 @@ pub async fn discussion_comment(
         return Err(AppError::Validation("invalid comment body".to_string()));
     }
     if anchor.is_some() && target_kind != "pr" {
-        return Err(AppError::Validation("anchor only allowed on PR discussions".to_string()));
+        return Err(AppError::Validation(
+            "anchor only allowed on PR discussions".to_string(),
+        ));
     }
     discussion_list(state, access, target_kind, target_id, 0).await?;
     let id = Uuid::new_v4();
@@ -357,9 +364,23 @@ pub async fn pr_update(
     state_patch: Option<&str>,
 ) -> Result<Value, AppError> {
     if title.is_none() && state_patch.is_none() {
-        return Err(AppError::Validation("patch must include fields".to_string()));
+        return Err(AppError::Validation(
+            "patch must include fields".to_string(),
+        ));
     }
-    let row = sqlx::query_as::<_, (i64, i64, String, String, String, Option<String>, Option<String>, String)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+        ),
+    >(
         "SELECT row_version, number, title, source_branch, target_branch, head_oid, base_oid, state
          FROM pull_requests WHERE id = $1 AND repo_id = $2",
     )
@@ -367,8 +388,16 @@ pub async fn pr_update(
     .bind(access.repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((row_version, number, cur_title, source_branch, target_branch, head_oid, base_oid, pr_state)) =
-        row
+    let Some((
+        row_version,
+        number,
+        cur_title,
+        source_branch,
+        target_branch,
+        head_oid,
+        base_oid,
+        pr_state,
+    )) = row
     else {
         return Err(AppError::NotFound);
     };
@@ -378,7 +407,9 @@ pub async fn pr_update(
         ));
     }
     if pr_state == "merged" {
-        return Err(AppError::Validation("cannot update merged pull request".to_string()));
+        return Err(AppError::Validation(
+            "cannot update merged pull request".to_string(),
+        ));
     }
     let mut new_title = cur_title;
     if let Some(t) = title {
@@ -488,13 +519,12 @@ pub async fn agent_run_messages(
     agent_run_id: Uuid,
     limit: i64,
 ) -> Result<(Vec<Value>, bool), AppError> {
-    let run = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM agent_runs WHERE id = $1 AND repo_id = $2",
-    )
-    .bind(agent_run_id)
-    .bind(access.repo_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let run =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM agent_runs WHERE id = $1 AND repo_id = $2")
+            .bind(agent_run_id)
+            .bind(access.repo_id)
+            .fetch_optional(&state.pool)
+            .await?;
     if run.is_none() {
         return Err(AppError::NotFound);
     }
@@ -685,7 +715,7 @@ pub async fn pipeline_get(
         .into_iter()
         .map(|(id, key, st)| json!({ "id": id.to_string(), "job_key": key, "state": st }))
         .collect();
-  let checks = sqlx::query_as::<_, (String, String)>(
+    let checks = sqlx::query_as::<_, (String, String)>(
         "SELECT check_name, state FROM pr_check_runs WHERE head_oid = $1 LIMIT 20",
     )
     .bind(&source_oid)
@@ -712,13 +742,12 @@ pub async fn job_logs(
     cursor: Option<i32>,
     max_bytes: usize,
 ) -> Result<Value, AppError> {
-    let job = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM pipeline_jobs WHERE id = $1 AND repo_id = $2",
-    )
-    .bind(job_id)
-    .bind(repo_id)
-    .fetch_optional(pool)
-    .await?;
+    let job =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM pipeline_jobs WHERE id = $1 AND repo_id = $2")
+            .bind(job_id)
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
     if job.is_none() {
         return Err(AppError::NotFound);
     }
@@ -774,10 +803,14 @@ pub async fn job_retry(
         return Err(AppError::NotFound);
     };
     if job_key == "deploy" {
-        return Err(AppError::Validation("deploy job cannot use generic retry".to_string()));
+        return Err(AppError::Validation(
+            "deploy job cannot use generic retry".to_string(),
+        ));
     }
     if job_state != "failed" {
-        return Err(AppError::Validation("only failed jobs may be retried".to_string()));
+        return Err(AppError::Validation(
+            "only failed jobs may be retried".to_string(),
+        ));
     }
     sqlx::query(
         "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
@@ -853,9 +886,7 @@ pub async fn pipeline_cancel(
     .execute(pool)
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::Validation(
-            "pipeline not cancelable".to_string(),
-        ));
+        return Err(AppError::Validation("pipeline not cancelable".to_string()));
     }
     sqlx::query(
         "UPDATE pipeline_jobs SET state = 'cancel_requested', updated_at = CURRENT_TIMESTAMP
@@ -870,7 +901,11 @@ pub async fn pipeline_cancel(
     }))
 }
 
-pub async fn release_list(pool: &sqlx::PgPool, repo_id: Uuid, limit: i64) -> Result<(Vec<Value>, bool), AppError> {
+pub async fn release_list(
+    pool: &sqlx::PgPool,
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<(Vec<Value>, bool), AppError> {
     let fetch = limit + 1;
     let rows = sqlx::query_as::<_, (Uuid, String, String, String, String)>(
         "SELECT id, version, tag_name, commit_oid, state FROM releases
@@ -944,10 +979,14 @@ pub async fn release_publish_mcp(
         return Err(AppError::NotFound);
     };
     if commit != expected_commit_oid {
-        return Err(AppError::Validation("expected_commit_oid mismatch".to_string()));
+        return Err(AppError::Validation(
+            "expected_commit_oid mismatch".to_string(),
+        ));
     }
     if manifest.as_deref() != Some(expected_manifest_hash) {
-        return Err(AppError::Validation("expected_manifest_hash mismatch".to_string()));
+        return Err(AppError::Validation(
+            "expected_manifest_hash mismatch".to_string(),
+        ));
     }
     let view = release::publish_release_core(
         state,
@@ -964,7 +1003,11 @@ pub async fn release_publish_mcp(
     }))
 }
 
-pub async fn environment_list(pool: &sqlx::PgPool, repo_id: Uuid, limit: i64) -> Result<(Vec<Value>, bool), AppError> {
+pub async fn environment_list(
+    pool: &sqlx::PgPool,
+    repo_id: Uuid,
+    limit: i64,
+) -> Result<(Vec<Value>, bool), AppError> {
     let fetch = limit + 1;
     let rows = sqlx::query_as::<_, (Uuid, String, String, i64)>(
         "SELECT id, slug, name, row_version FROM environments WHERE repo_id = $1 ORDER BY slug LIMIT $2",
@@ -995,13 +1038,12 @@ pub async fn deployment_list(
     environment_id: Uuid,
     limit: i64,
 ) -> Result<(Vec<Value>, bool), AppError> {
-    let env = sqlx::query_as::<_, (i32,)>(
-        "SELECT 1 FROM environments WHERE id = $1 AND repo_id = $2",
-    )
-    .bind(environment_id)
-    .bind(repo_id)
-    .fetch_optional(pool)
-    .await?;
+    let env =
+        sqlx::query_as::<_, (i32,)>("SELECT 1 FROM environments WHERE id = $1 AND repo_id = $2")
+            .bind(environment_id)
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
     if env.is_none() {
         return Err(AppError::NotFound);
     }

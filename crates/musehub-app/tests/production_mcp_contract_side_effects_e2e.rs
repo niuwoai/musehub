@@ -23,7 +23,11 @@ use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
 fn tool_data(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    let v = result.structured_content.as_ref().expect("structured").clone();
+    let v = result
+        .structured_content
+        .as_ref()
+        .expect("structured")
+        .clone();
     v.get("data").cloned().unwrap_or(v)
 }
 
@@ -164,15 +168,17 @@ async fn mcp_discussion_comment_persists_row() {
             .unwrap();
     let client = mcp_client(&app, &token).await;
     let issue = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!("iss-side-fx")),
-                ("title".into(), json!("Discuss")),
-                ("body".into(), json!("")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!("iss-side-fx")),
+                    ("title".into(), json!("Discuss")),
+                    ("body".into(), json!("")),
+                ]),
+            ),
+        )
         .await
         .expect("issue");
     let issue_id = tool_data(&issue)["id"].as_str().unwrap().to_string();
@@ -183,10 +189,7 @@ async fn mcp_discussion_comment_persists_row() {
                     ("org_id".into(), json!(org_id.0.to_string())),
                     ("repository_id".into(), json!(repo_id.0.to_string())),
                     ("idempotency_key".into(), json!("disc-side-fx-v1")),
-                    (
-                        "target".into(),
-                        json!({"kind": "issue", "id": issue_id}),
-                    ),
+                    ("target".into(), json!({"kind": "issue", "id": issue_id})),
                     ("body".into(), json!("visible")),
                 ]),
             ),
@@ -236,16 +239,18 @@ async fn mcp_issue_criteria_replace_increments_revision_and_rows() {
             .unwrap();
     let client = mcp_client(&app, &token).await;
     let issue = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!("iss-crit-fx-v1")),
-                ("title".into(), json!("Criteria")),
-                ("body".into(), json!("")),
-                ("criteria".into(), json!([])),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!("iss-crit-fx-v1")),
+                    ("title".into(), json!("Criteria")),
+                    ("body".into(), json!("")),
+                    ("criteria".into(), json!([])),
+                ]),
+            ),
+        )
         .await
         .expect("issue");
     assert!(!issue.is_error.unwrap_or(true));
@@ -319,15 +324,17 @@ async fn mcp_plan_accept_persists_accepted_state() {
             .unwrap();
     let client = mcp_client(&app, &token).await;
     let issue = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!("iss-plan-acc")),
-                ("title".into(), json!("Plan")),
-                ("body".into(), json!("")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!("iss-plan-acc")),
+                    ("title".into(), json!("Plan")),
+                    ("body".into(), json!("")),
+                ]),
+            ),
+        )
         .await
         .expect("issue");
     let revision_id = tool_data(&issue)["current_revision_id"]
@@ -335,37 +342,40 @@ async fn mcp_plan_accept_persists_accepted_state() {
         .unwrap()
         .to_string();
     let plan = client
-        .call_tool(CallToolRequestParams::new("musehub_plan_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("issue_revision_id".into(), json!(revision_id)),
-                ("body".into(), json!("plan")),
-                ("steps".into(), json!([])),
-                ("idempotency_key".into(), json!("plan-acc-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_plan_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("issue_revision_id".into(), json!(revision_id)),
+                    ("body".into(), json!("plan")),
+                    ("steps".into(), json!([])),
+                    ("idempotency_key".into(), json!("plan-acc-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("plan");
     let plan_id = tool_data(&plan)["id"].as_str().unwrap().to_string();
     let accepted = client
-        .call_tool(CallToolRequestParams::new("musehub_plan_accept").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("plan_id".into(), json!(plan_id)),
-                ("idempotency_key".into(), json!("accept-plan-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_plan_accept").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("plan_id".into(), json!(plan_id)),
+                    ("idempotency_key".into(), json!("accept-plan-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("accept");
     assert!(!accepted.is_error.unwrap_or(true));
-    let state: (String,) =
-        sqlx::query_as("SELECT state FROM implementation_plans WHERE id = $1")
-            .bind(Uuid::parse_str(&plan_id).unwrap())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let state: (String,) = sqlx::query_as("SELECT state FROM implementation_plans WHERE id = $1")
+        .bind(Uuid::parse_str(&plan_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(state.0, "accepted");
     client.cancel().await.ok();
 }
@@ -403,28 +413,32 @@ async fn mcp_issue_create_idempotency_key_conflict() {
     let client = mcp_client(&app, &token).await;
     let key = "idem-key-matrix";
     let first = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!(key)),
-                ("title".into(), json!("one")),
-                ("body".into(), json!("")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!(key)),
+                    ("title".into(), json!("one")),
+                    ("body".into(), json!("")),
+                ]),
+            ),
+        )
         .await
         .expect("first");
     assert!(!first.is_error.unwrap_or(true));
     let conflict = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!(key)),
-                ("title".into(), json!("two")),
-                ("body".into(), json!("")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!(key)),
+                    ("title".into(), json!("two")),
+                    ("body".into(), json!("")),
+                ]),
+            ),
+        )
         .await;
     assert!(
         conflict.is_err()
@@ -435,12 +449,11 @@ async fn mcp_issue_create_idempotency_key_conflict() {
                 .unwrap_or(false),
         "idempotency conflict must fail"
     );
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM issues WHERE repo_id = $1")
-            .bind(repo_id.0)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE repo_id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 1);
     client.cancel().await.ok();
 }
@@ -523,27 +536,28 @@ async fn mcp_release_create_persists_draft_row() {
     .unwrap();
     let client = mcp_client(&app, &token).await;
     let rel = client
-        .call_tool(CallToolRequestParams::new("musehub_release_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("version".into(), json!("0.1.0-side")),
-                ("tag_name".into(), json!("v0.1.0-side")),
-                ("commit_oid".into(), json!(oid)),
-                ("pipeline_run_id".into(), json!(pipe_id.to_string())),
-                ("idempotency_key".into(), json!("rel-create-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_release_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("version".into(), json!("0.1.0-side")),
+                    ("tag_name".into(), json!("v0.1.0-side")),
+                    ("commit_oid".into(), json!(oid)),
+                    ("pipeline_run_id".into(), json!(pipe_id.to_string())),
+                    ("idempotency_key".into(), json!("rel-create-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("release");
     assert!(!rel.is_error.unwrap_or(true));
     let rel_id = tool_data(&rel)["id"].as_str().unwrap().to_string();
-    let row: (String,) =
-        sqlx::query_as("SELECT state FROM releases WHERE id = $1")
-            .bind(Uuid::parse_str(&rel_id).unwrap())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let row: (String,) = sqlx::query_as("SELECT state FROM releases WHERE id = $1")
+        .bind(Uuid::parse_str(&rel_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(row.0, "draft");
     client.cancel().await.ok();
 }
@@ -564,13 +578,15 @@ async fn mcp_discussion_resolve_updates_pr_comment() {
     let client = mcp_client(&app, &token).await;
     let slug = format!("resolve-pr-{}", Uuid::new_v4().simple());
     let repo = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("slug".into(), json!(slug.clone())),
-                ("idempotency_key".into(), json!("resolve-repo-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("slug".into(), json!(slug.clone())),
+                    ("idempotency_key".into(), json!("resolve-repo-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("repo");
     let repo_id = tool_data(&repo)["id"].as_str().unwrap().to_string();
@@ -581,20 +597,22 @@ async fn mcp_discussion_resolve_updates_pr_comment() {
         .unwrap();
     let head = push_feature_branch(git_root.path(), storage_key.0, "feature/resolve");
     let pr = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("title".into(), json!("Resolve thread")),
-                ("body".into(), json!("")),
-                ("source_branch".into(), json!("feature/resolve")),
-                ("target_branch".into(), json!("main")),
-                ("expected_head_oid".into(), json!(head)),
-                ("issue_revision_ids".into(), json!([])),
-                ("draft".into(), json!(false)),
-                ("idempotency_key".into(), json!("pr-resolve-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("title".into(), json!("Resolve thread")),
+                    ("body".into(), json!("")),
+                    ("source_branch".into(), json!("feature/resolve")),
+                    ("target_branch".into(), json!("main")),
+                    ("expected_head_oid".into(), json!(head)),
+                    ("issue_revision_ids".into(), json!([])),
+                    ("draft".into(), json!(false)),
+                    ("idempotency_key".into(), json!("pr-resolve-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("pr");
     assert!(!pr.is_error.unwrap_or(true));

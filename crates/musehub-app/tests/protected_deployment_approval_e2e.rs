@@ -21,7 +21,11 @@ use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
 fn tool_data(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    let v = result.structured_content.as_ref().expect("structured").clone();
+    let v = result
+        .structured_content
+        .as_ref()
+        .expect("structured")
+        .clone();
     v.get("data").cloned().unwrap_or(v)
 }
 
@@ -245,15 +249,17 @@ async fn protected_deploy_approval_gate_audit_and_permissions() {
     let admin_token = pat(&app, &admin_cookie, "admin-dep").await;
     let member_client = mcp_client(&app, &member_token).await;
     let start = member_client
-        .call_tool(CallToolRequestParams::new("musehub_deployment_start").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.to_string())),
-                ("repository_id".into(), json!(repo_id.to_string())),
-                ("environment_id".into(), json!(prod_env.0.to_string())),
-                ("release_id".into(), json!(release_id.to_string())),
-                ("idempotency_key".into(), json!("prot-start-1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_deployment_start").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.to_string())),
+                    ("repository_id".into(), json!(repo_id.to_string())),
+                    ("environment_id".into(), json!(prod_env.0.to_string())),
+                    ("release_id".into(), json!(release_id.to_string())),
+                    ("idempotency_key".into(), json!("prot-start-1")),
+                ]),
+            ),
+        )
         .await
         .expect("start");
     assert!(!start.is_error.unwrap_or(true));
@@ -268,7 +274,7 @@ async fn protected_deploy_approval_gate_audit_and_permissions() {
         .await
         .unwrap();
     assert_eq!(dep_state.0, "awaiting_approval");
-  let audit_wait: (i64,) = sqlx::query_as(
+    let audit_wait: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events WHERE resource_type = 'deployment' AND action = 'deployment.awaiting_approval'",
     )
     .fetch_one(&pool)

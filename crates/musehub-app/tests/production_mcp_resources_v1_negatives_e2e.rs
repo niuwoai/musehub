@@ -111,13 +111,12 @@ async fn resource_reads_denied_without_repo_grant() {
             .unwrap();
     let dep_b = Uuid::new_v4();
     let rel_b = Uuid::new_v4();
-    let env_id: (Uuid,) = sqlx::query_as(
-        "SELECT id FROM environments WHERE repo_id = $1 AND slug = 'test'",
-    )
-    .bind(repo_b)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let env_id: (Uuid,) =
+        sqlx::query_as("SELECT id FROM environments WHERE repo_id = $1 AND slug = 'test'")
+            .bind(repo_b)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let env_id = env_id.0;
     let pipe_b = Uuid::new_v4();
     sqlx::query(
@@ -219,7 +218,9 @@ async fn resource_reads_denied_without_repo_grant() {
                 .method("POST")
                 .uri("/api/v1/auth/login")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({"handle": "resreader", "password": pass}).to_string()))
+                .body(Body::from(
+                    json!({"handle": "resreader", "password": pass}).to_string(),
+                ))
                 .unwrap(),
         )
         .await

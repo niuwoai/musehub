@@ -20,7 +20,11 @@ use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
 fn tool_data(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    let v = result.structured_content.as_ref().expect("structured").clone();
+    let v = result
+        .structured_content
+        .as_ref()
+        .expect("structured")
+        .clone();
     v.get("data").cloned().unwrap_or(v)
 }
 
@@ -107,47 +111,51 @@ async fn mcp_plan_create_persists_steps_and_plan_get_roundtrip() {
             .unwrap();
     let client = mcp_client(&app, token).await;
     let issue = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("idempotency_key".into(), json!("issue-plan-steps")),
-                ("title".into(), json!("Plan steps")),
-                ("body".into(), json!("body")),
-                (
-                    "criteria".into(),
-                    json!([{
-                        "description": "criterion one",
-                        "verification_method": "manual",
-                        "required": true
-                    }]),
-                ),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("idempotency_key".into(), json!("issue-plan-steps")),
+                    ("title".into(), json!("Plan steps")),
+                    ("body".into(), json!("body")),
+                    (
+                        "criteria".into(),
+                        json!([{
+                            "description": "criterion one",
+                            "verification_method": "manual",
+                            "required": true
+                        }]),
+                    ),
+                ]),
+            ),
+        )
         .await
         .expect("issue");
     assert!(!issue.is_error.unwrap_or(true));
     let issue_data = tool_data(&issue);
     let revision_id = issue_data["current_revision_id"].as_str().unwrap();
     let plan = client
-        .call_tool(CallToolRequestParams::new("musehub_plan_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("issue_revision_id".into(), json!(revision_id)),
-                ("body".into(), json!("plan body")),
-                ("idempotency_key".into(), json!("plan-steps-v1")),
-                (
-                    "steps".into(),
-                    json!([{
-                        "key": "step-1",
-                        "title": "Implement",
-                        "description": "Do the work",
-                        "criterion_ordinals": [1]
-                    }]),
-                ),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_plan_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("issue_revision_id".into(), json!(revision_id)),
+                    ("body".into(), json!("plan body")),
+                    ("idempotency_key".into(), json!("plan-steps-v1")),
+                    (
+                        "steps".into(),
+                        json!([{
+                            "key": "step-1",
+                            "title": "Implement",
+                            "description": "Do the work",
+                            "criterion_ordinals": [1]
+                        }]),
+                    ),
+                ]),
+            ),
+        )
         .await
         .expect("plan_create");
     assert!(!plan.is_error.unwrap_or(true));
@@ -164,37 +172,41 @@ async fn mcp_plan_create_persists_steps_and_plan_get_roundtrip() {
             .unwrap();
     assert_eq!(row.0, plan_data["steps"]);
     let get = client
-        .call_tool(CallToolRequestParams::new("musehub_plan_get").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("plan_id".into(), json!(plan_id)),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_plan_get").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("plan_id".into(), json!(plan_id)),
+                ]),
+            ),
+        )
         .await
         .expect("plan_get");
     assert!(!get.is_error.unwrap_or(true));
     let get_data = tool_data(&get);
     assert_eq!(get_data["steps"], plan_data["steps"]);
     let bad = client
-        .call_tool(CallToolRequestParams::new("musehub_plan_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("issue_revision_id".into(), json!(revision_id)),
-                ("body".into(), json!("plan2")),
-                ("idempotency_key".into(), json!("plan-bad-ord")),
-                (
-                    "steps".into(),
-                    json!([{
-                        "key": "bad",
-                        "title": "x",
-                        "description": "y",
-                        "criterion_ordinals": [99]
-                    }]),
-                ),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_plan_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("issue_revision_id".into(), json!(revision_id)),
+                    ("body".into(), json!("plan2")),
+                    ("idempotency_key".into(), json!("plan-bad-ord")),
+                    (
+                        "steps".into(),
+                        json!([{
+                            "key": "bad",
+                            "title": "x",
+                            "description": "y",
+                            "criterion_ordinals": [99]
+                        }]),
+                    ),
+                ]),
+            ),
+        )
         .await
         .expect("bad plan");
     assert!(bad.is_error.unwrap_or(true));

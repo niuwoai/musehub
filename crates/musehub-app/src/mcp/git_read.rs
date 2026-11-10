@@ -22,11 +22,16 @@ pub fn git_tree_entries(
 ) -> Result<(Vec<Value>, bool), AppError> {
     validate_git_oid(commit_oid).map_err(AppError::Validation)?;
     validate_repo_path(path)?;
-    let tree_path = if path.is_empty() { commit_oid } else { &format!("{commit_oid}:{path}") };
+    let tree_path = if path.is_empty() {
+        commit_oid
+    } else {
+        &format!("{commit_oid}:{path}")
+    };
     let output = std::process::Command::new("git")
         .args([
             "--git-dir",
-            bare.to_str().ok_or_else(|| AppError::Other("git path".into()))?,
+            bare.to_str()
+                .ok_or_else(|| AppError::Other("git path".into()))?,
             "ls-tree",
             "-l",
             tree_path,
@@ -92,7 +97,8 @@ pub fn git_read_file_at(
     let output = std::process::Command::new("git")
         .args([
             "--git-dir",
-            bare.to_str().ok_or_else(|| AppError::Other("git path".into()))?,
+            bare.to_str()
+                .ok_or_else(|| AppError::Other("git path".into()))?,
             "show",
             &spec,
         ])

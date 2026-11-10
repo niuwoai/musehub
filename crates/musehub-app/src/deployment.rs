@@ -286,12 +286,11 @@ pub(crate) async fn mcp_start_deployment(
     drop(pat);
     let (status, Json(view)) =
         launch_deployment(state, org_id, repo_id, actor, None, launch).await?;
-    let plan_hash: Option<String> = sqlx::query_scalar(
-        "SELECT plan_hash::text FROM deployments WHERE id = $1",
-    )
-    .bind(view.id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let plan_hash: Option<String> =
+        sqlx::query_scalar("SELECT plan_hash::text FROM deployments WHERE id = $1")
+            .bind(view.id)
+            .fetch_optional(&state.pool)
+            .await?;
     Ok(serde_json::json!({
         "id": view.id.to_string(),
         "release_id": view.release_id.to_string(),
@@ -827,7 +826,9 @@ pub async fn apply_deployment_approval(
     }
     let plan_hash = stored_hash.unwrap_or_default();
     if plan_hash != expected_plan_hash {
-        return Err(AppError::Validation("expected_plan_hash mismatch".to_string()));
+        return Err(AppError::Validation(
+            "expected_plan_hash mismatch".to_string(),
+        ));
     }
     let approver_ok = crate::grants::is_org_privileged(&state.pool, org_id, principal_id).await?
         || crate::grants::principal_has_repo_grant(&state.pool, repo_id, principal_id).await?;
@@ -901,16 +902,13 @@ pub async fn apply_deployment_approval(
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::Conflict(
-            "deployment approval raced".to_string(),
-        ));
+        return Err(AppError::Conflict("deployment approval raced".to_string()));
     }
     resume_approved_deployment(state, deployment_id).await?;
-    let new_state: (String,) =
-        sqlx::query_as("SELECT state FROM deployments WHERE id = $1")
-            .bind(deployment_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let new_state: (String,) = sqlx::query_as("SELECT state FROM deployments WHERE id = $1")
+        .bind(deployment_id)
+        .fetch_one(&state.pool)
+        .await?;
     Ok(serde_json::json!({
         "deployment_id": deployment_id.to_string(),
         "decision": decision,

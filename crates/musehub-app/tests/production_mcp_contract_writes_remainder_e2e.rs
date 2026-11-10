@@ -23,7 +23,11 @@ use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
 fn tool_data(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    let v = result.structured_content.as_ref().expect("structured").clone();
+    let v = result
+        .structured_content
+        .as_ref()
+        .expect("structured")
+        .clone();
     v.get("data").cloned().unwrap_or(v)
 }
 
@@ -170,8 +174,15 @@ async fn mcp_release_publish_sets_published_state() {
     let oid = "f".repeat(40);
     let pipe_id = Uuid::new_v4();
     let bytes = b"b";
-    let sha_hex: String = Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect();
-    let dir = git_root.path().join("artifacts").join(org_id.0.to_string()).join(repo_id.0.to_string());
+    let sha_hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    let dir = git_root
+        .path()
+        .join("artifacts")
+        .join(org_id.0.to_string())
+        .join(repo_id.0.to_string());
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("bundle.tar"), bytes).unwrap();
     sqlx::query(
@@ -203,17 +214,19 @@ async fn mcp_release_publish_sets_published_state() {
     .unwrap();
     let client = mcp_client(&app, &token).await;
     let created = client
-        .call_tool(CallToolRequestParams::new("musehub_release_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("version".into(), json!("1.0.1")),
-                ("tag_name".into(), json!("v1.0.1")),
-                ("commit_oid".into(), json!(oid)),
-                ("pipeline_run_id".into(), json!(pipe_id.to_string())),
-                ("idempotency_key".into(), json!("rel-create-pub")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_release_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("version".into(), json!("1.0.1")),
+                    ("tag_name".into(), json!("v1.0.1")),
+                    ("commit_oid".into(), json!(oid)),
+                    ("pipeline_run_id".into(), json!(pipe_id.to_string())),
+                    ("idempotency_key".into(), json!("rel-create-pub")),
+                ]),
+            ),
+        )
         .await
         .expect("create");
     assert!(!created.is_error.unwrap_or(true));
@@ -263,13 +276,15 @@ async fn mcp_pr_review_and_update_side_effects() {
     let client = mcp_client(&app, &token).await;
     let slug = format!("pr-wr-{}", Uuid::new_v4().simple());
     let repo = client
-        .call_tool(CallToolRequestParams::new("musehub_repository_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("slug".into(), json!(slug)),
-                ("idempotency_key".into(), json!("pr-wr-repo")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_repository_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("slug".into(), json!(slug)),
+                    ("idempotency_key".into(), json!("pr-wr-repo")),
+                ]),
+            ),
+        )
         .await
         .expect("repo");
     let repo_id = tool_data(&repo)["id"].as_str().unwrap().to_string();
@@ -280,40 +295,43 @@ async fn mcp_pr_review_and_update_side_effects() {
         .unwrap();
     let head = push_branch(git_root.path(), storage_key.0, "feature/wr");
     let pr = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_create").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("title".into(), json!("Before")),
-                ("body".into(), json!("")),
-                ("source_branch".into(), json!("feature/wr")),
-                ("target_branch".into(), json!("main")),
-                ("expected_head_oid".into(), json!(head)),
-                ("issue_revision_ids".into(), json!([])),
-                ("draft".into(), json!(false)),
-                ("idempotency_key".into(), json!("pr-wr-create")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("title".into(), json!("Before")),
+                    ("body".into(), json!("")),
+                    ("source_branch".into(), json!("feature/wr")),
+                    ("target_branch".into(), json!("main")),
+                    ("expected_head_oid".into(), json!(head)),
+                    ("issue_revision_ids".into(), json!([])),
+                    ("draft".into(), json!(false)),
+                    ("idempotency_key".into(), json!("pr-wr-create")),
+                ]),
+            ),
+        )
         .await
         .expect("pr");
     let pr_id = tool_data(&pr)["id"].as_str().unwrap().to_string();
-    let row_version: (i64,) =
-        sqlx::query_as("SELECT row_version FROM pull_requests WHERE id = $1")
-            .bind(Uuid::parse_str(&pr_id).unwrap())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let row_version: (i64,) = sqlx::query_as("SELECT row_version FROM pull_requests WHERE id = $1")
+        .bind(Uuid::parse_str(&pr_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let updated = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_update").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("pr_id".into(), json!(pr_id)),
-                ("expected_version".into(), json!(row_version.0)),
-                ("title".into(), json!("After")),
-                ("idempotency_key".into(), json!("pr-update-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_update").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("pr_id".into(), json!(pr_id)),
+                    ("expected_version".into(), json!(row_version.0)),
+                    ("title".into(), json!("After")),
+                    ("idempotency_key".into(), json!("pr-update-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("update");
     assert!(!updated.is_error.unwrap_or(true));
@@ -324,25 +342,26 @@ async fn mcp_pr_review_and_update_side_effects() {
         .unwrap();
     assert_eq!(title.0, "After");
     let review = client
-        .call_tool(CallToolRequestParams::new("musehub_pr_review").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id)),
-                ("pr_id".into(), json!(pr_id)),
-                ("decision".into(), json!("comment")),
-                ("body".into(), json!("looks fine")),
-                ("idempotency_key".into(), json!("pr-review-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_pr_review").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("pr_id".into(), json!(pr_id)),
+                    ("decision".into(), json!("comment")),
+                    ("body".into(), json!("looks fine")),
+                    ("idempotency_key".into(), json!("pr-review-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("review");
     assert!(!review.is_error.unwrap_or(true));
-    let reviews: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM pr_reviews WHERE pr_id = $1")
-            .bind(Uuid::parse_str(&pr_id).unwrap())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let reviews: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pr_reviews WHERE pr_id = $1")
+        .bind(Uuid::parse_str(&pr_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(reviews.0, 1);
     client.cancel().await.ok();
 }
@@ -436,14 +455,16 @@ async fn mcp_pipeline_cancel_and_job_retry() {
         .unwrap();
     assert_eq!(pipe_state.0, "cancel_requested");
     let retried = client
-        .call_tool(CallToolRequestParams::new("musehub_job_retry").with_arguments(
-            serde_json::Map::from_iter([
-                ("org_id".into(), json!(org_id.0.to_string())),
-                ("repository_id".into(), json!(repo_id.0.to_string())),
-                ("job_id".into(), json!(job_id.to_string())),
-                ("idempotency_key".into(), json!("job-retry-v1")),
-            ]),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("musehub_job_retry").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("job_id".into(), json!(job_id.to_string())),
+                    ("idempotency_key".into(), json!("job-retry-v1")),
+                ]),
+            ),
+        )
         .await
         .expect("retry");
     assert!(!retried.is_error.unwrap_or(true));
@@ -589,8 +610,15 @@ async fn mcp_deployment_rollback_inserts_new_row() {
     let oid = "c".repeat(40);
     let manifest = "d".repeat(64);
     let bytes = b"rb";
-    let sha_hex: String = Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect();
-    let dir = git_root.path().join("artifacts").join(org_id.0.to_string()).join(repo_id.0.to_string());
+    let sha_hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    let dir = git_root
+        .path()
+        .join("artifacts")
+        .join(org_id.0.to_string())
+        .join(repo_id.0.to_string());
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("bundle.tar"), bytes).unwrap();
     sqlx::query(
@@ -655,12 +683,11 @@ async fn mcp_deployment_rollback_inserts_new_row() {
     .execute(&pool)
     .await
     .unwrap();
-    let before: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM deployments WHERE repo_id = $1")
-            .bind(repo_id.0)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM deployments WHERE repo_id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let client = mcp_client(&app, &token).await;
     let rollback = client
         .call_tool(
@@ -669,7 +696,10 @@ async fn mcp_deployment_rollback_inserts_new_row() {
                     ("org_id".into(), json!(org_id.0.to_string())),
                     ("repository_id".into(), json!(repo_id.0.to_string())),
                     ("environment_id".into(), json!(env_id.0.to_string())),
-                    ("target_healthy_deployment_id".into(), json!(target_dep.to_string())),
+                    (
+                        "target_healthy_deployment_id".into(),
+                        json!(target_dep.to_string()),
+                    ),
                     ("reason".into(), json!("mcp rb")),
                     ("idempotency_key".into(), json!("dep-rollback-v1")),
                 ]),
@@ -678,12 +708,11 @@ async fn mcp_deployment_rollback_inserts_new_row() {
         .await
         .expect("rollback");
     assert!(!rollback.is_error.unwrap_or(true));
-    let after: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM deployments WHERE repo_id = $1")
-            .bind(repo_id.0)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM deployments WHERE repo_id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(after.0, before.0 + 1);
     client.cancel().await.ok();
 }

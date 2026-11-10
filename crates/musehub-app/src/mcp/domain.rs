@@ -603,7 +603,9 @@ pub async fn repository_create(
     .fetch_optional(&state.pool)
     .await?;
     if dup.is_some() {
-        return Err(AppError::Validation("repository slug already exists".to_string()));
+        return Err(AppError::Validation(
+            "repository slug already exists".to_string(),
+        ));
     }
     let branch = default_branch
         .map(str::trim)
@@ -646,10 +648,7 @@ pub async fn repository_create(
     let mut data = repo_summary_json(&state.bind_display, org_slug, repo_id, &slug, "ready");
     if let Some(map) = data.as_object_mut() {
         map.insert("org_id".into(), json!(org_id.to_string()));
-        map.insert(
-            "description".into(),
-            json!(description.unwrap_or_default()),
-        );
+        map.insert("description".into(), json!(description.unwrap_or_default()));
         map.insert("default_branch".into(), json!(branch));
     }
     Ok(data)
@@ -674,9 +673,8 @@ pub async fn issue_update(
     let Some((id, number, title, issue_state, current_revision_id)) = row else {
         return Err(AppError::NotFound);
     };
-    let revision_id = current_revision_id.ok_or_else(|| {
-        AppError::Validation("issue has no current revision".to_string())
-    })?;
+    let revision_id = current_revision_id
+        .ok_or_else(|| AppError::Validation("issue has no current revision".to_string()))?;
     let rev = sqlx::query_as::<_, (i32, String, String)>(
         "SELECT revision, title, body FROM issue_revisions WHERE id = $1 AND issue_id = $2",
     )
@@ -693,7 +691,9 @@ pub async fn issue_update(
         )));
     }
     if patch.title.is_none() && patch.body.is_none() && patch.state.is_none() {
-        return Err(AppError::Validation("patch must include at least one field".to_string()));
+        return Err(AppError::Validation(
+            "patch must include at least one field".to_string(),
+        ));
     }
     let mut new_title = title;
     let rev_body_snapshot = rev_body.clone();
@@ -715,7 +715,7 @@ pub async fn issue_update(
             content_changed = true;
         }
     }
-  let new_state = if let Some(s) = patch.state {
+    let new_state = if let Some(s) = patch.state {
         let s = s.trim().to_lowercase();
         if !matches!(s.as_str(), "open" | "closed") {
             return Err(AppError::Validation("invalid issue state".to_string()));
@@ -764,13 +764,11 @@ pub async fn issue_update(
         .await?;
     }
     if new_state != issue_state {
-        sqlx::query(
-            "UPDATE issues SET state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-        )
-        .bind(id)
-        .bind(&new_state)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE issues SET state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1")
+            .bind(id)
+            .bind(&new_state)
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await?;
     Ok(json!({

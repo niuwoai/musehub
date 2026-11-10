@@ -13,9 +13,9 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::mcp::contract_domain::{
     self, agent_profile_list, agent_run_messages, agent_run_respond, delivery_get,
-    deployment_approve, deployment_list, discussion_comment, discussion_list,
-    discussion_resolve, environment_list, git_repo_access, issue_criteria_replace, job_logs,
-    job_retry, pipeline_cancel, pipeline_get, pipeline_list, pr_diff, pr_update, release_create_mcp,
+    deployment_approve, deployment_list, discussion_comment, discussion_list, discussion_resolve,
+    environment_list, git_repo_access, issue_criteria_replace, job_logs, job_retry,
+    pipeline_cancel, pipeline_get, pipeline_list, pr_diff, pr_update, release_create_mcp,
     release_list, release_publish_mcp,
 };
 use crate::mcp::envelope::ToolEnvelope;
@@ -27,9 +27,9 @@ use crate::mcp::idempotency::{
 };
 
 use super::{
-    app_error_to_mcp, domain_err, domain_ok, domain_ok_page, envelope_value, page_limit,
-    page_meta, parse_uuid, pat_context, repo_access, ProductionMcpServer, OrgListInput, PageInput,
-    RepoInput, require_scope, READ_SCOPE, WRITE_SCOPE,
+    app_error_to_mcp, domain_err, domain_ok, domain_ok_page, envelope_value, page_limit, page_meta,
+    parse_uuid, pat_context, repo_access, require_scope, OrgListInput, PageInput,
+    ProductionMcpServer, RepoInput, READ_SCOPE, WRITE_SCOPE,
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -313,7 +313,9 @@ struct DeploymentListInput {
 fn target_ids(target: &DiscussionTarget) -> Result<(&str, Uuid), AppError> {
     let kind = target.kind.as_str();
     if !matches!(kind, "issue" | "pr") {
-        return Err(AppError::Validation("invalid discussion target kind".into()));
+        return Err(AppError::Validation(
+            "invalid discussion target kind".into(),
+        ));
     }
     let id = target
         .id
@@ -502,11 +504,8 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
-        let criteria: Vec<contract_domain::CriterionInput> = input
-            .criteria
-            .into_iter()
-            .map(|c| c.into())
-            .collect();
+        let criteria: Vec<contract_domain::CriterionInput> =
+            input.criteria.into_iter().map(|c| c.into()).collect();
         match issue_criteria_replace(
             &self.state,
             &access,
