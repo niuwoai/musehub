@@ -41,7 +41,6 @@ if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
     echo "caddy validate production skipped (docker unavailable or image pull failed)" >&2
   fi
   tmp_ci="$(mktemp)"
-  trap 'rm -f "$tmp_ci"' EXIT
   sed 's/host.docker.internal:58080/host.docker.internal:8080/g' \
     "$ROOT/deploy/Caddyfile.ci.host.yml" >"$tmp_ci"
   if docker_cli run --rm \
@@ -54,6 +53,63 @@ if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
   fi
 else
   echo "caddy validate skipped (no docker)"
+fi
+
+# TLS render layout (fixture certs only — no ACME / public DNS).
+FIXTURE_DIR="$(mktemp -d)"
+cleanup_verify() {
+  rm -f "${tmp_ci:-}"
+  rm -rf "$FIXTURE_DIR"
+}
+trap cleanup_verify EXIT
+openssl req -x509 -newkey rsa:2048 -days 1 -nodes \
+  -keyout "$FIXTURE_DIR/key.pem" -out "$FIXTURE_DIR/cert.pem" \
+  -subj '/CN=musehub-fixture.test' 2>/dev/null
+
+export MUSEHUB_DEPLOY_DIR="$FIXTURE_DIR"
+export MUSEHUB_ENV_FILE="$FIXTURE_DIR/.env"
+cat >"$MUSEHUB_ENV_FILE" <<EOF
+MUSEHUB_GATEWAY_HTTP_PORT=8080
+MUSEHUB_GATEWAY_TLS_MODE=manual
+MUSEHUB_GATEWAY_TLS_DOMAIN=musehub-fixture.test
+MUSEHUB_TLS_CERT_FILE=$FIXTURE_DIR/cert.pem
+MUSEHUB_TLS_KEY_FILE=$FIXTURE_DIR/key.pem
+EOF
+
+if ! "$ROOT/scripts/render-gateway-caddyfile.sh" | grep -q 'mode=manual'; then
+  echo "render_gateway_caddyfile manual=fail" >&2
+  exit 1
+fi
+grep -q 'tls /etc/musehub/tls/cert.pem' "$FIXTURE_DIR/Caddyfile.live" || {
+  echo "Caddyfile.live manual tls block missing" >&2
+  exit 1
+}
+
+FAIL_ENV="$FIXTURE_DIR/fail.env"
+cat >"$FAIL_ENV" <<EOF
+MUSEHUB_GATEWAY_TLS_MODE=manual
+MUSEHUB_GATEWAY_TLS_DOMAIN=change-me.example
+MUSEHUB_TLS_CERT_FILE=$FIXTURE_DIR/cert.pem
+MUSEHUB_TLS_KEY_FILE=$FIXTURE_DIR/key.pem
+EOF
+if MUSEHUB_DEPLOY_DIR="$FIXTURE_DIR" MUSEHUB_ENV_FILE="$FAIL_ENV" \
+  "$ROOT/scripts/render-gateway-caddyfile.sh" 2>/dev/null; then
+  echo "render_gateway_caddyfile should fail on placeholder domain" >&2
+  exit 1
+fi
+echo "render_gateway_caddyfile fail_closed_placeholder=ok"
+
+if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
+  if docker_cli run --rm \
+    -v "$FIXTURE_DIR/Caddyfile.live:/etc/caddy/Caddyfile:ro" \
+    -v "$FIXTURE_DIR/cert.pem:/etc/musehub/tls/cert.pem:ro" \
+    -v "$FIXTURE_DIR/key.pem:/etc/musehub/tls/key.pem:ro" \
+    caddy:2.9-alpine \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
+    echo "caddy validate tls manual fixture=ok"
+  else
+    echo "caddy validate tls manual skipped" >&2
+  fi
 fi
 
 echo "caddyfile_layout=ok"

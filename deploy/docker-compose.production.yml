@@ -2,6 +2,10 @@
 name: musehub-product-production
 
 services:
+  gateway:
+    volumes: !override
+      - ./Caddyfile.live:/etc/caddy/Caddyfile:ro
+
   musehub-server:
     environment:
       MUSEHUB_PRODUCT_PROFILE: production

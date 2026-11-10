@@ -40,4 +40,5 @@
 | `verify-systemd-units.sh` | 单元模板渲染 + 禁秘钥入单元 + `systemd-analyze verify`（有则跑） |
 | `install-musehub-systemd.sh` | 安装控制面/runner 单元到 `/etc/systemd/system`（**无** reboot 验收记录） |
 | `git_http::clone_url_tests` | `MUSEHUB_PUBLIC_HTTP_ORIGIN` 与 `0.0.0.0` bind 映射 |
+| `render-gateway-caddyfile.sh` + `verify-caddyfile-layout.sh` | TLS Caddy 布局 + fixture 证书 `caddy validate`；**无**公网 HTTPS / Let's Encrypt 签发验收 |
 | `docs/LOCAL-ACCEPTANCE-RUN.md` | 本地跑批命令/exit/SHA 台账 |

@@ -1,0 +1,16 @@
+# Production TLS: HTTPS (and :80 for ACME / redirect). Requires render-gateway-caddyfile.sh + Caddyfile.live.
+name: musehub-product-production
+
+services:
+  gateway:
+    ports: !override
+      - "${MUSEHUB_GATEWAY_HTTPS_PORT:-443}:443"
+      - "${MUSEHUB_GATEWAY_HTTP_REDIRECT_PORT:-80}:80"
+    volumes: !override
+      - ./Caddyfile.live:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

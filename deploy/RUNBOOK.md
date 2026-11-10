@@ -97,9 +97,36 @@ docker compose up -d --force-recreate
 
 Images recreate containers; **named volumes** (`pgdata`, `gitdata`, `artifacts`) keep data when migrations succeed. If a migration fails, logs appear in `docker compose logs musehub-server`. Fix forward with a new image; restore from backup if data is inconsistent (see backup).
 
-## TLS gateway (example)
+## TLS gateway (production)
 
-`deploy/Caddyfile` documents `tls internal` + reverse proxy to API (`/mcp` included). Repeatable layout check: `scripts/verify-caddyfile-layout.sh` (static grep; `caddy validate` via Docker when available). Also runs at the start of `scripts/verify-product-stack-e2e.sh` and at the end of `scripts/verify-product-acceptance.sh`.
+Lab/CI keeps **HTTP** on `deploy/Caddyfile.ci` (`:8080`). Production install uses a rendered `deploy/Caddyfile.live` (same routes: API, `/git`, `/mcp`, static UI).
+
+### Enable HTTPS
+
+1. Edit `deploy/.env` (see `.env.example`):
+
+   | Variable | Purpose |
+   |----------|---------|
+   | `MUSEHUB_GATEWAY_TLS_MODE` | `off` (default HTTP), `manual` (your cert/key), or `acme` (Caddy automatic HTTPS) |
+   | `MUSEHUB_GATEWAY_TLS_DOMAIN` | Public DNS name users type in the browser (required when TLS is on) |
+   | `MUSEHUB_ACME_EMAIL` | Contact for ACME (`acme` mode) |
+   | `MUSEHUB_TLS_CERT_FILE` / `MUSEHUB_TLS_KEY_FILE` | Host paths to PEM files (`manual` mode; default `deploy/tls/cert.pem` + `key.pem`) |
+   | `MUSEHUB_GATEWAY_HTTPS_PORT` | Host publish for HTTPS (default `443`) |
+   | `MUSEHUB_GATEWAY_HTTP_REDIRECT_PORT` | Host `:80` for HTTP→HTTPS redirect and ACME HTTP-01 (`acme` mode) |
+
+2. Place cert/key files for **manual** mode, then render (fail-closed if domain is missing/placeholder or files absent):
+
+   ```bash
+   ./scripts/render-gateway-caddyfile.sh
+   ```
+
+3. Recreate the gateway: `./scripts/upgrade-production-compose.sh` (or `production_compose up -d --force-recreate gateway` from `deploy/` after sourcing `scripts/lib/production-compose.sh`).
+
+4. Set **`MUSEHUB_PUBLIC_HTTP_ORIGIN=https://<your-domain>`** (same host/scheme as the TLS front door) so Git **`clone_url`** in the UI stays correct.
+
+**Not accepted in this repo:** real public DNS, Let's Encrypt issuance, or trust-store validation. CI only checks rendered layout + `caddy validate` with **fixture** certificates (`scripts/verify-caddyfile-layout.sh`).
+
+`deploy/Caddyfile` remains a design reference (`tls internal`). Repeatable checks also run at the start of `scripts/verify-product-stack-e2e.sh` and at the end of `scripts/verify-product-acceptance.sh`.
 
 ## Backup and restore
 

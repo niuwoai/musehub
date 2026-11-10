@@ -26,16 +26,27 @@ fi
 export MUSEHUB_RUNNER_PAT="${MUSEHUB_RUNNER_PAT:-placeholder-set-after-bootstrap}"
 export MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-host.docker.internal:5000}"
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file .env)
-"${COMPOSE[@]}" build musehub-server gateway musehub-runner
-echo "install_production=phase1_control_plane"
-"${COMPOSE[@]}" up -d postgres musehub-server gateway
+# shellcheck source=lib/production-compose.sh
+source "$ROOT/scripts/lib/production-compose.sh"
 
+production_compose build musehub-server gateway musehub-runner
+echo "install_production=phase1_control_plane"
+production_compose up -d postgres musehub-server gateway
+
+TLS_MODE="$(grep -E '^MUSEHUB_GATEWAY_TLS_MODE=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)"
+TLS_MODE="${TLS_MODE:-off}"
+TLS_DOMAIN="$(grep -E '^MUSEHUB_GATEWAY_TLS_DOMAIN=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)"
 GW_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' .env | cut -d= -f2 | tr -d '\r')"
 GW_PORT="${GW_PORT:-8080}"
-BASE="http://127.0.0.1:${GW_PORT}"
+if [[ "$TLS_MODE" != "off" && -n "$TLS_DOMAIN" ]]; then
+  BASE="https://127.0.0.1"
+  CURL_TLS=(-k --resolve "${TLS_DOMAIN}:443:127.0.0.1")
+else
+  BASE="http://127.0.0.1:${GW_PORT}"
+  CURL_TLS=()
+fi
 for _ in $(seq 1 90); do
-  if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
+  if curl -fsS "${CURL_TLS[@]}" "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
     echo "install_production=ready gateway=$BASE"
     echo "install_production=next ./scripts/configure-production-runner-pat.sh --start"
     echo "install_production=boot_persistence sudo ./scripts/install-musehub-systemd.sh && systemctl enable --now musehub-control-plane"
@@ -45,5 +56,5 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 echo "install_production=fail readyz" >&2
-"${COMPOSE[@]}" logs musehub-server --tail=40 >&2 || true
+production_compose logs musehub-server --tail=40 >&2 || true
 exit 1

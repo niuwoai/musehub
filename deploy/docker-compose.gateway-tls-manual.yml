@@ -1,0 +1,15 @@
+# Manual TLS cert/key bind mounts (paths must exist on host before compose up).
+name: musehub-product-production
+
+services:
+  gateway:
+    volumes: !override
+      - ./Caddyfile.live:/etc/caddy/Caddyfile:ro
+      - ${MUSEHUB_TLS_CERT_FILE:?set MUSEHUB_TLS_CERT_FILE for manual TLS}:/etc/musehub/tls/cert.pem:ro
+      - ${MUSEHUB_TLS_KEY_FILE:?set MUSEHUB_TLS_KEY_FILE for manual TLS}:/etc/musehub/tls/key.pem:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

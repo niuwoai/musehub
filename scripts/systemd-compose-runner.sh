@@ -10,7 +10,8 @@ cd "$DEPLOY_DIR"
   exit 1
 }
 
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.production.yml --env-file .env)
+# shellcheck source=lib/production-compose.sh
+source "$ROOT/scripts/lib/production-compose.sh"
 runner_pat_configured() {
   local pat
   pat=$(grep -E '^MUSEHUB_RUNNER_PAT=' .env | cut -d= -f2- | tr -d '\r' || true)
@@ -23,14 +24,14 @@ case "$ACTION" in
       echo "systemd_runner=skip MUSEHUB_RUNNER_PAT not set (run configure-production-runner-pat.sh)"
       exit 0
     fi
-    "${COMPOSE[@]}" up -d musehub-runner
+    production_compose up -d musehub-runner
     ;;
   stop)
     if ! runner_pat_configured; then
       echo "systemd_runner=skip stop (runner was not configured)"
       exit 0
     fi
-    "${COMPOSE[@]}" stop musehub-runner
+    production_compose stop musehub-runner
     ;;
   *)
     echo "systemd_runner=fail unknown action $ACTION" >&2
