@@ -211,6 +211,18 @@ pub async fn migrate_down(
     migrations: &[Migration],
 ) -> Result<MigrationReport, MigrateError> {
     ensure_bookkeeping(pool).await?;
+    sqlx::query(
+        "SELECT pg_terminate_backend(pid)
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()",
+    )
+    .execute(pool)
+    .await
+    .map_err(|source| MigrateError::Database {
+        step: "terminate other backends",
+        source,
+    })?;
     let applied_versions = applied_versions(pool).await?;
     let mut report = MigrationReport {
         applied: Vec::new(),

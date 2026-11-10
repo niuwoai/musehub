@@ -207,7 +207,7 @@ async fn mcp_v1_resource_reads_match_capabilities_catalog() {
     .await
     .unwrap();
 
-    let client = mcp_client(&app, &token).await;
+    let client = mcp_client(&app, token).await;
     use musehub_app::mcp::capabilities::{
         V1_RESOURCE_READS_IMPLEMENTED, V1_RESOURCE_URI_TEMPLATES,
     };

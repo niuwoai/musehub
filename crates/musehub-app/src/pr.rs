@@ -356,6 +356,7 @@ pub async fn create_pull_request_in_repo(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn merge_pull_request_by_id(
     state: &Arc<AppState>,
     repo_id: Uuid,
@@ -427,7 +428,7 @@ pub async fn merge_pull_request_by_id(
         ));
     }
     merge_preconditions(&state.pool, id, author_id, &live_head).await?;
-    let merged_oid = merge_with_cas(&bare, &target_branch, &expected_base_oid, &live_head)?;
+    let merged_oid = merge_with_cas(&bare, &target_branch, expected_base_oid, &live_head)?;
     sqlx::query(
         "UPDATE pull_requests SET state = 'merged', merged_oid = $2, merged_by = $3,
          merged_at = CURRENT_TIMESTAMP, head_oid = $2, updated_at = CURRENT_TIMESTAMP

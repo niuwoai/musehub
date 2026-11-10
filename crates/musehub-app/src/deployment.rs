@@ -786,6 +786,7 @@ async fn run_local_compose_deploy(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_deployment_approval(
     state: &Arc<crate::AppState>,
     org_id: Uuid,
@@ -835,12 +836,10 @@ pub async fn apply_deployment_approval(
     if !approver_ok {
         return Err(AppError::Forbidden);
     }
-    if decision == "approve" {
-        if requested_by == Some(principal_id) {
-            return Err(AppError::Conflict(
-                "requester cannot approve own deployment".to_string(),
-            ));
-        }
+    if decision == "approve" && requested_by == Some(principal_id) {
+        return Err(AppError::Conflict(
+            "requester cannot approve own deployment".to_string(),
+        ));
     }
     sqlx::query(
         "INSERT INTO deployment_approvals (id, org_id, repo_id, deployment_id, plan_hash, decision, approver_id, reason)

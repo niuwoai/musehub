@@ -134,7 +134,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: yarn --cwd web install --frozen-lockfile
+      - run: chmod +x ./scripts/yarn-install-retry.sh && ./scripts/yarn-install-retry.sh web
       - name: install Playwright Chromium (with OS deps)
         run: yarn --cwd web exec playwright install --with-deps chromium
       - name: build adapter binaries for server E2E

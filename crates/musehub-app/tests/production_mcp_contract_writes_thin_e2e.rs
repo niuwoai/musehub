@@ -137,6 +137,7 @@ fn push_branch(git_root: &std::path::Path, storage_key: Uuid, branch: &str) -> S
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn setup_repo_pr(
     app: &axum::Router,
     pool: &sqlx::PgPool,
@@ -842,7 +843,11 @@ async fn mcp_agent_run_start_queues_run_idempotent_replay_and_conflict() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(db.0, "queued");
+    assert!(
+        db.0 == "queued" || db.0 == "running",
+        "agent run should be queued or already picked up by supervisor, got {}",
+        db.0
+    );
     assert_eq!(db.1, issue_id);
     let replay = client
         .call_tool(CallToolRequestParams::new("musehub_agent_run_start").with_arguments(args))
