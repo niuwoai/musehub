@@ -55,6 +55,7 @@ export default function App() {
   const [issues, setIssues] = useState<Issue[]>([])
   const [pulls, setPulls] = useState<PullRequest[]>([])
   const [lastRun, setLastRun] = useState<AgentRun | null>(null)
+  const [agentRunStarting, setAgentRunStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loginForm, setLoginForm] = useState({ handle: 'admin', password: '' })
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
@@ -157,7 +158,8 @@ export default function App() {
   }
 
   async function pollRun(runId: string) {
-    for (let i = 0; i < 120; i++) {
+    // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
+    for (let i = 0; i < 360; i++) {
       const run = await getAgentRun(runId)
       setLastRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
@@ -170,15 +172,22 @@ export default function App() {
 
   async function onRunAgent(issue: Issue) {
     if (!selectedRepo) return
-    const run = await startAgentRun(
-      DEFAULT_ORG,
-      selectedRepo,
-      issue.id,
-      `Implement: ${issue.title}`,
-    )
-    setLastRun(run)
-    await pollRun(run.id)
-    if (selectedRepo) await loadIssues(selectedRepo)
+    setAgentRunStarting(true)
+    try {
+      const run = await startAgentRun(
+        DEFAULT_ORG,
+        selectedRepo,
+        issue.id,
+        `Implement: ${issue.title}`,
+      )
+      setLastRun(run)
+      await pollRun(run.id)
+      await loadIssues(selectedRepo)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'agent run failed')
+    } finally {
+      setAgentRunStarting(false)
+    }
   }
 
   async function onCancelRun() {
@@ -444,21 +453,24 @@ export default function App() {
                   </li>
                 ))}
               </ul>
-              {lastRun ? (
+              {lastRun || agentRunStarting ? (
                 <div data-testid="last-agent-run">
                   <p>
-                    {lastRun.adapter_kind} / {lastRun.state}
-                    {lastRun.result_commit_oid
+                    {agentRunStarting && !lastRun
+                      ? t('app.agentStarting', { defaultValue: 'starting agent run…' })
+                      : `${lastRun!.adapter_kind} / ${lastRun!.state}`}
+                    {lastRun?.result_commit_oid
                       ? ` → ${lastRun.result_commit_oid.slice(0, 7)}`
                       : ''}
-                    {lastRun.budget_unknown ? ' (budget unknown)' : ''}
+                    {lastRun?.budget_unknown ? ' (budget unknown)' : ''}
                   </p>
-                  {lastRun.state === 'running' || lastRun.state === 'queued' ? (
+                  {lastRun &&
+                  (lastRun.state === 'running' || lastRun.state === 'queued') ? (
                     <button type="button" onClick={() => void onCancelRun()}>
                       {t('app.cancelAgent')}
                     </button>
                   ) : null}
-                  {lastRun.state === 'succeeded' ? (
+                  {lastRun?.state === 'succeeded' ? (
                     <button type="button" onClick={() => void onCreatePrFromRun()}>
                       {t('app.createPullRequest')}
                     </button>
