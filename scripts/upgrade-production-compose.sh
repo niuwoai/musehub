@@ -21,18 +21,9 @@ production_compose run --rm --no-deps --entrypoint /docker-entrypoint.sh musehub
 echo "upgrade=phase recreate control plane"
 production_compose up -d --force-recreate postgres musehub-server gateway
 
-TLS_MODE="$(grep -E '^MUSEHUB_GATEWAY_TLS_MODE=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)"
-TLS_MODE="${TLS_MODE:-off}"
-TLS_DOMAIN="$(grep -E '^MUSEHUB_GATEWAY_TLS_DOMAIN=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r' || true)"
-GW_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' .env | cut -d= -f2 | tr -d '\r')"
-GW_PORT="${GW_PORT:-8080}"
-if [[ "$TLS_MODE" != "off" && -n "$TLS_DOMAIN" ]]; then
-  BASE="https://127.0.0.1"
-  CURL_TLS=(-k --resolve "${TLS_DOMAIN}:443:127.0.0.1")
-else
-  BASE="http://127.0.0.1:${GW_PORT}"
-  CURL_TLS=()
-fi
+export MUSEHUB_ENV_FILE="$ROOT/deploy/.env"
+BASE="$(production_gateway_base_url)"
+mapfile -t CURL_TLS < <(production_gateway_local_tls_curl_opts)
 for _ in $(seq 1 90); do
   if curl -fsS "${CURL_TLS[@]}" "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
     echo "upgrade=ready gateway=$BASE"

@@ -112,4 +112,36 @@ if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
   fi
 fi
 
+ACME_ENV="$FIXTURE_DIR/acme.env"
+cat >"$ACME_ENV" <<EOF
+MUSEHUB_GATEWAY_TLS_MODE=acme
+MUSEHUB_GATEWAY_TLS_DOMAIN=musehub-acme-fixture.test
+MUSEHUB_ACME_EMAIL=ops-acme-fixture@example.com
+EOF
+if ! MUSEHUB_DEPLOY_DIR="$FIXTURE_DIR" MUSEHUB_ENV_FILE="$ACME_ENV" \
+  "$ROOT/scripts/render-gateway-caddyfile.sh" | grep -q 'mode=acme'; then
+  echo "render_gateway_caddyfile acme=fail" >&2
+  exit 1
+fi
+if grep -E '^:80[[:space:]]*\{' "$FIXTURE_DIR/Caddyfile.live"; then
+  echo "ACME Caddyfile must not define catch-all :80 (breaks HTTP-01)" >&2
+  exit 1
+fi
+if grep -q 'redir https://' "$FIXTURE_DIR/Caddyfile.live"; then
+  echo "ACME Caddyfile must not hard-code HTTP redirect (Caddy handles ACME + redirect)" >&2
+  exit 1
+fi
+echo "render_gateway_caddyfile acme_no_catchall_80=ok"
+
+if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
+  if docker_cli run --rm \
+    -v "$FIXTURE_DIR/Caddyfile.live:/etc/caddy/Caddyfile:ro" \
+    caddy:2.9-alpine \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
+    echo "caddy validate tls acme fixture=ok"
+  else
+    echo "caddy validate tls acme skipped" >&2
+  fi
+fi
+
 echo "caddyfile_layout=ok"
