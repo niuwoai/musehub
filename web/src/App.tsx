@@ -23,7 +23,9 @@ import {
   disableOrgMember,
   listMyTokens,
   createUserPat,
+  createScopedPat,
   revokePat,
+  logout,
   getRunnerCapabilities,
   type AuditEvent,
   type OrgMember,
@@ -82,6 +84,9 @@ export default function App() {
   const [memberPassword, setMemberPassword] = useState('')
   const [myTokens, setMyTokens] = useState<PatMasked[]>([])
   const [patName, setPatName] = useState('')
+  const [patScopeMode, setPatScopeMode] = useState<'all_accessible' | 'selected'>('all_accessible')
+  const [patRepoId, setPatRepoId] = useState('')
+  const [iamBusy, setIamBusy] = useState(false)
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
   const [runnerTokens, setRunnerTokens] = useState<
@@ -99,26 +104,22 @@ export default function App() {
       setAuditEvents([])
       setRunnerCaps(null)
       setRunnerTokens([])
+      setMyTokens([])
+      setOrgMembers([])
+      setMembersAdmin(false)
+      setMintedPatFull(null)
+      setMintedTokenPrefix(null)
       return
     }
     void (async () => {
-      try {
-        const [audit, caps, tokens, pats] = await Promise.all([
-          listAuditEvents(DEFAULT_ORG, 30),
-          getRunnerCapabilities(),
-          listRunnerTokens(DEFAULT_ORG),
-          listMyTokens(),
-        ])
-        setAuditEvents(audit)
-        setRunnerCaps(caps)
-        setRunnerTokens(tokens)
-        setMyTokens(pats)
-      } catch {
-        setAuditEvents([])
-        setRunnerCaps(null)
-        setRunnerTokens([])
-        setMyTokens([])
-      }
+      setMyTokens((await listMyTokens().catch(() => [])) as PatMasked[])
+      setRunnerCaps(await getRunnerCapabilities().catch(() => null))
+      setAuditEvents((await listAuditEvents(DEFAULT_ORG, 30).catch(() => [])) as AuditEvent[])
+      setRunnerTokens(
+        (await listRunnerTokens(DEFAULT_ORG).catch(() => [])) as Awaited<
+          ReturnType<typeof listRunnerTokens>
+        >,
+      )
       try {
         const members = await listOrgMembers(DEFAULT_ORG)
         setOrgMembers(members)
@@ -131,12 +132,23 @@ export default function App() {
   }, [session])
 
   async function refreshIamPanels() {
-    const audit = await listAuditEvents(DEFAULT_ORG, 40)
-    setAuditEvents(audit)
     setMyTokens(await listMyTokens())
+    setAuditEvents(await listAuditEvents(DEFAULT_ORG, 40))
     if (membersAdmin) {
       setOrgMembers(await listOrgMembers(DEFAULT_ORG))
     }
+  }
+
+  async function onLogout() {
+    setError(null)
+    try {
+      await logout()
+    } catch {
+      /* cookie may already be cleared */
+    }
+    setSession(null)
+    setMintedPatFull(null)
+    setMintedTokenPrefix(null)
   }
 
   async function refreshRepos() {
@@ -150,6 +162,8 @@ export default function App() {
     try {
       await login(loginForm.handle, loginForm.password)
       const principal = await me()
+      setMintedPatFull(null)
+      setMintedTokenPrefix(null)
       setSession(principal.handle)
       await refreshRepos()
     } catch (err) {
@@ -337,7 +351,11 @@ export default function App() {
       {session ? (
         <section>
           <p>
-            {t('app.signedInAs')} <strong>{session}</strong>
+            {t('app.signedInAs')}{' '}
+            <strong data-testid="session-handle">{session}</strong>
+            <button type="button" data-testid="logout" onClick={() => void onLogout()}>
+              Log out
+            </button>
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
             <Panel style={{ flex: '1 1 18rem' }} data-testid="audit-panel">
@@ -416,18 +434,30 @@ export default function App() {
                     <button
                       type="button"
                       data-testid="invite-member"
-                      onClick={() =>
-                        void inviteOrgMember(
-                          DEFAULT_ORG,
-                          memberHandle.trim(),
-                          memberPassword,
-                          'member',
-                        ).then(() => {
-                          setMemberHandle('')
-                          setMemberPassword('')
-                          return refreshIamPanels()
-                        })
-                      }
+                      disabled={iamBusy}
+                      onClick={() => {
+                        void (async () => {
+                          setError(null)
+                          setIamBusy(true)
+                          try {
+                            await inviteOrgMember(
+                              DEFAULT_ORG,
+                              memberHandle.trim(),
+                              memberPassword,
+                              'member',
+                            )
+                            setMemberHandle('')
+                            setMemberPassword('')
+                            await refreshIamPanels()
+                          } catch (err) {
+                            setError(
+                              err instanceof Error ? err.message : 'member invite failed',
+                            )
+                          } finally {
+                            setIamBusy(false)
+                          }
+                        })()
+                      }}
                     >
                       Add member
                     </button>
@@ -447,7 +477,8 @@ export default function App() {
               <ul data-testid="pat-masked-list">
                 {myTokens.map((t) => (
                   <li key={t.id}>
-                    {t.name}: <code>{t.token_prefix}…</code> ({t.scope_mode})
+                    {t.name}: <code>{t.token_prefix}…</code> ({t.scope_mode}, exp{' '}
+                    {t.expires_at.slice(0, 10)})
                     <button
                       type="button"
                       data-testid={`revoke-pat-${t.id}`}
@@ -469,17 +500,70 @@ export default function App() {
                 value={patName}
                 onChange={(e) => setPatName(e.target.value)}
               />
+              <label>
+                Scope mode{' '}
+                <select
+                  data-testid="pat-scope-mode"
+                  value={patScopeMode}
+                  onChange={(e) =>
+                    setPatScopeMode(e.target.value as 'all_accessible' | 'selected')
+                  }
+                >
+                  <option value="all_accessible">all_accessible</option>
+                  <option value="selected">selected (one repo)</option>
+                </select>
+              </label>
+              {patScopeMode === 'selected' ? (
+                <label>
+                  Repo{' '}
+                  <select
+                    data-testid="pat-repo-id"
+                    value={patRepoId}
+                    onChange={(e) => setPatRepoId(e.target.value)}
+                  >
+                    <option value="">— select —</option>
+                    {repos.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.slug}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <button
                 type="button"
                 data-testid="create-pat"
-                onClick={() =>
-                  void createUserPat(DEFAULT_ORG, patName.trim() || 'console-pat').then((created) => {
-                    setMintedPatFull(created.token)
-                    setPatName('')
-                    setMintedTokenPrefix(created.token.slice(0, 12))
-                    return refreshIamPanels()
-                  })
-                }
+                disabled={iamBusy}
+                onClick={() => {
+                  void (async () => {
+                    setError(null)
+                    setIamBusy(true)
+                    const name = patName.trim() || 'console-pat'
+                    try {
+                      let created
+                      if (patScopeMode === 'selected') {
+                        if (!patRepoId) {
+                          setError('select a repo for selected-scope PAT')
+                          return
+                        }
+                        created = await createScopedPat(DEFAULT_ORG, name, ['repo:read'], {
+                          scope_mode: 'selected',
+                          repo_ids: [patRepoId],
+                        })
+                      } else {
+                        created = await createUserPat(DEFAULT_ORG, name)
+                      }
+                      setMintedPatFull(created.token)
+                      setPatName('')
+                      setMintedTokenPrefix(created.token.slice(0, 12))
+                      await refreshIamPanels()
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'PAT create failed')
+                    } finally {
+                      setIamBusy(false)
+                    }
+                  })()
+                }}
               >
                 Create PAT
               </button>

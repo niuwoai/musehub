@@ -92,6 +92,10 @@ export async function login(handle: string, password: string) {
   })
 }
 
+export async function logout() {
+  return api<void>('/api/v1/auth/logout', { method: 'POST' })
+}
+
 export async function me() {
   return api<Principal>('/api/v1/me')
 }

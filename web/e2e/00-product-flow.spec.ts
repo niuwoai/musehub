@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test'
+
+import { expectLoggedInAs } from './helpers/session'
 import type { Page } from '@playwright/test'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -18,7 +20,7 @@ test.describe('product slice browser flow', () => {
     await page.goto('/')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
-    await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
+    await expectLoggedInAs(page, 'admin')
     const repoCountBefore = await repoNavButtons(page).count()
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
     await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })

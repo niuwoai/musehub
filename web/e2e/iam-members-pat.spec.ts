@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { expectLoggedInAs } from './helpers/session'
+
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 const fullPatLike = /mhp_[a-zA-Z0-9]{24,}/
@@ -9,7 +11,7 @@ test.describe('org members and PAT console', () => {
 
   test('add member, mint PAT once, revoke without secret leak on reload', async ({ page }) => {
     const handle = `iam-ui-${Date.now()}`
-    const memberPass = 'Iam-Ui-Member-E2E-12!'
+    const memberPass = 'Iam-Ui-Console-E2E-12!'
 
     await page.goto('/')
     await page.getByLabel(/password|密码/i).fill(password!)
@@ -19,7 +21,16 @@ test.describe('org members and PAT console', () => {
 
     await page.getByTestId('member-handle').fill(handle)
     await page.getByTestId('member-password').fill(memberPass)
-    await page.getByTestId('invite-member').click()
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes('/api/v1/orgs/demo/members') &&
+          r.request().method() === 'POST' &&
+          (r.status() === 201 || r.status() === 204),
+        { timeout: 15_000 },
+      ),
+      page.getByTestId('invite-member').click(),
+    ])
     await expect(page.getByTestId('org-members-list')).toContainText(handle, { timeout: 10_000 })
 
     const patName = `ui-pat-${Date.now()}`
@@ -31,9 +42,17 @@ test.describe('org members and PAT console', () => {
     expect(mintedText).toMatch(fullPatLike)
 
     await page.reload()
+    await expectLoggedInAs(page, 'admin')
     await expect(page.getByTestId('pat-minted-once')).toHaveCount(0)
     const bodyAfterReload = await page.locator('body').innerText()
     expect(bodyAfterReload).not.toMatch(fullPatLike)
+
+    await page.getByTestId('logout').click()
+    await expect(page.getByTestId('session-handle')).toHaveCount(0)
+    await page.getByLabel(/password|密码/i).fill(password!)
+    await page.getByRole('button', { name: /login|登录/i }).click()
+    await expectLoggedInAs(page, 'admin')
+    expect(await page.locator('body').innerText()).not.toMatch(fullPatLike)
 
     const list = await page.request.get(`${apiBase}/api/v1/tokens`)
     expect(list.ok()).toBeTruthy()
