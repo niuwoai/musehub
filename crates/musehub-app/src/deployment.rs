@@ -28,6 +28,16 @@ pub struct DeploymentView {
     pub health_summary: Option<serde_json::Value>,
     pub adapter_kind: String,
     pub attempt_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<String>,
+    pub approval_required: bool,
+}
+
+#[derive(Deserialize)]
+pub struct DeploymentApprovalRequest {
+    pub expected_plan_hash: String,
+    pub decision: String,
+    pub reason: String,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +113,7 @@ fn row_to_view(
     adapter_kind: String,
     health_summary: Option<serde_json::Value>,
     attempt_id: Uuid,
+    plan_hash: Option<String>,
     status: StatusCode,
 ) -> (StatusCode, Json<DeploymentView>) {
     (
@@ -111,10 +122,12 @@ fn row_to_view(
             id,
             environment_slug: env_slug.to_string(),
             release_id,
-            state: dep_state,
+            state: dep_state.clone(),
             health_summary,
             adapter_kind,
             attempt_id: Some(attempt_id),
+            plan_hash,
+            approval_required: dep_state == "awaiting_approval",
         }),
     )
 }
@@ -184,15 +197,45 @@ pub async fn get_deployment(
     else {
         return Err(AppError::NotFound);
     };
+    let plan_hash: Option<String> =
+        sqlx::query_scalar("SELECT plan_hash::text FROM deployments WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
     Ok(Json(DeploymentView {
         id,
         environment_slug: env_slug,
         release_id,
-        state: dep_state,
+        state: dep_state.clone(),
         health_summary,
         adapter_kind,
         attempt_id,
+        plan_hash,
+        approval_required: dep_state == "awaiting_approval",
     }))
+}
+
+pub async fn approve_deployment(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, deployment_id)): AxumPath<(String, String, Uuid)>,
+    Json(body): Json<DeploymentApprovalRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let result = apply_deployment_approval(
+        &state,
+        org_id,
+        repo_id,
+        principal_id,
+        deployment_id,
+        &body.expected_plan_hash,
+        &body.decision,
+        &body.reason,
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -373,6 +416,7 @@ async fn launch_deployment(
             adapter_kind,
             health_summary,
             attempt_id,
+            None,
             StatusCode::OK,
         ));
     }
@@ -528,6 +572,7 @@ async fn launch_deployment(
                     kind,
                     health_summary,
                     attempt_id,
+                    None,
                     StatusCode::OK,
                 ));
             }
@@ -564,6 +609,7 @@ async fn launch_deployment(
             adapter_kind.to_string(),
             None,
             attempt_id,
+            plan_hash.clone(),
             StatusCode::ACCEPTED,
         ));
     }
@@ -577,6 +623,7 @@ async fn launch_deployment(
             adapter_kind.to_string(),
             None,
             attempt_id,
+            None,
             StatusCode::ACCEPTED,
         ));
     }
@@ -782,6 +829,7 @@ async fn run_local_compose_deploy(
         adapter_kind.to_string(),
         Some(summary),
         attempt_id,
+        None,
         StatusCode::CREATED,
     ))
 }
