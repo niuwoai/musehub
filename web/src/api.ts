@@ -87,6 +87,15 @@ export type Deployment = {
   release_id: string
   state: string
   adapter_kind: string
+  plan_hash?: string | null
+  approval_required: boolean
+}
+
+export type DeploymentApprovalResult = {
+  deployment_id: string
+  decision: string
+  state: string
+  plan_hash?: string
 }
 
 export async function login(handle: string, password: string) {
@@ -472,15 +481,55 @@ export async function createUserPat(org: string, name: string) {
   })
 }
 
+export async function getDeployment(org: string, repo: string, deploymentId: string) {
+  return api<Deployment>(
+    `/api/v1/orgs/${org}/repos/${repo}/deployments/${deploymentId}`,
+  )
+}
+
+export async function approveDeployment(
+  org: string,
+  repo: string,
+  deploymentId: string,
+  expectedPlanHash: string,
+  decision: 'approve' | 'reject',
+  reason: string,
+) {
+  return api<DeploymentApprovalResult>(
+    `/api/v1/orgs/${org}/repos/${repo}/deployments/${deploymentId}/approval`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        expected_plan_hash: expectedPlanHash,
+        decision,
+        reason,
+      }),
+    },
+  )
+}
+
 export async function startDeployment(
   org: string,
   repo: string,
   releaseId: string,
   healthTarget?: string,
+  environmentSlug?: string,
+  attemptId?: string,
 ) {
-  const body: { release_id: string; health_target?: string } = { release_id: releaseId }
+  const body: {
+    release_id: string
+    health_target?: string
+    environment_slug?: string
+    attempt_id?: string
+  } = { release_id: releaseId }
   if (healthTarget) {
     body.health_target = healthTarget
+  }
+  if (environmentSlug) {
+    body.environment_slug = environmentSlug
+  }
+  if (attemptId) {
+    body.attempt_id = attemptId
   }
   return api<Deployment>(`/api/v1/orgs/${org}/repos/${repo}/deployments`, {
     method: 'POST',
