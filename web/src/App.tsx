@@ -25,6 +25,7 @@ import {
   createUserPat,
   createScopedPat,
   revokePat,
+  changePassword,
   logout,
   getRunnerCapabilities,
   type AuditEvent,
@@ -69,6 +70,11 @@ export default function App() {
   const [agentRunStarting, setAgentRunStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loginForm, setLoginForm] = useState({ handle: 'admin', password: '' })
+  const [passwordChangeForm, setPasswordChangeForm] = useState({
+    current: '',
+    next: '',
+  })
+  const [passwordChangeBusy, setPasswordChangeBusy] = useState(false)
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
@@ -266,6 +272,8 @@ export default function App() {
   async function onLogout() {
     setError(null)
     resetIamBusy()
+    setPasswordChangeBusy(false)
+    setPasswordChangeForm({ current: '', next: '' })
     invalidateAgentRunWork()
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
@@ -297,6 +305,32 @@ export default function App() {
       await Promise.all([refreshRepos(), refreshIamPanels()])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'login failed')
+    }
+  }
+
+  async function onChangePassword(event: FormEvent) {
+    event.preventDefault()
+    const opEpoch = sessionEpochRef.current
+    setPasswordChangeBusy(true)
+    setError(null)
+    try {
+      await changePassword(passwordChangeForm.current, passwordChangeForm.next)
+      if (!sessionEpochActive(opEpoch)) {
+        return
+      }
+      setPasswordChangeForm({ current: '', next: '' })
+      const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => null)
+      if (sessionEpochActive(opEpoch) && audit) {
+        setAuditEvents(audit)
+      }
+    } catch (err) {
+      if (sessionEpochActive(opEpoch)) {
+        setError(err instanceof Error ? err.message : 'password change failed')
+      }
+    } finally {
+      if (sessionEpochActive(opEpoch)) {
+        setPasswordChangeBusy(false)
+      }
     }
   }
 
@@ -506,6 +540,36 @@ export default function App() {
             </button>
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="account-security">
+              <h3>Account security</h3>
+              <form onSubmit={(e) => void onChangePassword(e)}>
+                <label>
+                  Current password
+                  <input
+                    data-testid="password-current"
+                    type="password"
+                    autoComplete="current-password"
+                    value={passwordChangeForm.current}
+                    onChange={(e) =>
+                      setPasswordChangeForm((f) => ({ ...f, current: e.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  New password
+                  <input
+                    data-testid="password-new"
+                    type="password"
+                    autoComplete="new-password"
+                    value={passwordChangeForm.next}
+                    onChange={(e) => setPasswordChangeForm((f) => ({ ...f, next: e.target.value }))}
+                  />
+                </label>
+                <button type="submit" data-testid="change-password" disabled={passwordChangeBusy}>
+                  Change password
+                </button>
+              </form>
+            </Panel>
             <Panel style={{ flex: '1 1 18rem' }} data-testid="audit-panel">
               <h3>Audit (read-only)</h3>
               {auditEvents.length === 0 ? (

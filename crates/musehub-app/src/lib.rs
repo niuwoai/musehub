@@ -60,8 +60,8 @@ use crate::agent_supervisor::AgentSupervisor;
 use crate::pipeline_supervisor::PipelineSupervisor;
 
 use crate::auth::{
-    clear_session_cookie, cookie_name, login, logout, principal_from_session, session_cookie,
-    verify_password,
+    change_password, clear_session_cookie, cookie_name, login, logout, principal_from_session,
+    session_cookie, verify_password,
 };
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
@@ -98,6 +98,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
+        .route(
+            "/api/v1/auth/change-password",
+            post(change_password_handler),
+        )
         .route("/api/v1/me", get(me_handler))
         .route(
             "/api/v1/tokens",
@@ -351,6 +355,51 @@ async fn logout_handler(
         clear_session_cookie().to_string().parse().unwrap(),
     );
     Ok(response)
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    let token = session_token_from_headers(&headers).ok_or(AppError::Unauthorized)?;
+    let principal_id = principal_from_session(&state.pool, &token).await?;
+    change_password(
+        &state.pool,
+        principal_id,
+        &token,
+        &body.current_password,
+        &body.new_password,
+    )
+    .await?;
+    let request_id = audit::request_id_from_headers(&headers);
+    if let Ok(Some((org_id,))) =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug_normalized = 'demo'")
+            .fetch_optional(&state.pool)
+            .await
+    {
+        let _ = audit::record(
+            &state.pool,
+            Some(org_id),
+            None,
+            principal_id,
+            None,
+            "auth.password_change",
+            "principal",
+            principal_id,
+            request_id,
+            "allow",
+            serde_json::json!({ "other_sessions_revoked": true }),
+        )
+        .await;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn me_handler(
