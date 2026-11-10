@@ -58,9 +58,12 @@ pub struct DeploymentListResponse {
     pub has_more: bool,
 }
 
+const DEPLOYMENT_LIST_MAX_OFFSET: i64 = 10_000;
+
 #[derive(Deserialize, Default)]
 pub struct ListDeploymentsQuery {
     pub limit: Option<i64>,
+    pub offset: Option<i64>,
     pub state: Option<String>,
     pub environment_slug: Option<String>,
 }
@@ -167,6 +170,12 @@ pub async fn list_deployments(
     let (_, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
     let limit = query.limit.unwrap_or(20).clamp(1, 50);
+    let offset = query.offset.unwrap_or(0);
+    if !(0..=DEPLOYMENT_LIST_MAX_OFFSET).contains(&offset) {
+        return Err(AppError::Validation(format!(
+            "offset must be between 0 and {DEPLOYMENT_LIST_MAX_OFFSET}"
+        )));
+    }
     let fetch = limit + 1;
     let mut sql = String::from(
         "SELECT d.id, e.slug, d.release_id, d.state, d.plan_hash::text, d.updated_at
@@ -194,8 +203,10 @@ pub async fn list_deployments(
         bind_idx += 1;
     }
     sql.push_str(&format!(
-        " ORDER BY d.created_at DESC, d.id DESC LIMIT ${bind_idx}"
+        " ORDER BY d.created_at DESC, d.id DESC OFFSET ${bind_idx}"
     ));
+    bind_idx += 1;
+    sql.push_str(&format!(" LIMIT ${bind_idx}"));
 
     let mut q = sqlx::query_as::<
         _,
@@ -215,7 +226,7 @@ pub async fn list_deployments(
     if let Some(ref st) = state_filter {
         q = q.bind(st);
     }
-    q = q.bind(fetch);
+    q = q.bind(offset).bind(fetch);
     let rows = q.fetch_all(&state.pool).await?;
     let has_more = rows.len() as i64 > limit;
     let items = rows

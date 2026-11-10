@@ -499,11 +499,19 @@ export async function createUserPat(org: string, name: string) {
 export async function listDeployments(
   org: string,
   repo: string,
-  options?: { limit?: number; state?: string; environment_slug?: string },
+  options?: {
+    limit?: number
+    offset?: number
+    state?: string
+    environment_slug?: string
+  },
 ) {
   const params = new URLSearchParams()
   if (options?.limit != null) {
     params.set('limit', String(options.limit))
+  }
+  if (options?.offset != null) {
+    params.set('offset', String(options.offset))
   }
   if (options?.state) {
     params.set('state', options.state)
