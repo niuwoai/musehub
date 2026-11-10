@@ -209,4 +209,13 @@ async fn deployment_list_scoped_paginated_and_denied() {
     )
     .await;
     assert_eq!(wrong_slug.0, StatusCode::NOT_FOUND);
+
+    let (bad_offset, bad_body) = get_json(
+        &app,
+        "/api/v1/orgs/demo/repos/dep-list/deployments?offset=10001",
+        Some(&admin_cookie),
+    )
+    .await;
+    assert_eq!(bad_offset, StatusCode::BAD_REQUEST);
+    assert_eq!(bad_body["error_code"], "validation_error");
 }

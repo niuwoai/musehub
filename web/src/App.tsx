@@ -93,7 +93,10 @@ export default function App() {
   const [deploymentListError, setDeploymentListError] = useState<string | null>(null)
   const [deploymentListHasMore, setDeploymentListHasMore] = useState(false)
   const deploymentListFetchSeqRef = useRef(0)
+  const deploymentListModeRef = useRef<'pending' | 'all'>('pending')
+  const deploymentListModeEpochRef = useRef(0)
   const DEPLOYMENT_LIST_PAGE = 20
+  const DEPLOYMENT_LIST_MAX_OFFSET = 10_000
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
   const [orgDisplayName, setOrgDisplayName] = useState('')
@@ -120,6 +123,10 @@ export default function App() {
     selectedRepoRef.current = selectedRepo
   }, [selectedRepo])
 
+  useEffect(() => {
+    deploymentListModeRef.current = deploymentListMode
+  }, [deploymentListMode])
+
   function captureDeploymentOp(repoSlug?: string): DeploymentOpContext {
     return {
       sessionEpoch: sessionEpochRef.current,
@@ -145,6 +152,8 @@ export default function App() {
     setDeploymentApprovalBusy(false)
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
+    deploymentListModeRef.current = 'pending'
+    deploymentListModeEpochRef.current += 1
     deploymentListFetchSeqRef.current += 1
     setDeploymentListError(null)
     setDeploymentListHasMore(false)
@@ -448,6 +457,22 @@ export default function App() {
     return d.toISOString().replace('T', ' ').slice(0, 19)
   }
 
+  function deploymentListIntentActive(modeEpoch: number, mode: 'pending' | 'all') {
+    return (
+      modeEpoch === deploymentListModeEpochRef.current &&
+      mode === deploymentListModeRef.current
+    )
+  }
+
+  function refreshDeploymentListAfterOp(op: DeploymentOpContext) {
+    if (!deploymentOpActive(op)) {
+      return
+    }
+    void refreshDeploymentList(op, {
+      mode: deploymentListModeRef.current,
+    })
+  }
+
   async function refreshDeploymentList(
     op?: DeploymentOpContext,
     opts?: { append?: boolean; mode?: 'pending' | 'all' },
@@ -456,9 +481,17 @@ export default function App() {
       return
     }
     const ctx = op ?? captureDeploymentOp()
-    const mode = opts?.mode ?? deploymentListMode
+    const mode = opts?.mode ?? deploymentListModeRef.current
     const append = opts?.append ?? false
-    const offset = append ? deploymentSummaries.length : 0
+    const listOffset = append ? deploymentSummaries.length : 0
+    if (append && listOffset > DEPLOYMENT_LIST_MAX_OFFSET) {
+      setDeploymentListError(
+        `deployment list offset exceeds maximum (${DEPLOYMENT_LIST_MAX_OFFSET})`,
+      )
+      setDeploymentListHasMore(false)
+      return
+    }
+    const modeEpochAtStart = deploymentListModeEpochRef.current
     const fetchSeq = (deploymentListFetchSeqRef.current += 1)
     if (append) {
       setDeploymentListLoadingMore(true)
@@ -470,12 +503,13 @@ export default function App() {
     try {
       const list = await listDeployments(DEFAULT_ORG, ctx.repo, {
         limit: DEPLOYMENT_LIST_PAGE,
-        offset,
+        offset: listOffset,
         ...(mode === 'pending' ? { state: 'awaiting_approval' } : {}),
       })
       if (
         !deploymentOpActive(ctx) ||
-        fetchSeq !== deploymentListFetchSeqRef.current
+        fetchSeq !== deploymentListFetchSeqRef.current ||
+        !deploymentListIntentActive(modeEpochAtStart, mode)
       ) {
         return
       }
@@ -488,7 +522,8 @@ export default function App() {
     } catch (err) {
       if (
         deploymentOpActive(ctx) &&
-        fetchSeq === deploymentListFetchSeqRef.current
+        fetchSeq === deploymentListFetchSeqRef.current &&
+        deploymentListIntentActive(modeEpochAtStart, mode)
       ) {
         setDeploymentListError(
           err instanceof Error ? err.message : 'failed to load deployments',
@@ -501,7 +536,8 @@ export default function App() {
     } finally {
       if (
         deploymentOpActive(ctx) &&
-        fetchSeq === deploymentListFetchSeqRef.current
+        fetchSeq === deploymentListFetchSeqRef.current &&
+        deploymentListIntentActive(modeEpochAtStart, mode)
       ) {
         setDeploymentListLoading(false)
         setDeploymentListLoadingMore(false)
@@ -513,8 +549,10 @@ export default function App() {
     if (mode === deploymentListMode) {
       return
     }
-    setDeploymentListMode(mode)
+    deploymentListModeRef.current = mode
+    deploymentListModeEpochRef.current += 1
     deploymentListFetchSeqRef.current += 1
+    setDeploymentListMode(mode)
     setDeploymentSummaries([])
     setDeploymentListHasMore(false)
     setDeploymentListError(null)
@@ -525,7 +563,17 @@ export default function App() {
     if (deploymentListLoading || deploymentListLoadingMore || !deploymentListHasMore) {
       return
     }
-    void refreshDeploymentList(captureDeploymentOp(), { append: true })
+    if (deploymentSummaries.length >= DEPLOYMENT_LIST_MAX_OFFSET) {
+      setDeploymentListError(
+        `deployment list offset exceeds maximum (${DEPLOYMENT_LIST_MAX_OFFSET})`,
+      )
+      setDeploymentListHasMore(false)
+      return
+    }
+    void refreshDeploymentList(captureDeploymentOp(), {
+      append: true,
+      mode: deploymentListModeRef.current,
+    })
   }
 
   async function onPickDeploymentFromList(id: string) {
@@ -736,9 +784,7 @@ export default function App() {
       } else if (deploymentOpActive(op)) {
         setTrace(null)
       }
-      if (deploymentOpActive(op)) {
-        void refreshDeploymentList(op)
-      }
+      refreshDeploymentListAfterOp(op)
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'production deploy failed')
@@ -788,9 +834,7 @@ export default function App() {
       } else if (deploymentOpActive(op)) {
         setTrace(null)
       }
-      if (deploymentOpActive(op)) {
-        void refreshDeploymentList(op)
-      }
+      refreshDeploymentListAfterOp(op)
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(
