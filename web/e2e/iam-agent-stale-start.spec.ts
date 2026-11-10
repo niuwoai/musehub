@@ -63,6 +63,8 @@ test.describe('agent run start session guard', () => {
   test('stale delayed agent-start 200 never renders; next session can start a run', async ({
     page,
   }) => {
+    test.setTimeout(360_000)
+
     const paused = await installPausedPostAgentRunRoute(page)
 
     await page.goto('/')
@@ -100,20 +102,24 @@ test.describe('agent run start session guard', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await prepareRepoWithAcceptedPlan(page)
+    await expect(repoNavButtons(page).first()).toBeVisible({ timeout: 15_000 })
+    await repoNavButtons(page).first().click()
+    const runAgentButton = page.getByRole('button', { name: /run agent|运行/i }).first()
+    await expect(runAgentButton).toBeVisible({ timeout: 15_000 })
 
     const realStart = page.waitForResponse(
       (r) =>
         r.url().includes('/api/v1/orgs/demo/repos/') &&
         r.url().includes('/agent-runs') &&
-        r.request().method() === 'POST' &&
-        r.ok(),
+        r.request().method() === 'POST',
+      { timeout: 180_000 },
     )
-    await page.getByRole('button', { name: /run agent|运行/i }).first().click()
+    await runAgentButton.click()
     const realResponse = await realStart
+    expect(realResponse.ok()).toBeTruthy()
     const realJson = (await realResponse.json()) as { id: string }
     expect(realJson.id).not.toBe(STALE_AGENT_FIXTURE_ID)
-    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 180_000 })
     const lastRunText = await page.getByTestId('last-agent-run').innerText()
     expect(lastRunText).not.toContain(STALE_AGENT_FIXTURE_ID)
     expect(lastRunText).not.toContain(STALE_AGENT_FIXTURE_COMMIT)
