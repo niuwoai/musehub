@@ -94,7 +94,7 @@ test.describe('deployment list discovery', () => {
     await page.unroute(`**/deployments/${STALE_DEPLOYMENT_ID}`)
   })
 
-  test('stale delayed list refresh does not apply after repo switch', async ({ page }) => {
+  test('stale delayed pick from list does not apply after repo switch', async ({ page }) => {
     const { gate, release } = delayedGate()
 
     await page.route('**/deployments?*', async (route) => {
@@ -102,7 +102,6 @@ test.describe('deployment list discovery', () => {
         await route.continue()
         return
       }
-      await gate
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -123,6 +122,19 @@ test.describe('deployment list discovery', () => {
       })
     })
 
+    await page.route(`**/deployments/${STALE_DEPLOYMENT_ID}`, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue()
+        return
+      }
+      await gate
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(STALE_DEPLOYMENT_BODY),
+      })
+    })
+
     await page.goto('/')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
@@ -131,30 +143,33 @@ test.describe('deployment list discovery', () => {
     const before = await repoNavButtons(page).count()
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
     await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    const repoA = repoNavButtons(page).nth(before)
-    await repoA.click()
+    await repoNavButtons(page).last().click()
+    await expect(page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`)).toBeVisible({
+      timeout: 15_000,
+    })
 
-    const listReq = page.waitForRequest(
-      (req) => req.url().includes('/deployments?') && req.method() === 'GET',
+    const detailReq = page.waitForRequest(
+      (req) => req.url().includes(STALE_DEPLOYMENT_ID) && req.method() === 'GET',
     )
-    await page.getByTestId('refresh-deployments').click()
-    await listReq
+    void page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
+    await detailReq
 
     const beforeB = await repoNavButtons(page).count()
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
     await expect(repoNavButtons(page)).toHaveCount(beforeB + 1, { timeout: 15_000 })
     await repoNavButtons(page).last().click()
 
-    const listDone = page.waitForResponse(
-      (r) => r.url().includes('/deployments?') && r.request().method() === 'GET',
+    const detailDone = page.waitForResponse(
+      (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
     )
     release()
-    await listDone
+    await detailDone
 
-    await expect(page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`)).toHaveCount(0)
+    await expect(page.getByTestId('deployment-approval')).toHaveCount(0)
     const body = await page.locator('body').innerText()
     expect(body).not.toContain(STALE_PLAN_PREFIX)
 
     await page.unroute('**/deployments?*')
+    await page.unroute(`**/deployments/${STALE_DEPLOYMENT_ID}`)
   })
 })
