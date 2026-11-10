@@ -84,16 +84,22 @@ export default function App() {
   /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
   const agentRunPollEpochRef = useRef(0)
 
-  useEffect(() => {
-    sessionHandleRef.current = session
-  }, [session])
-
   function bumpAgentRunPollEpoch() {
     agentRunPollEpochRef.current += 1
   }
 
   function agentRunPollEpochActive(epoch: number) {
     return agentRunPollEpochRef.current === epoch
+  }
+
+  function resetAgentRunUi() {
+    setLastRun(null)
+    setAgentRunStarting(false)
+  }
+
+  function invalidateAgentRunWork() {
+    bumpAgentRunPollEpoch()
+    resetAgentRunUi()
   }
 
   function bumpOrgMembersRevision() {
@@ -158,6 +164,15 @@ export default function App() {
   }
 
   useEffect(() => {
+    const prevHandle = sessionHandleRef.current
+    sessionHandleRef.current = session
+    const identityChanged =
+      prevHandle !== null && session !== null && prevHandle !== session
+    if (session === null) {
+      resetAgentRunUi()
+    } else if (identityChanged) {
+      invalidateAgentRunWork()
+    }
     const epoch = bumpSessionEpoch()
     bumpIamPanelsGeneration()
     resetIamBusy()
@@ -251,7 +266,7 @@ export default function App() {
   async function onLogout() {
     setError(null)
     resetIamBusy()
-    bumpAgentRunPollEpoch()
+    invalidateAgentRunWork()
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
     setMintedPatFull(null)
@@ -351,10 +366,10 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
-      setLastRun(run)
       if (!agentRunPollEpochActive(pollEpoch)) {
         return
       }
+      setLastRun(run)
       const finished = await pollRun(run.id, pollEpoch)
       if (!finished || !agentRunPollEpochActive(pollEpoch)) {
         return
