@@ -81,10 +81,20 @@ export default function App() {
   const iamPanelsGenerationRef = useRef(0)
   const sessionHandleRef = useRef<string | null>(null)
   const orgMembersRevisionRef = useRef(0)
+  /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
+  const agentRunPollEpochRef = useRef(0)
 
   useEffect(() => {
     sessionHandleRef.current = session
   }, [session])
+
+  function bumpAgentRunPollEpoch() {
+    agentRunPollEpochRef.current += 1
+  }
+
+  function agentRunPollEpochActive(epoch: number) {
+    return agentRunPollEpochRef.current === epoch
+  }
 
   function bumpOrgMembersRevision() {
     orgMembersRevisionRef.current += 1
@@ -241,6 +251,7 @@ export default function App() {
   async function onLogout() {
     setError(null)
     resetIamBusy()
+    bumpAgentRunPollEpoch()
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
     setMintedPatFull(null)
@@ -310,15 +321,15 @@ export default function App() {
     await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
   }
 
-  async function pollRun(runId: string, runEpoch: number) {
+  async function pollRun(runId: string, pollEpoch: number) {
     // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
     for (let i = 0; i < 360; i++) {
-      if (!sessionEpochActive(runEpoch)) {
-        throw new Error('agent run poll aborted (session changed)')
+      if (!agentRunPollEpochActive(pollEpoch)) {
+        return null
       }
       const run = await getAgentRun(runId)
-      if (!sessionEpochActive(runEpoch)) {
-        throw new Error('agent run poll aborted (session changed)')
+      if (!agentRunPollEpochActive(pollEpoch)) {
+        return null
       }
       setLastRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
@@ -331,7 +342,7 @@ export default function App() {
 
   async function onRunAgent(issue: Issue) {
     if (!selectedRepo) return
-    const runEpoch = sessionEpochRef.current
+    const pollEpoch = agentRunPollEpochRef.current
     setAgentRunStarting(true)
     try {
       const run = await startAgentRun(
@@ -340,11 +351,14 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
-      if (!sessionEpochActive(runEpoch)) {
+      setLastRun(run)
+      if (!agentRunPollEpochActive(pollEpoch)) {
         return
       }
-      setLastRun(run)
-      await pollRun(run.id, runEpoch)
+      const finished = await pollRun(run.id, pollEpoch)
+      if (!finished || !agentRunPollEpochActive(pollEpoch)) {
+        return
+      }
       await loadIssues(selectedRepo)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'agent run failed')
@@ -355,9 +369,9 @@ export default function App() {
 
   async function onCancelRun() {
     if (!lastRun) return
-    const runEpoch = sessionEpochRef.current
+    const pollEpoch = agentRunPollEpochRef.current
     await cancelAgentRun(lastRun.id)
-    await pollRun(lastRun.id, runEpoch)
+    await pollRun(lastRun.id, pollEpoch)
   }
 
   async function onCreatePrFromRun() {
@@ -581,6 +595,7 @@ export default function App() {
                       onClick={() => {
                         void (async () => {
                           const opEpoch = beginIamOperation()
+                          const invitedAs = sessionHandleRef.current ?? session
                           setError(null)
                           try {
                             const invitedHandle = memberHandle.trim()
@@ -592,10 +607,18 @@ export default function App() {
                               'member',
                             )
                             bumpIamPanelsGeneration()
+                            const panelsGeneration = iamPanelsGenerationRef.current
                             const members = await listOrgMembers(DEFAULT_ORG)
-                            bumpOrgMembersRevision()
-                            setOrgMembers(members)
-                            setMembersAdmin(true)
+                            if (
+                              sessionEpochActive(opEpoch) &&
+                              invitedAs &&
+                              (sessionHandleRef.current ?? session) === invitedAs &&
+                              iamPanelsGenerationActive(panelsGeneration)
+                            ) {
+                              bumpOrgMembersRevision()
+                              setOrgMembers(members)
+                              setMembersAdmin(true)
+                            }
                             if (sessionEpochActive(opEpoch)) {
                               setMemberHandle('')
                               setMemberPassword('')
