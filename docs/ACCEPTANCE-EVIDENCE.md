@@ -37,5 +37,7 @@
 | `verify-clean-install-runbook.sh` | RUNBOOK quick start 实测 |
 | `configure-production-runner-pat.sh` | 生产 worker 用 selected PAT 写入 `deploy/.env`（由 `verify-product-production-stack-e2e.sh` 覆盖同等 API 路径） |
 | `upgrade-production-compose.sh` | 生产镜像 rebuild + migrate-only + 控制面/worker 滚动；逻辑对齐 `verify-product-stack-e2e.sh` upgrade 段 |
+| `verify-systemd-units.sh` | 单元模板渲染 + 禁秘钥入单元 + `systemd-analyze verify`（有则跑） |
+| `install-musehub-systemd.sh` | 安装控制面/runner 单元到 `/etc/systemd/system`（**无** reboot 验收记录） |
 | `git_http::clone_url_tests` | `MUSEHUB_PUBLIC_HTTP_ORIGIN` 与 `0.0.0.0` bind 映射 |
 | `docs/LOCAL-ACCEPTANCE-RUN.md` | 本地跑批命令/exit/SHA 台账 |

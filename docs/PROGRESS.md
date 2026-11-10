@@ -30,7 +30,7 @@
 
 | 主题 | 状态 | 现状 |
 |------|------|------|
-| 干净机器一键安装/启动 | `[x]` 脚本 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `configure-production-runner-pat.sh` + `deploy/RUNBOOK.md`；无 systemd |
+| 干净机器一键安装/启动 | `[x]` 脚本 | `install-production-compose.sh` + `configure-production-runner-pat.sh` + RUNBOOK；**systemd** 可选 `install-musehub-systemd.sh`（**未**在 CI/本仓库做真机 reboot 验收） |
 | 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例 + `verify-caddyfile-layout.sh`；CI 经 HTTP 网关验路径 |
 | DB 迁移升级 Runbook | `[x]` 脚本 | `upgrade-production-compose.sh` + entrypoint migrate；host `verify-product-acceptance.sh` |
 | HTTP Git `clone_url` 可达 | `[x]` 配置 | `MUSEHUB_PUBLIC_HTTP_ORIGIN`（默认 localhost 网关端口）；非 0.0.0.0 展示 |

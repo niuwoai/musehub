@@ -1,0 +1,20 @@
+[Unit]
+Description=MuseHub production worker (musehub-runner via Docker Compose)
+Documentation=file://@REPO_ROOT@/deploy/RUNBOOK.md
+After=musehub-control-plane.service docker.service
+Requires=musehub-control-plane.service
+PartOf=musehub-control-plane.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@DEPLOY_DIR@
+ExecStart=@REPO_ROOT@/scripts/systemd-compose-runner.sh start
+ExecStop=@REPO_ROOT@/scripts/systemd-compose-runner.sh stop
+TimeoutStartSec=600
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

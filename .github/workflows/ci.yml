@@ -45,6 +45,8 @@ jobs:
           python-version: "3.11"
       - name: MCP Python deps
         run: ./scripts/setup-mcp-matrix-python-deps.sh
+      - name: systemd unit layout
+        run: chmod +x ./scripts/verify-systemd-units.sh && ./scripts/verify-systemd-units.sh
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy

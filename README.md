@@ -23,7 +23,9 @@ MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制�
 
 实验室 **demo profile**（API 进程内执行器、compose-mock）：`deploy/RUNBOOK.md` Quick start 或 `./scripts/verify-clean-install-runbook.sh`。
 
-**尚未包含 systemd 单元**；Compose `restart: unless-stopped` 承担进程守护。外置 OCI Registry 地址在 `deploy/.env` 设置 `MUSEHUB_OCI_REGISTRY`（生产 profile 默认要求 pipeline OCI）。
+| 7. 主机重启后自启（可选） | `sudo ./scripts/install-musehub-systemd.sh` → `systemctl enable --now musehub-control-plane`；`musehub-runner` 仅在 `MUSEHUB_RUNNER_PAT` 已配置时实际启动 worker |
+
+容器内 `restart: unless-stopped` **不能**代替宿主机在 Docker 就绪后拉起整栈；首日运维见上。外置 OCI Registry：`deploy/.env` 中 `MUSEHUB_OCI_REGISTRY`。
 
 ## 文档导航
 
