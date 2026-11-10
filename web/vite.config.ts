@@ -18,7 +18,8 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
   test: {
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
+    include: ['src/**/*.test.ts', 'e2e/helpers/**/*.test.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**/*.spec.ts'],
     environment: 'jsdom',
     env: {
       VITE_APP_VERSION: appVersion,
