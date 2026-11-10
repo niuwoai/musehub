@@ -52,13 +52,15 @@ docker compose restart musehub-server gateway
 
 ## Migrations
 
-Migrations run on every server container start (idempotent `up`).
+Migrations run on every server container start (idempotent `up` via `deploy/docker-entrypoint.sh` — same binary as manual `musehub-migrate up`).
 
-Manual migrate only:
+Manual migrate only (compose):
 
 ```bash
 docker compose run --rm --entrypoint /docker-entrypoint.sh musehub-server migrate-only
 ```
+
+Host / CI parity (Postgres URL, down then up idempotency): `scripts/verify-product-acceptance.sh` with `DATABASE_URL` or `MUSEHUB_TEST_DATABASE_URL`.
 
 ## Upgrade
 
@@ -67,7 +69,11 @@ docker compose build musehub-server gateway
 docker compose up -d --force-recreate
 ```
 
-If a migration fails, logs appear in `docker compose logs musehub-server`. Fix forward with a new image; restore from backup if data is inconsistent (see backup).
+Images recreate containers; **named volumes** (`pgdata`, `gitdata`, `artifacts`) keep data when migrations succeed. If a migration fails, logs appear in `docker compose logs musehub-server`. Fix forward with a new image; restore from backup if data is inconsistent (see backup).
+
+## TLS gateway (example)
+
+`deploy/Caddyfile` documents `tls internal` + reverse proxy to API (`/mcp` included). Repeatable layout check: `scripts/verify-caddyfile-layout.sh` (static grep; `caddy validate` when Docker is available).
 
 ## Backup and restore
 

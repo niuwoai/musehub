@@ -107,7 +107,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
 | Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
 | **生产 compose 远程 worker 全链** | `[x]` 本地 | `verify-product-production-stack-e2e.sh`；`install-production-compose.sh` |
-| OCI / 多环境 / 业务 MCP | `[~]` | OCI 产品路径已验；MCP **51 工具 + 22 写幂等**、**5 §13 资源读**；`side_effects` + `writes_remainder` + `resources_v1_*` E2E；**无** 远程 OAuth |
+| OCI / 多环境 / 业务 MCP | `[~]` | **51** 工具 + **22** 写幂等 + **5** §13 读；`writes_thin`（merge/respond/pipeline 幂等）+ `resources_v1_*`（含跨 org）；**无** OAuth 远程 |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200，并暴露 `compose_adapter_mode`（产品镜像默认 **mock**）与 `pipeline_executor`（默认 **in_process**；远程 worker 为 `MUSEHUB_PIPELINE_EXECUTOR=remote`）。
 

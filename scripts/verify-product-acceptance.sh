@@ -40,4 +40,7 @@ cargo run -p musehub-migrate -- down migrations "$DATABASE_URL"
 echo "=== migrate up (again) ==="
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 
+echo "=== caddy gateway layout ==="
+bash scripts/verify-caddyfile-layout.sh
+
 echo "acceptance=ok"

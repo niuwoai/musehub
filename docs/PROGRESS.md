@@ -31,8 +31,8 @@
 | 主题 | 状态 | 现状 |
 |------|------|------|
 | 干净机器一键安装/启动 | `[x]` 脚本 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `deploy/RUNBOOK.md`；无 systemd |
-| 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例；CI 经 HTTP 网关验路径 |
-| DB 迁移升级 Runbook | `[~]` | 入口 migrate + RUNBOOK；CI 证明 idempotent migrate + 镜像 recreate 保数据 |
+| 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例 + `verify-caddyfile-layout.sh`；CI 经 HTTP 网关验路径 |
+| DB 迁移升级 Runbook | `[~]` | compose 入口与 host `verify-product-acceptance.sh` migrate 对齐见 `deploy/RUNBOOK.md` |
 | 最小 RBAC / PAT scope / 审计 | `[~]` | `selected` PAT **不**因 owner/admin 绕过选仓；`production_mcp_selected_repo_e2e`；grant 审计 + 禁自授 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[x]` 本地 | `musehub-runnerd` + `run-ci-security-integration-local.sh`（remote pipeline/agent/deploy + cancel/kill/budget/epoch）；production stack；**非**物理双主机 |
@@ -40,7 +40,7 @@
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | `organizations.preferences` + PATCH settings（display_name/default_collaborator_role）；Web `config-grants.spec.ts` |
 | 受保护环境部署审批 | `[x]` 本地 | `0027` + MCP `deployment_approve` 状态机；`protected_deployment_approval_e2e` |
-| MCP V1 完整工具/Resources 读实现 | `[~]` | **51** 工具 + **22** 写幂等；side-effect 矩阵（`side_effects` + `writes_remainder`）；§13 catalog + `resources_v1_negatives` |
+| MCP V1 完整工具/Resources 读实现 | `[~]` | **51** 工具 + **22** 写幂等；`side_effects` + `writes_remainder` + `writes_thin`（pr_merge/agent_respond/pipeline_run）；§13 catalog（含跨 org 负例）+ `resources_v1_negatives` |
 | Codex live 在线 | `[~]` | `adapter=codex` 仅 live；`codex-sim` 显式；**无** CI 在线凭据（刻意） |
 
 ## 未验证边界
