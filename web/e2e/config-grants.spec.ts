@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { expectLoggedInAs } from './helpers/session'
+
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 
@@ -32,7 +34,7 @@ test.describe('org config and grants UI', () => {
     await page.goto('/')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
-    await expect(page.getByText(/admin/i)).toBeVisible({ timeout: 15_000 })
+    await expectLoggedInAs(page, 'admin')
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
     const repo = page.locator('section > ul').first().getByRole('button').last()
     await repo.click()

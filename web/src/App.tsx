@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -17,8 +17,19 @@ import {
   listRepoGrants,
   listRunnerTokens,
   listAuditEvents,
+  listOrgMembers,
+  inviteOrgMember,
+  patchOrgMemberRole,
+  disableOrgMember,
+  listMyTokens,
+  createUserPat,
+  createScopedPat,
+  revokePat,
+  logout,
   getRunnerCapabilities,
   type AuditEvent,
+  type OrgMember,
+  type PatMasked,
   type RunnerCapabilities,
   getAgentRun,
   getDeploymentTrace,
@@ -65,7 +76,53 @@ export default function App() {
   const [orgDisplayName, setOrgDisplayName] = useState('')
   const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
   const [grantHandle, setGrantHandle] = useState('')
-  const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
+  const [mintedPatFull, setMintedPatFull] = useState<string | null>(null)
+  const sessionEpochRef = useRef(0)
+  const iamPanelsGenerationRef = useRef(0)
+  const sessionHandleRef = useRef<string | null>(null)
+  const orgMembersRevisionRef = useRef(0)
+  /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
+  const agentRunPollEpochRef = useRef(0)
+
+  function bumpAgentRunPollEpoch() {
+    agentRunPollEpochRef.current += 1
+  }
+
+  function agentRunPollEpochActive(epoch: number) {
+    return agentRunPollEpochRef.current === epoch
+  }
+
+  function resetAgentRunUi() {
+    setLastRun(null)
+    setAgentRunStarting(false)
+  }
+
+  function invalidateAgentRunWork() {
+    bumpAgentRunPollEpoch()
+    resetAgentRunUi()
+  }
+
+  function bumpOrgMembersRevision() {
+    orgMembersRevisionRef.current += 1
+  }
+
+  function bumpIamPanelsGeneration() {
+    iamPanelsGenerationRef.current += 1
+  }
+
+  function iamPanelsGenerationActive(generation: number) {
+    return iamPanelsGenerationRef.current === generation
+  }
+  const [orgMembers, setOrgMembers] = useState<OrgMember[]>([])
+  const [membersAdmin, setMembersAdmin] = useState(false)
+  const [memberHandle, setMemberHandle] = useState('')
+  const [memberPassword, setMemberPassword] = useState('')
+  const [myTokens, setMyTokens] = useState<PatMasked[]>([])
+  const [patName, setPatName] = useState('')
+  const [patScopeMode, setPatScopeMode] = useState<'all_accessible' | 'selected'>('all_accessible')
+  const [patRepoId, setPatRepoId] = useState('')
+  const [iamBusy, setIamBusy] = useState(false)
+  const iamBusyEpochRef = useRef<number | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
   const [runnerTokens, setRunnerTokens] = useState<
@@ -74,34 +131,152 @@ export default function App() {
 
   useEffect(() => {
     me()
-      .then((principal) => setSession(principal.handle))
-      .catch(() => setSession(null))
+      .then((principal) => setSession((prev) => prev ?? principal.handle))
+      .catch(() => setSession((prev) => (prev === null ? null : prev)))
   }, [])
 
+  function bumpSessionEpoch() {
+    sessionEpochRef.current += 1
+    return sessionEpochRef.current
+  }
+
+  function sessionEpochActive(epoch: number) {
+    return sessionEpochRef.current === epoch
+  }
+
+  function beginIamOperation() {
+    const opEpoch = sessionEpochRef.current
+    iamBusyEpochRef.current = opEpoch
+    setIamBusy(true)
+    return opEpoch
+  }
+
+  function endIamOperation(opEpoch: number) {
+    if (iamBusyEpochRef.current === opEpoch) {
+      iamBusyEpochRef.current = null
+      setIamBusy(false)
+    }
+  }
+
+  function resetIamBusy() {
+    iamBusyEpochRef.current = null
+    setIamBusy(false)
+  }
+
   useEffect(() => {
+    const prevHandle = sessionHandleRef.current
+    sessionHandleRef.current = session
+    const identityChanged =
+      prevHandle !== null && session !== null && prevHandle !== session
+    if (session === null) {
+      resetAgentRunUi()
+    } else if (identityChanged) {
+      invalidateAgentRunWork()
+    }
+    const epoch = bumpSessionEpoch()
+    bumpIamPanelsGeneration()
+    resetIamBusy()
     if (!session) {
       setAuditEvents([])
       setRunnerCaps(null)
       setRunnerTokens([])
+      setMyTokens([])
+      setOrgMembers([])
+      setMembersAdmin(false)
+      setMintedPatFull(null)
+      bumpOrgMembersRevision()
       return
     }
+    const panelsGeneration = iamPanelsGenerationRef.current
+    const membersRevisionBaseline = orgMembersRevisionRef.current
     void (async () => {
+      const pats = await listMyTokens().catch(() => [] as PatMasked[])
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+        return
+      }
+      setMyTokens(pats)
+      const caps = await getRunnerCapabilities().catch(() => null)
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+        return
+      }
+      setRunnerCaps(caps)
+      const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => [] as AuditEvent[])
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+        return
+      }
+      setAuditEvents(audit)
+      const runner = await listRunnerTokens(DEFAULT_ORG).catch(
+        () => [] as Awaited<ReturnType<typeof listRunnerTokens>>,
+      )
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+        return
+      }
+      setRunnerTokens(runner)
       try {
-        const [audit, caps, tokens] = await Promise.all([
-          listAuditEvents(DEFAULT_ORG, 30),
-          getRunnerCapabilities(),
-          listRunnerTokens(DEFAULT_ORG),
-        ])
-        setAuditEvents(audit)
-        setRunnerCaps(caps)
-        setRunnerTokens(tokens)
+        const members = await listOrgMembers(DEFAULT_ORG)
+        if (
+          !sessionEpochActive(epoch) ||
+          !iamPanelsGenerationActive(panelsGeneration) ||
+          orgMembersRevisionRef.current !== membersRevisionBaseline
+        ) {
+          return
+        }
+        setOrgMembers(members)
+        setMembersAdmin(true)
       } catch {
-        setAuditEvents([])
-        setRunnerCaps(null)
-        setRunnerTokens([])
+        if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+          return
+        }
+        setOrgMembers([])
+        setMembersAdmin(false)
       }
     })()
+    return () => {
+      bumpIamPanelsGeneration()
+    }
   }, [session])
+
+  async function refreshIamPanels() {
+    const epoch = sessionEpochRef.current
+    const panelsGeneration = iamPanelsGenerationRef.current
+    try {
+      const pats = await listMyTokens()
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
+        return
+      }
+      setMyTokens(pats)
+    } catch (err) {
+      if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration)) {
+        setError(err instanceof Error ? err.message : 'PAT list failed')
+      }
+      return
+    }
+    const audit = await listAuditEvents(DEFAULT_ORG, 40).catch(() => null)
+    if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && audit) {
+      setAuditEvents(audit)
+    }
+    const members = await listOrgMembers(DEFAULT_ORG).catch(() => null)
+    if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && members) {
+      bumpOrgMembersRevision()
+      setOrgMembers(members)
+      setMembersAdmin(true)
+    }
+  }
+
+  async function onLogout() {
+    setError(null)
+    resetIamBusy()
+    invalidateAgentRunWork()
+    bumpSessionEpoch()
+    bumpIamPanelsGeneration()
+    setMintedPatFull(null)
+    try {
+      await logout()
+    } catch {
+      /* cookie may already be cleared */
+    }
+    setSession(null)
+  }
 
   async function refreshRepos() {
     const data = await listRepos(DEFAULT_ORG)
@@ -114,8 +289,12 @@ export default function App() {
     try {
       await login(loginForm.handle, loginForm.password)
       const principal = await me()
+      resetIamBusy()
+      bumpSessionEpoch()
+      bumpIamPanelsGeneration()
+      setMintedPatFull(null)
       setSession(principal.handle)
-      await refreshRepos()
+      await Promise.all([refreshRepos(), refreshIamPanels()])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'login failed')
     }
@@ -157,10 +336,16 @@ export default function App() {
     await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
   }
 
-  async function pollRun(runId: string) {
+  async function pollRun(runId: string, pollEpoch: number) {
     // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
     for (let i = 0; i < 360; i++) {
+      if (!agentRunPollEpochActive(pollEpoch)) {
+        return null
+      }
       const run = await getAgentRun(runId)
+      if (!agentRunPollEpochActive(pollEpoch)) {
+        return null
+      }
       setLastRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
         return run
@@ -172,6 +357,7 @@ export default function App() {
 
   async function onRunAgent(issue: Issue) {
     if (!selectedRepo) return
+    const pollEpoch = agentRunPollEpochRef.current
     setAgentRunStarting(true)
     try {
       const run = await startAgentRun(
@@ -180,8 +366,14 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
+      if (!agentRunPollEpochActive(pollEpoch)) {
+        return
+      }
       setLastRun(run)
-      await pollRun(run.id)
+      const finished = await pollRun(run.id, pollEpoch)
+      if (!finished || !agentRunPollEpochActive(pollEpoch)) {
+        return
+      }
       await loadIssues(selectedRepo)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'agent run failed')
@@ -192,8 +384,9 @@ export default function App() {
 
   async function onCancelRun() {
     if (!lastRun) return
+    const pollEpoch = agentRunPollEpochRef.current
     await cancelAgentRun(lastRun.id)
-    await pollRun(lastRun.id)
+    await pollRun(lastRun.id, pollEpoch)
   }
 
   async function onCreatePrFromRun() {
@@ -300,8 +493,17 @@ export default function App() {
 
       {session ? (
         <section>
+          {error ? (
+            <p role="alert" data-testid="app-alert">
+              {error}
+            </p>
+          ) : null}
           <p>
-            {t('app.signedInAs')} <strong>{session}</strong>
+            {t('app.signedInAs')}{' '}
+            <strong data-testid="session-handle">{session}</strong>
+            <button type="button" data-testid="logout" onClick={() => void onLogout()}>
+              Log out
+            </button>
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
             <Panel style={{ flex: '1 1 18rem' }} data-testid="audit-panel">
@@ -321,6 +523,263 @@ export default function App() {
                   ))}
                 </ul>
               )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="org-members">
+              <h3>Organization members</h3>
+              {!membersAdmin ? (
+                <p>Member admin requires org owner/admin.</p>
+              ) : (
+                <>
+                  <ul data-testid="org-members-list" style={{ paddingLeft: '1.2rem' }}>
+                    {orgMembers.map((m) => (
+                      <li key={m.principal_id}>
+                        {m.handle} · {m.org_role} · {m.principal_status}
+                        {m.principal_status === 'active' && m.handle !== session ? (
+                          <>
+                            {' '}
+                            <select
+                              aria-label={`role-${m.handle}`}
+                              value={m.org_role}
+                              onChange={(e) => {
+                                void (async () => {
+                                  setError(null)
+                                  try {
+                                    await patchOrgMemberRole(
+                                      DEFAULT_ORG,
+                                      m.handle,
+                                      e.target.value,
+                                    )
+                                    bumpIamPanelsGeneration()
+                                    await refreshIamPanels()
+                                  } catch (err) {
+                                    setError(
+                                      err instanceof Error
+                                        ? err.message
+                                        : 'role update failed',
+                                    )
+                                  }
+                                })()
+                              }}
+                            >
+                              <option value="member">member</option>
+                              <option value="admin">admin</option>
+                              <option value="owner">owner</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void (async () => {
+                                  setError(null)
+                                  try {
+                                    await disableOrgMember(DEFAULT_ORG, m.handle)
+                                    bumpIamPanelsGeneration()
+                                    await refreshIamPanels()
+                                  } catch (err) {
+                                    setError(
+                                      err instanceof Error ? err.message : 'disable failed',
+                                    )
+                                  }
+                                })()
+                              }}
+                            >
+                              Disable
+                            </button>
+                          </>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  <div>
+                    <input
+                      data-testid="member-handle"
+                      placeholder="handle"
+                      value={memberHandle}
+                      onChange={(e) => setMemberHandle(e.target.value)}
+                    />
+                    <input
+                      data-testid="member-password"
+                      type="password"
+                      placeholder="initial password"
+                      value={memberPassword}
+                      onChange={(e) => setMemberPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      data-testid="invite-member"
+                      disabled={iamBusy}
+                      onClick={() => {
+                        void (async () => {
+                          const opEpoch = beginIamOperation()
+                          const invitedAs = sessionHandleRef.current ?? session
+                          setError(null)
+                          try {
+                            const invitedHandle = memberHandle.trim()
+                            bumpOrgMembersRevision()
+                            await inviteOrgMember(
+                              DEFAULT_ORG,
+                              invitedHandle,
+                              memberPassword,
+                              'member',
+                            )
+                            bumpIamPanelsGeneration()
+                            const panelsGeneration = iamPanelsGenerationRef.current
+                            const members = await listOrgMembers(DEFAULT_ORG)
+                            if (
+                              sessionEpochActive(opEpoch) &&
+                              invitedAs &&
+                              (sessionHandleRef.current ?? session) === invitedAs &&
+                              iamPanelsGenerationActive(panelsGeneration)
+                            ) {
+                              bumpOrgMembersRevision()
+                              setOrgMembers(members)
+                              setMembersAdmin(true)
+                            }
+                            if (sessionEpochActive(opEpoch)) {
+                              setMemberHandle('')
+                              setMemberPassword('')
+                            }
+                          } catch (err) {
+                            if (sessionEpochActive(opEpoch)) {
+                              setError(
+                                err instanceof Error ? err.message : 'member invite failed',
+                              )
+                            }
+                          } finally {
+                            endIamOperation(opEpoch)
+                          }
+                        })()
+                      }}
+                    >
+                      Add member
+                    </button>
+                  </div>
+                </>
+              )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="pat-management">
+              <h3>Personal access tokens</h3>
+              {mintedPatFull ? (
+                <p data-testid="pat-minted-once">
+                  Copy now (shown once): <code>{mintedPatFull}</code>
+                </p>
+              ) : (
+                <p>Minted tokens are shown once at creation only.</p>
+              )}
+              <ul data-testid="pat-masked-list">
+                {myTokens.map((t) => (
+                  <li key={t.id}>
+                    {t.name}: <code>{t.token_prefix}…</code> ({t.scope_mode}, exp{' '}
+                    {t.expires_at.slice(0, 10)})
+                    <button
+                      type="button"
+                      data-testid={`revoke-pat-${t.id}`}
+                      onClick={() => {
+                        void (async () => {
+                          const epoch = sessionEpochRef.current
+                          setError(null)
+                          try {
+                            await revokePat(t.id)
+                            if (!sessionEpochActive(epoch)) {
+                              return
+                            }
+                            setMintedPatFull(null)
+                            bumpIamPanelsGeneration()
+                            await refreshIamPanels()
+                          } catch (err) {
+                            if (sessionEpochActive(epoch)) {
+                              setError(
+                                err instanceof Error ? err.message : 'PAT revoke failed',
+                              )
+                            }
+                          }
+                        })()
+                      }}
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <input
+                data-testid="pat-name"
+                placeholder="token name"
+                value={patName}
+                onChange={(e) => setPatName(e.target.value)}
+              />
+              <label>
+                Scope mode{' '}
+                <select
+                  data-testid="pat-scope-mode"
+                  value={patScopeMode}
+                  onChange={(e) =>
+                    setPatScopeMode(e.target.value as 'all_accessible' | 'selected')
+                  }
+                >
+                  <option value="all_accessible">all_accessible</option>
+                  <option value="selected">selected (one repo)</option>
+                </select>
+              </label>
+              {patScopeMode === 'selected' ? (
+                <label>
+                  Repo{' '}
+                  <select
+                    data-testid="pat-repo-id"
+                    value={patRepoId}
+                    onChange={(e) => setPatRepoId(e.target.value)}
+                  >
+                    <option value="">— select —</option>
+                    {repos.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.slug}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                data-testid="create-pat"
+                disabled={iamBusy}
+                onClick={() => {
+                  void (async () => {
+                    const opEpoch = beginIamOperation()
+                    setError(null)
+                    const name = patName.trim() || 'console-pat'
+                    try {
+                      let created
+                      if (patScopeMode === 'selected') {
+                        if (!patRepoId) {
+                          if (sessionEpochActive(opEpoch)) {
+                            setError('select a repo for selected-scope PAT')
+                          }
+                          return
+                        }
+                        created = await createScopedPat(DEFAULT_ORG, name, ['repo:read'], {
+                          scope_mode: 'selected',
+                          repo_ids: [patRepoId],
+                        })
+                      } else {
+                        created = await createUserPat(DEFAULT_ORG, name)
+                      }
+                      if (!sessionEpochActive(opEpoch)) {
+                        return
+                      }
+                      setMintedPatFull(created.token)
+                      setPatName('')
+                      bumpIamPanelsGeneration()
+                      await refreshIamPanels()
+                    } catch (err) {
+                      if (sessionEpochActive(opEpoch)) {
+                        setError(err instanceof Error ? err.message : 'PAT create failed')
+                      }
+                    } finally {
+                      endIamOperation(opEpoch)
+                    }
+                  })()
+                }}
+              >
+                Create PAT
+              </button>
             </Panel>
             <Panel style={{ flex: '1 1 18rem' }} data-testid="runner-status-panel">
               <h3>Runner status</h3>
@@ -392,10 +851,9 @@ export default function App() {
                     Save org settings
                   </button>
                   <p>
-                    pipeline: {settings.pipeline_executor} · agent:{' '}
+                    pipeline:                     {settings.pipeline_executor} · agent:{' '}
                     {settings.agent_executor} · compose:{' '}
                     {settings.compose_adapter_mode} ({settings.product_profile})
-                    {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
                   </p>
                 </div>
               ) : null}
@@ -552,6 +1010,7 @@ export default function App() {
           <label>
             {t('app.loginHandle')}
             <input
+              data-testid="login-handle-input"
               value={loginForm.handle}
               onChange={(e) =>
                 setLoginForm({ ...loginForm, handle: e.target.value })
