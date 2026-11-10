@@ -390,6 +390,35 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         .and_then(|v| v.as_str())
         .expect("pipeline id")
         .to_string();
+    let pipe_replay = mcp_client
+        .call_tool(
+            CallToolRequestParams::new("musehub_pipeline_run").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("org_id".into(), serde_json::json!(org_uuid.0.to_string()));
+                m.insert(
+                    "repository_id".into(),
+                    serde_json::json!(repo_uuid.0.to_string()),
+                );
+                m.insert("workflow_path".into(), serde_json::json!("product-ci"));
+                m.insert("target_oid".into(), serde_json::json!(merge_commit));
+                m.insert(
+                    "idempotency_key".into(),
+                    serde_json::json!("oci-mcp-pipeline-v1"),
+                );
+                m
+            }),
+        )
+        .await
+        .expect("mcp pipeline_run replay");
+    assert!(!pipe_replay.is_error.unwrap_or(true));
+    let pipeline_replay_id = pipe_replay
+        .structured_content
+        .as_ref()
+        .and_then(|v| v.get("data"))
+        .and_then(|d| d.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("pipeline replay id");
+    assert_eq!(pipeline_replay_id, pipeline_id.as_str());
     for _ in 0..600 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let st: serde_json::Value = serde_json::from_slice(

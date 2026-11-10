@@ -73,7 +73,7 @@ Images recreate containers; **named volumes** (`pgdata`, `gitdata`, `artifacts`)
 
 ## TLS gateway (example)
 
-`deploy/Caddyfile` documents `tls internal` + reverse proxy to API (`/mcp` included). Repeatable layout check: `scripts/verify-caddyfile-layout.sh` (static grep; `caddy validate` when Docker is available).
+`deploy/Caddyfile` documents `tls internal` + reverse proxy to API (`/mcp` included). Repeatable layout check: `scripts/verify-caddyfile-layout.sh` (static grep; `caddy validate` via Docker when available). Also runs at the start of `scripts/verify-product-stack-e2e.sh` and at the end of `scripts/verify-product-acceptance.sh`.
 
 ## Backup and restore
 

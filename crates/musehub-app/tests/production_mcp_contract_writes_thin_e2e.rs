@@ -1,4 +1,5 @@
-//! MCP write tools with thin matrix coverage: pr_merge, agent_run_respond, pipeline_run idempotency.
+//! MCP write tools with thin matrix coverage: pr_merge, agent_run_respond, agent_run_start,
+//! pipeline_run idempotency.
 
 mod common;
 
@@ -634,6 +635,210 @@ async fn mcp_pipeline_run_idempotency_replay_and_conflict() {
                 ("workflow_path".into(), json!("product-ci")),
                 ("target_oid".into(), json!(base_oid)),
                 ("idempotency_key".into(), json!("pipe-run-idem-k1")),
+            ]),
+        ))
+        .await;
+    assert!(conflict.is_err());
+    client.cancel().await.ok();
+}
+
+async fn issue_with_accepted_plan(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>,
+    org_id: Uuid,
+    repo_id: Uuid,
+) -> (String, String) {
+    let issue = client
+        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.to_string())),
+                ("repository_id".into(), json!(repo_id.to_string())),
+                ("idempotency_key".into(), json!("ag-start-issue")),
+                ("title".into(), json!("Agent")),
+                ("body".into(), json!("")),
+            ]),
+        ))
+        .await
+        .expect("issue");
+    assert!(!issue.is_error.unwrap_or(true));
+    let issue_id = tool_data(&issue)["id"].as_str().unwrap().to_string();
+    let revision_id = tool_data(&issue)["current_revision_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plan = client
+        .call_tool(CallToolRequestParams::new("musehub_plan_create").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.to_string())),
+                ("repository_id".into(), json!(repo_id.to_string())),
+                ("issue_revision_id".into(), json!(revision_id)),
+                ("body".into(), json!("plan")),
+                ("steps".into(), json!([])),
+                ("idempotency_key".into(), json!("ag-start-plan")),
+            ]),
+        ))
+        .await
+        .expect("plan");
+    let plan_id = tool_data(&plan)["id"].as_str().unwrap().to_string();
+    let accepted = client
+        .call_tool(CallToolRequestParams::new("musehub_plan_accept").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.to_string())),
+                ("repository_id".into(), json!(repo_id.to_string())),
+                ("plan_id".into(), json!(plan_id)),
+                ("idempotency_key".into(), json!("ag-start-accept")),
+            ]),
+        ))
+        .await
+        .expect("accept");
+    assert!(!accepted.is_error.unwrap_or(true));
+    (issue_id, plan_id)
+}
+
+#[tokio::test]
+async fn mcp_agent_run_start_rejects_without_accepted_plan() {
+    std::env::set_var("MUSEHUB_MCP_PRODUCT", "1");
+    let pool = common::migrated_pool().await;
+    let git_root = tempfile::tempdir().unwrap();
+    let bootstrap = common::bootstrap_password();
+    let app = common::product_app(pool.clone(), git_root.path(), &bootstrap).await;
+    let cookie = common::login_cookie(&app, "admin", &bootstrap).await;
+    let token = admin_pat(&app, &cookie, "ag-start-deny").await;
+    let org_id: (Uuid,) = sqlx::query_as("SELECT id FROM organizations WHERE slug = 'demo'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/repos")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(r#"{"slug":"ag-start-deny","description":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let repo_id: (Uuid,) =
+        sqlx::query_as("SELECT id FROM repositories WHERE slug_normalized = 'ag-start-deny'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let client = mcp_client(&app, &token).await;
+    let issue = client
+        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.0.to_string())),
+                ("repository_id".into(), json!(repo_id.0.to_string())),
+                ("idempotency_key".into(), json!("ag-deny-iss")),
+                ("title".into(), json!("x")),
+                ("body".into(), json!("")),
+            ]),
+        ))
+        .await
+        .expect("issue");
+    let issue_data = tool_data(&issue);
+    let issue_id = issue_data["id"].as_str().unwrap().to_string();
+    let denied = client
+        .call_tool(CallToolRequestParams::new("musehub_agent_run_start").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.0.to_string())),
+                ("repository_id".into(), json!(repo_id.0.to_string())),
+                ("issue_id".into(), json!(issue_id)),
+                ("message".into(), json!("go")),
+                ("idempotency_key".into(), json!("ag-start-deny")),
+            ]),
+        ))
+        .await
+        .expect("start");
+    assert!(denied.is_error.unwrap_or(true));
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agent_runs WHERE repo_id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
+    client.cancel().await.ok();
+}
+
+#[tokio::test]
+async fn mcp_agent_run_start_queues_run_idempotent_replay_and_conflict() {
+    std::env::set_var("MUSEHUB_MCP_PRODUCT", "1");
+    let pool = common::migrated_pool().await;
+    let git_root = tempfile::tempdir().unwrap();
+    let bootstrap = common::bootstrap_password();
+    let app = common::product_app(pool.clone(), git_root.path(), &bootstrap).await;
+    let cookie = common::login_cookie(&app, "admin", &bootstrap).await;
+    let token = admin_pat(&app, &cookie, "ag-start-ok").await;
+    let org_id: (Uuid,) = sqlx::query_as("SELECT id FROM organizations WHERE slug = 'demo'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/repos")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(r#"{"slug":"ag-start-ok","description":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let repo_id: (Uuid,) =
+        sqlx::query_as("SELECT id FROM repositories WHERE slug_normalized = 'ag-start-ok'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let client = mcp_client(&app, &token).await;
+    let (issue_id, _plan_id) = issue_with_accepted_plan(&client, org_id.0, repo_id.0).await;
+    let args = serde_json::Map::from_iter([
+        ("org_id".into(), json!(org_id.0.to_string())),
+        ("repository_id".into(), json!(repo_id.0.to_string())),
+        ("issue_id".into(), json!(issue_id)),
+        ("message".into(), json!("ship it")),
+        ("adapter".into(), json!("reference")),
+        ("idempotency_key".into(), json!("ag-start-v1")),
+    ]);
+    let first = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_agent_run_start").with_arguments(args.clone()),
+        )
+        .await
+        .expect("start");
+    assert!(!first.is_error.unwrap_or(true));
+    let run_a = tool_data(&first)["id"].as_str().unwrap().to_string();
+    let db: (String, String) = sqlx::query_as(
+        "SELECT state, issue_id::text FROM agent_runs WHERE id = $1",
+    )
+    .bind(Uuid::parse_str(&run_a).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(db.0, "queued");
+    assert_eq!(db.1, issue_id);
+    let replay = client
+        .call_tool(CallToolRequestParams::new("musehub_agent_run_start").with_arguments(args))
+        .await
+        .expect("replay");
+    assert!(!replay.is_error.unwrap_or(true));
+    let run_b = tool_data(&replay)["id"].as_str().unwrap().to_string();
+    assert_eq!(run_a, run_b);
+    let runs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agent_runs WHERE repo_id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(runs.0, 1);
+    let conflict = client
+        .call_tool(CallToolRequestParams::new("musehub_agent_run_start").with_arguments(
+            serde_json::Map::from_iter([
+                ("org_id".into(), json!(org_id.0.to_string())),
+                ("repository_id".into(), json!(repo_id.0.to_string())),
+                ("issue_id".into(), json!(issue_id)),
+                ("message".into(), json!("other message")),
+                ("idempotency_key".into(), json!("ag-start-v1")),
             ]),
         ))
         .await;

@@ -4,6 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+bash "$ROOT/scripts/verify-caddyfile-layout.sh"
 # Legacy builder avoids buildx lock issues on shared CI/VM runners.
 export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
 export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
