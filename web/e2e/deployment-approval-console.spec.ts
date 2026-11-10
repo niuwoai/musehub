@@ -105,8 +105,72 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
   return { slug, releaseId: relBody.id }
 }
 
+const STALE_PROD_PLAN_PREFIX = 'cccccccccccc'
+
 test.describe('protected deployment approval console', () => {
   test.skip(!adminPassword, 'requires bootstrap password and API on :8080')
+
+  test('stale delayed production deploy start cleared on logout', async ({ page }) => {
+    test.setTimeout(360_000)
+    let releasePost: () => void = () => {}
+    const postGate = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    let postSeenResolve: () => void = () => {}
+    const postSeen = new Promise<void>((resolve) => {
+      postSeenResolve = resolve
+    })
+
+    await page.route('**/deployments', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue()
+        return
+      }
+      const body = route.request().postDataJSON() as { environment_slug?: string }
+      if (body.environment_slug !== 'production') {
+        await route.continue()
+        return
+      }
+      postSeenResolve()
+      await postGate
+      const staleHash = `${STALE_PROD_PLAN_PREFIX}${'c'.repeat(52)}`
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: '44444444-4444-4444-8444-444444444444',
+          environment_slug: 'production',
+          release_id: body.release_id ?? '22222222-2222-4222-8222-222222222222',
+          state: 'awaiting_approval',
+          adapter_kind: 'compose-mock',
+          plan_hash: staleHash,
+          approval_required: true,
+        }),
+      })
+    })
+
+    await page.goto('/')
+    await fillLoginForm(page, 'admin', adminPassword!)
+    await page.getByRole('button', { name: /login|登录/i }).click()
+    await expectLoggedInAs(page, 'admin')
+    const adminCookie = `${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.name}=${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.value}`
+
+    await deliveryThroughRelease(page, adminCookie)
+    void page.getByTestId('deploy-production').click()
+    await postSeen
+    await page.getByTestId('logout').click()
+    releasePost()
+    await page.waitForTimeout(300)
+
+    await fillLoginForm(page, 'admin', adminPassword!)
+    await page.getByRole('button', { name: /login|登录/i }).click()
+    await expectLoggedInAs(page, 'admin')
+    await expect(page.getByTestId('deployment-approval')).toHaveCount(0)
+    const body = await page.locator('body').innerText()
+    expect(body).not.toContain(STALE_PROD_PLAN_PREFIX)
+
+    await page.unroute('**/deployments')
+  })
 
   test('approver acts in console; denied member and stale session guarded', async ({ page }) => {
     test.setTimeout(360_000)

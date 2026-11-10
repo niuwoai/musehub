@@ -94,8 +94,51 @@ export default function App() {
   const iamPanelsGenerationRef = useRef(0)
   const sessionHandleRef = useRef<string | null>(null)
   const orgMembersRevisionRef = useRef(0)
+  /** Invalidated on logout / repo switch so deployment async work cannot repopulate UI. */
+  const repoDeliveryGenerationRef = useRef(0)
+  const selectedRepoRef = useRef<string | null>(null)
   /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
   const agentRunPollEpochRef = useRef(0)
+
+  type DeploymentOpContext = {
+    sessionEpoch: number
+    repoGeneration: number
+    repo: string
+  }
+
+  useEffect(() => {
+    selectedRepoRef.current = selectedRepo
+  }, [selectedRepo])
+
+  function captureDeploymentOp(repoSlug?: string): DeploymentOpContext {
+    return {
+      sessionEpoch: sessionEpochRef.current,
+      repoGeneration: repoDeliveryGenerationRef.current,
+      repo: repoSlug ?? selectedRepoRef.current ?? '',
+    }
+  }
+
+  function deploymentOpActive(ctx: DeploymentOpContext): boolean {
+    return (
+      sessionEpochRef.current === ctx.sessionEpoch &&
+      repoDeliveryGenerationRef.current === ctx.repoGeneration &&
+      selectedRepoRef.current === ctx.repo
+    )
+  }
+
+  function resetDeploymentUiState() {
+    setActiveDeployment(null)
+    setDeploymentId(null)
+    setPublishedReleaseId(null)
+    setTrace(null)
+    setDeploymentLookupId('')
+    setDeploymentApprovalBusy(false)
+  }
+
+  function invalidateDeploymentWork() {
+    repoDeliveryGenerationRef.current += 1
+    resetDeploymentUiState()
+  }
 
   function bumpAgentRunPollEpoch() {
     agentRunPollEpochRef.current += 1
@@ -282,12 +325,9 @@ export default function App() {
     setPasswordChangeBusy(false)
     setPasswordChangeForm({ current: '', next: '' })
     invalidateAgentRunWork()
+    invalidateDeploymentWork()
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
-    setActiveDeployment(null)
-    setPublishedReleaseId(null)
-    setDeploymentApprovalBusy(false)
-    setDeploymentLookupId('')
     setMintedPatFull(null)
     try {
       await logout()
@@ -309,6 +349,7 @@ export default function App() {
       await login(loginForm.handle, loginForm.password)
       const principal = await me()
       resetIamBusy()
+      invalidateDeploymentWork()
       bumpSessionEpoch()
       bumpIamPanelsGeneration()
       setMintedPatFull(null)
@@ -352,24 +393,28 @@ export default function App() {
   }
 
   async function loadIssues(slug: string) {
+    invalidateDeploymentWork()
+    selectedRepoRef.current = slug
     setSelectedRepo(slug)
-    setActiveDeployment(null)
-    setDeploymentId(null)
-    setPublishedReleaseId(null)
-    setTrace(null)
+    const op = captureDeploymentOp(slug)
     setError(null)
     try {
       const prs = await listPullRequests(DEFAULT_ORG, slug)
-      setPulls(prs)
       const data = await listIssues(DEFAULT_ORG, slug)
-      setIssues(data)
       const s = await getOrgSettings(DEFAULT_ORG)
+      const g = await listRepoGrants(DEFAULT_ORG, slug)
+      if (!deploymentOpActive(op)) {
+        return
+      }
+      setPulls(prs)
+      setIssues(data)
       setSettings(s)
       setOrgDisplayName(s.display_name)
-      const g = await listRepoGrants(DEFAULT_ORG, slug)
       setGrants(g)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to load repository')
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'failed to load repository')
+      }
     }
   }
 
@@ -493,6 +538,7 @@ export default function App() {
     if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
       return
     }
+    const op = captureDeploymentOp()
     setError(null)
     try {
       const version = `0.0.${Date.now().toString(36)}`
@@ -504,19 +550,31 @@ export default function App() {
         pr_id: mergedPr.id,
       })
       await publishRelease(DEFAULT_ORG, selectedRepo, rel.id)
+      if (!deploymentOpActive(op)) {
+        return
+      }
       setPublishedReleaseId(rel.id)
       const dep = await startDeployment(DEFAULT_ORG, selectedRepo, rel.id)
+      if (!deploymentOpActive(op)) {
+        return
+      }
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
       const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+      if (!deploymentOpActive(op)) {
+        return
+      }
       setTrace(tv)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'release/deploy failed')
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'release/deploy failed')
+      }
     }
   }
 
   async function onDeployProduction() {
     if (!selectedRepo || !publishedReleaseId) return
+    const op = captureDeploymentOp()
     setError(null)
     try {
       const dep = await startDeployment(
@@ -526,58 +584,77 @@ export default function App() {
         undefined,
         'production',
       )
+      if (!deploymentOpActive(op)) {
+        return
+      }
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
       if (dep.state !== 'awaiting_approval') {
-        setTrace(await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id))
-      } else {
+        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        if (!deploymentOpActive(op)) {
+          return
+        }
+        setTrace(tv)
+      } else if (deploymentOpActive(op)) {
         setTrace(null)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'production deploy failed')
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'production deploy failed')
+      }
     }
   }
 
   async function onDeploymentDecision(decision: 'approve' | 'reject') {
     if (!selectedRepo || !activeDeployment?.plan_hash) return
-    const opEpoch = sessionEpochRef.current
+    const op = captureDeploymentOp()
+    const deploymentIdLocked = activeDeployment.id
+    const planHashLocked = activeDeployment.plan_hash
     setDeploymentApprovalBusy(true)
     setError(null)
     try {
       await approveDeployment(
         DEFAULT_ORG,
         selectedRepo,
-        activeDeployment.id,
-        activeDeployment.plan_hash,
+        deploymentIdLocked,
+        planHashLocked,
         decision,
         decision === 'approve' ? 'console approval' : 'console reject',
       )
-      if (!sessionEpochActive(opEpoch)) {
+      if (!deploymentOpActive(op)) {
         return
       }
       const refreshed = await getDeployment(
         DEFAULT_ORG,
         selectedRepo,
-        activeDeployment.id,
+        deploymentIdLocked,
       )
-      if (!sessionEpochActive(opEpoch)) {
+      if (!deploymentOpActive(op)) {
         return
       }
       setActiveDeployment(refreshed)
       setDeploymentId(refreshed.id)
       if (refreshed.state !== 'awaiting_approval') {
-        setTrace(
-          await getDeploymentTrace(DEFAULT_ORG, selectedRepo, refreshed.id),
+        const tv = await getDeploymentTrace(
+          DEFAULT_ORG,
+          selectedRepo,
+          refreshed.id,
         )
+        if (!deploymentOpActive(op)) {
+          return
+        }
+        setTrace(tv)
+      } else if (deploymentOpActive(op)) {
+        setTrace(null)
       }
     } catch (err) {
-      if (sessionEpochActive(opEpoch)) {
+      if (deploymentOpActive(op)) {
         setError(
           err instanceof Error ? err.message : 'deployment approval failed',
         )
       }
     } finally {
-      if (sessionEpochActive(opEpoch)) {
+      if (deploymentOpActive(op)) {
         setDeploymentApprovalBusy(false)
       }
     }
@@ -585,31 +662,51 @@ export default function App() {
 
   async function onLoadTrace() {
     if (!selectedRepo || !deploymentId) return
-    setTrace(await getDeploymentTrace(DEFAULT_ORG, selectedRepo, deploymentId))
+    const op = captureDeploymentOp()
+    const traceDeploymentId = deploymentId
+    try {
+      const tv = await getDeploymentTrace(
+        DEFAULT_ORG,
+        selectedRepo,
+        traceDeploymentId,
+      )
+      if (deploymentOpActive(op)) {
+        setTrace(tv)
+      }
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'trace load failed')
+      }
+    }
   }
 
   async function onLoadDeploymentById() {
     if (!selectedRepo || !deploymentLookupId.trim()) return
-    const opEpoch = sessionEpochRef.current
+    const op = captureDeploymentOp()
+    const lookupId = deploymentLookupId.trim()
     setError(null)
     try {
-      const dep = await getDeployment(
-        DEFAULT_ORG,
-        selectedRepo,
-        deploymentLookupId.trim(),
-      )
-      if (!sessionEpochActive(opEpoch)) {
+      const dep = await getDeployment(DEFAULT_ORG, selectedRepo, lookupId)
+      if (!deploymentOpActive(op)) {
         return
       }
       setActiveDeployment(dep)
       setDeploymentId(dep.id)
       if (dep.state !== 'awaiting_approval') {
-        setTrace(
-          await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id),
+        const tv = await getDeploymentTrace(
+          DEFAULT_ORG,
+          selectedRepo,
+          dep.id,
         )
+        if (!deploymentOpActive(op)) {
+          return
+        }
+        setTrace(tv)
+      } else if (deploymentOpActive(op)) {
+        setTrace(null)
       }
     } catch (err) {
-      if (sessionEpochActive(opEpoch)) {
+      if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'deployment lookup failed')
       }
     }
@@ -1147,88 +1244,88 @@ export default function App() {
                     <button type="button" onClick={() => void onReleaseAndDeploy()}>
                       {t('app.releaseAndDeployMock')}
                     </button>
-                    {publishedReleaseId ? (
-                      <button
-                        type="button"
-                        data-testid="deploy-production"
-                        onClick={() => void onDeployProduction()}
-                      >
-                        {t('app.deployProductionProtected')}
-                      </button>
-                    ) : null}
-                    <label>
-                      {t('app.loadDeploymentById')}
-                      <input
-                        data-testid="deployment-lookup-id"
-                        value={deploymentLookupId}
-                        onChange={(e) => setDeploymentLookupId(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      data-testid="load-deployment"
-                      onClick={() => void onLoadDeploymentById()}
-                    >
-                      {t('app.loadDeployment')}
-                    </button>
-                    {activeDeployment?.state === 'awaiting_approval' ? (
-                      <div data-testid="deployment-approval">
-                        <p data-testid="deployment-approval-state">
-                          {t('app.deploymentAwaitingApproval', {
-                            env: activeDeployment.environment_slug,
-                          })}
-                        </p>
-                        <p data-testid="deployment-plan-hash">
-                          {activeDeployment.plan_hash?.slice(0, 12)}…
-                        </p>
-                        <button
-                          type="button"
-                          data-testid="approve-deployment"
-                          disabled={deploymentApprovalBusy}
-                          onClick={() => void onDeploymentDecision('approve')}
-                        >
-                          {t('app.approveDeployment')}
-                        </button>
-                        <button
-                          type="button"
-                          data-testid="reject-deployment"
-                          disabled={deploymentApprovalBusy}
-                          onClick={() => void onDeploymentDecision('reject')}
-                        >
-                          {t('app.rejectDeployment')}
-                        </button>
-                      </div>
-                    ) : null}
-                    {deploymentId ? (
-                      <button type="button" onClick={() => void onLoadTrace()}>
-                        {t('app.viewTrace')}
-                      </button>
-                    ) : null}
-                    {trace ? (
-                      <pre data-testid="delivery-trace" style={{ fontSize: '0.85rem' }}>
-                        {JSON.stringify(
-                          {
-                            adapter: trace.deployment_adapter,
-                            mock: trace.adapter_is_mock,
-                            release_oci_image_ref: trace.release_oci_image_ref,
-                            applied_oci_digest: trace.applied_oci_digest,
-                            verified_source_oid: trace.verified_source_oid,
-                            commit_oid: trace.commit_oid,
-                            gaps: trace.gaps,
-                            artifacts: trace.artifacts.length,
-                          },
-                          null,
-                          2,
-                        )}
-                      </pre>
-                    ) : null}
-                    {trace && trace.gaps.length > 0 ? (
-                      <p role="status">{t('app.traceGaps')}: {trace.gaps.join(', ')}</p>
-                    ) : null}
                   </>
                 ) : (
                   <p>{t('app.noMergedPr')}</p>
                 )}
+                {publishedReleaseId ? (
+                  <button
+                    type="button"
+                    data-testid="deploy-production"
+                    onClick={() => void onDeployProduction()}
+                  >
+                    {t('app.deployProductionProtected')}
+                  </button>
+                ) : null}
+                <label>
+                  {t('app.loadDeploymentById')}
+                  <input
+                    data-testid="deployment-lookup-id"
+                    value={deploymentLookupId}
+                    onChange={(e) => setDeploymentLookupId(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  data-testid="load-deployment"
+                  onClick={() => void onLoadDeploymentById()}
+                >
+                  {t('app.loadDeployment')}
+                </button>
+                {activeDeployment?.state === 'awaiting_approval' ? (
+                  <div data-testid="deployment-approval">
+                    <p data-testid="deployment-approval-state">
+                      {t('app.deploymentAwaitingApproval', {
+                        env: activeDeployment.environment_slug,
+                      })}
+                    </p>
+                    <p data-testid="deployment-plan-hash">
+                      {activeDeployment.plan_hash?.slice(0, 12)}…
+                    </p>
+                    <button
+                      type="button"
+                      data-testid="approve-deployment"
+                      disabled={deploymentApprovalBusy}
+                      onClick={() => void onDeploymentDecision('approve')}
+                    >
+                      {t('app.approveDeployment')}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="reject-deployment"
+                      disabled={deploymentApprovalBusy}
+                      onClick={() => void onDeploymentDecision('reject')}
+                    >
+                      {t('app.rejectDeployment')}
+                    </button>
+                  </div>
+                ) : null}
+                {deploymentId ? (
+                  <button type="button" onClick={() => void onLoadTrace()}>
+                    {t('app.viewTrace')}
+                  </button>
+                ) : null}
+                {trace ? (
+                  <pre data-testid="delivery-trace" style={{ fontSize: '0.85rem' }}>
+                    {JSON.stringify(
+                      {
+                        adapter: trace.deployment_adapter,
+                        mock: trace.adapter_is_mock,
+                        release_oci_image_ref: trace.release_oci_image_ref,
+                        applied_oci_digest: trace.applied_oci_digest,
+                        verified_source_oid: trace.verified_source_oid,
+                        commit_oid: trace.commit_oid,
+                        gaps: trace.gaps,
+                        artifacts: trace.artifacts.length,
+                      },
+                      null,
+                      2,
+                    )}
+                  </pre>
+                ) : null}
+                {trace && trace.gaps.length > 0 ? (
+                  <p role="status">{t('app.traceGaps')}: {trace.gaps.join(', ')}</p>
+                ) : null}
               </Panel>
             </Panel>
           ) : null}
