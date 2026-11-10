@@ -77,9 +77,12 @@ test.describe('deployment view session/repo epoch', () => {
     await page.getByTestId('load-deployment').click()
     await loadReq
 
+    const staleResponse = page.waitForResponse(
+      (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
+    )
     await page.getByTestId('logout').click()
     release()
-    await page.waitForTimeout(400)
+    await staleResponse
 
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
@@ -124,8 +127,11 @@ test.describe('deployment view session/repo epoch', () => {
     await repoNavButtons(page).last().click()
     expect(repoB).not.toBe(repoA)
 
+    const staleResponse = page.waitForResponse(
+      (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
+    )
     release()
-    await page.waitForTimeout(250)
+    await staleResponse
 
     await expect(page.getByTestId('deployment-approval')).toHaveCount(0)
     const body = await page.locator('body').innerText()
@@ -187,8 +193,13 @@ test.describe('deployment view session/repo epoch', () => {
     await approveReq
     await page.getByTestId('logout').click()
     await expect(page.getByTestId('deployment-approval')).toHaveCount(0)
+    const staleChain = page.waitForResponse(
+      (r) =>
+        (r.url().includes('/approval') && r.request().method() === 'POST') ||
+        (r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET'),
+    )
     release()
-    await page.waitForTimeout(400)
+    await staleChain
 
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()

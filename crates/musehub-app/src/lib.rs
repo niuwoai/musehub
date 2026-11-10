@@ -229,7 +229,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/deployments",
-            post(deployment::start_deployment),
+            get(deployment::list_deployments).post(deployment::start_deployment),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/deployments/{deployment_id}",

@@ -51,20 +51,29 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
   const prNumber = prList[0]!.number
   const reviewerPass = 'Dep-Reviewer-22!'
   const ciPass = 'Dep-Ci-Reporter-22!'
-  await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
+  const memSuffix = randomUUID().replace(/-/g, '').slice(0, 12)
+  const revHandle = `dep-rev-${memSuffix}`
+  const ciHandle = `dep-ci-${memSuffix}`
+  const memberRev = await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
     headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
-    data: { handle: `dep-rev-${slug.slice(-6)}`, password: reviewerPass, role: 'member' },
+    data: { handle: revHandle, password: reviewerPass, role: 'member' },
   })
-  await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
+  expect(memberRev.ok()).toBeTruthy()
+  const memberCi = await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
     headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
-    data: { handle: `dep-ci-${slug.slice(-6)}`, password: ciPass, role: 'admin' },
+    data: { handle: ciHandle, password: ciPass, role: 'admin' },
   })
-  await page.request.post(`${apiBase}/api/v1/orgs/demo/repos/${slug}/collaborators`, {
-    headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
-    data: { handle: `dep-rev-${slug.slice(-6)}`, role: 'maintainer' },
-  })
-  const revCookie = await loginCookie(`dep-rev-${slug.slice(-6)}`, reviewerPass)
-  const ciCookie = await loginCookie(`dep-ci-${slug.slice(-6)}`, ciPass)
+  expect(memberCi.ok()).toBeTruthy()
+  const collab = await page.request.post(
+    `${apiBase}/api/v1/orgs/demo/repos/${slug}/collaborators`,
+    {
+      headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+      data: { handle: revHandle, role: 'maintainer' },
+    },
+  )
+  expect(collab.ok()).toBeTruthy()
+  const revCookie = await loginCookie(revHandle, reviewerPass)
+  const ciCookie = await loginCookie(ciHandle, ciPass)
   const review = await page.request.post(
     `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/reviews`,
     {
@@ -156,11 +165,17 @@ test.describe('protected deployment approval console', () => {
     const adminCookie = `${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.name}=${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.value}`
 
     await deliveryThroughRelease(page, adminCookie)
+    const staleProd = page.waitForResponse(
+      (r) =>
+        r.url().includes('/deployments') &&
+        r.request().method() === 'POST' &&
+        r.status() === 202,
+    )
     void page.getByTestId('deploy-production').click()
     await postSeen
     await page.getByTestId('logout').click()
     releasePost()
-    await page.waitForTimeout(300)
+    await staleProd
 
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()

@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,31 @@ pub struct DeploymentApprovalRequest {
     pub expected_plan_hash: String,
     pub decision: String,
     pub reason: String,
+}
+
+#[derive(Serialize)]
+pub struct DeploymentSummary {
+    pub id: Uuid,
+    pub environment_slug: String,
+    pub release_id: Uuid,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<String>,
+    pub approval_required: bool,
+    pub updated_at: String,
+}
+
+#[derive(Serialize)]
+pub struct DeploymentListResponse {
+    pub items: Vec<DeploymentSummary>,
+    pub has_more: bool,
+}
+
+#[derive(Deserialize, Default)]
+pub struct ListDeploymentsQuery {
+    pub limit: Option<i64>,
+    pub state: Option<String>,
+    pub environment_slug: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +155,87 @@ fn row_to_view(
             approval_required: dep_state == "awaiting_approval",
         }),
     )
+}
+
+pub async fn list_deployments(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo)): AxumPath<(String, String)>,
+    Query(query): Query<ListDeploymentsQuery>,
+) -> Result<Json<DeploymentListResponse>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 50);
+    let fetch = limit + 1;
+    let mut sql = String::from(
+        "SELECT d.id, e.slug, d.release_id, d.state, d.plan_hash::text, d.updated_at
+         FROM deployments d
+         JOIN environments e ON e.id = d.environment_id
+         WHERE d.repo_id = $1",
+    );
+    let mut bind_idx = 2i32;
+    let env_slug = query
+        .environment_slug
+        .as_ref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let state_filter = query
+        .state
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if env_slug.is_some() {
+        sql.push_str(&format!(" AND e.slug = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    if state_filter.is_some() {
+        sql.push_str(&format!(" AND d.state = ${bind_idx}"));
+        bind_idx += 1;
+    }
+    sql.push_str(&format!(
+        " ORDER BY d.created_at DESC, d.id DESC LIMIT ${bind_idx}"
+    ));
+
+    let mut q = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Uuid,
+            String,
+            Option<String>,
+            time::OffsetDateTime,
+        ),
+    >(&sql)
+    .bind(repo_id);
+    if let Some(ref slug) = env_slug {
+        q = q.bind(slug);
+    }
+    if let Some(ref st) = state_filter {
+        q = q.bind(st);
+    }
+    q = q.bind(fetch);
+    let rows = q.fetch_all(&state.pool).await?;
+    let has_more = rows.len() as i64 > limit;
+    let items = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(
+            |(id, env_slug, release_id, dep_state, plan_hash, updated_at)| DeploymentSummary {
+                id,
+                environment_slug: env_slug,
+                release_id,
+                state: dep_state.clone(),
+                plan_hash,
+                approval_required: dep_state == "awaiting_approval",
+                updated_at: updated_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| updated_at.to_string()),
+            },
+        )
+        .collect();
+    Ok(Json(DeploymentListResponse { items, has_more }))
 }
 
 pub async fn start_deployment(
