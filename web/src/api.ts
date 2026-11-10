@@ -81,6 +81,15 @@ export type Release = {
   state: string
 }
 
+export type DeploymentHealthSummary = {
+  status?: string
+  error_code?: string
+  detail?: string
+  target?: string
+  rollback?: boolean
+  [key: string]: unknown
+}
+
 export type Deployment = {
   id: string
   environment_slug: string
@@ -89,6 +98,7 @@ export type Deployment = {
   adapter_kind: string
   plan_hash?: string | null
   approval_required: boolean
+  health_summary?: DeploymentHealthSummary | null
 }
 
 export type DeploymentSummary = {
@@ -576,6 +586,30 @@ export async function startDeployment(
     body.attempt_id = attemptId
   }
   return api<Deployment>(`/api/v1/orgs/${org}/repos/${repo}/deployments`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function rollbackDeployment(
+  org: string,
+  repo: string,
+  targetDeploymentId: string,
+  reason?: string,
+  attemptId?: string,
+) {
+  const body: {
+    target_deployment_id: string
+    reason?: string
+    attempt_id?: string
+  } = { target_deployment_id: targetDeploymentId }
+  if (reason) {
+    body.reason = reason
+  }
+  if (attemptId) {
+    body.attempt_id = attemptId
+  }
+  return api<Deployment>(`/api/v1/orgs/${org}/repos/${repo}/deployments/rollback`, {
     method: 'POST',
     body: JSON.stringify(body),
   })

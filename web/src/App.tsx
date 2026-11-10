@@ -36,6 +36,7 @@ import {
   getDeployment,
   getDeploymentTrace,
   approveDeployment,
+  rollbackDeployment,
   listDeployments,
   type Deployment,
   type DeploymentSummary,
@@ -85,6 +86,7 @@ export default function App() {
   const [activeDeployment, setActiveDeployment] = useState<Deployment | null>(null)
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null)
   const [deploymentApprovalBusy, setDeploymentApprovalBusy] = useState(false)
+  const [deploymentRollbackBusy, setDeploymentRollbackBusy] = useState(false)
   const [deploymentLookupId, setDeploymentLookupId] = useState('')
   const [deploymentSummaries, setDeploymentSummaries] = useState<DeploymentSummary[]>([])
   const [deploymentListMode, setDeploymentListMode] = useState<'pending' | 'all'>('pending')
@@ -150,6 +152,7 @@ export default function App() {
     setTrace(null)
     setDeploymentLookupId('')
     setDeploymentApprovalBusy(false)
+    setDeploymentRollbackBusy(false)
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
     deploymentListModeRef.current = 'pending'
@@ -447,6 +450,32 @@ export default function App() {
         setError(err instanceof Error ? err.message : 'failed to load repository')
       }
     }
+  }
+
+  function deploymentHealthFailureText(health: Deployment['health_summary']) {
+    if (!health || typeof health !== 'object') {
+      return { code: '', detail: '' }
+    }
+    const code =
+      typeof health.error_code === 'string'
+        ? health.error_code
+        : typeof health.status === 'string'
+          ? health.status
+          : ''
+    const detail = typeof health.detail === 'string' ? health.detail : ''
+    return { code, detail }
+  }
+
+  function latestSucceededRollbackTarget(
+    environmentSlug: string,
+    excludeId?: string,
+  ): DeploymentSummary | undefined {
+    return deploymentSummaries.find(
+      (d) =>
+        d.environment_slug === environmentSlug &&
+        d.state === 'succeeded' &&
+        d.id !== excludeId,
+    )
   }
 
   function formatDeploymentWhen(iso: string) {
@@ -788,6 +817,47 @@ export default function App() {
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'production deploy failed')
+      }
+    }
+  }
+
+  async function onRollbackToTarget(targetDeploymentId: string) {
+    if (!selectedRepo) {
+      return
+    }
+    const op = captureDeploymentOp()
+    setDeploymentRollbackBusy(true)
+    setError(null)
+    try {
+      const dep = await rollbackDeployment(
+        DEFAULT_ORG,
+        selectedRepo,
+        targetDeploymentId,
+        'console rollback',
+      )
+      if (!deploymentOpActive(op)) {
+        return
+      }
+      setDeploymentId(dep.id)
+      setDeploymentLookupId(dep.id)
+      setActiveDeployment(dep)
+      if (dep.state !== 'awaiting_approval') {
+        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        if (!deploymentOpActive(op)) {
+          return
+        }
+        setTrace(tv)
+      } else if (deploymentOpActive(op)) {
+        setTrace(null)
+      }
+      refreshDeploymentListAfterOp(op)
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'deployment rollback failed')
+      }
+    } finally {
+      if (deploymentOpActive(op)) {
+        setDeploymentRollbackBusy(false)
       }
     }
   }
@@ -1514,6 +1584,16 @@ export default function App() {
                           </span>
                           {d.plan_hash ? ` · ${d.plan_hash.slice(0, 8)}…` : ''}
                         </button>
+                        {d.state === 'succeeded' ? (
+                          <button
+                            type="button"
+                            data-testid={`deployment-rollback-${d.id}`}
+                            disabled={deploymentRollbackBusy}
+                            onClick={() => void onRollbackToTarget(d.id)}
+                          >
+                            {t('app.rollbackDeployment')}
+                          </button>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1543,6 +1623,48 @@ export default function App() {
                 >
                   {t('app.loadDeployment')}
                 </button>
+                {activeDeployment?.state === 'failed' ? (
+                  <div data-testid="deployment-failure-panel">
+                    <p>{t('app.deploymentFailedTitle')}</p>
+                    {(() => {
+                      const { code, detail } = deploymentHealthFailureText(
+                        activeDeployment.health_summary,
+                      )
+                      return (
+                        <>
+                          <p data-testid="deployment-failure-code">
+                            {code || t('app.deploymentFailureUnknown')}
+                          </p>
+                          {detail ? (
+                            <p data-testid="deployment-failure-detail">{detail}</p>
+                          ) : null}
+                        </>
+                      )
+                    })()}
+                    {(() => {
+                      const target = latestSucceededRollbackTarget(
+                        activeDeployment.environment_slug,
+                        activeDeployment.id,
+                      )
+                      return target ? (
+                        <button
+                          type="button"
+                          data-testid="deployment-rollback-known-good"
+                          disabled={deploymentRollbackBusy}
+                          onClick={() => void onRollbackToTarget(target.id)}
+                        >
+                          {t('app.rollbackToKnownGood', {
+                            id: target.id.slice(0, 8),
+                          })}
+                        </button>
+                      ) : (
+                        <p data-testid="deployment-rollback-unavailable">
+                          {t('app.rollbackNoKnownGood')}
+                        </p>
+                      )
+                    })()}
+                  </div>
+                ) : null}
                 {activeDeployment?.state === 'awaiting_approval' ? (
                   <div data-testid="deployment-approval">
                     <p data-testid="deployment-approval-state">
