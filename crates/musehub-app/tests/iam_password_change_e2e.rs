@@ -203,5 +203,5 @@ async fn concurrent_password_changes_allow_only_one_success() {
     let login_b = login_status(&app, MEMBER, ROTATED_B).await;
     assert_eq!(login_initial, StatusCode::UNAUTHORIZED);
     assert_ne!(login_a, login_b);
-    assert_eq!(login_a == StatusCode::OK || login_b == StatusCode::OK, true);
+    assert!(login_a == StatusCode::OK || login_b == StatusCode::OK);
 }
