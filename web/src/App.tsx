@@ -87,6 +87,7 @@ export default function App() {
   const [patScopeMode, setPatScopeMode] = useState<'all_accessible' | 'selected'>('all_accessible')
   const [patRepoId, setPatRepoId] = useState('')
   const [iamBusy, setIamBusy] = useState(false)
+  const iamBusyEpochRef = useRef<number | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
   const [runnerTokens, setRunnerTokens] = useState<
@@ -108,8 +109,28 @@ export default function App() {
     return sessionEpochRef.current === epoch
   }
 
+  function beginIamOperation() {
+    const opEpoch = sessionEpochRef.current
+    iamBusyEpochRef.current = opEpoch
+    setIamBusy(true)
+    return opEpoch
+  }
+
+  function endIamOperation(opEpoch: number) {
+    if (iamBusyEpochRef.current === opEpoch) {
+      iamBusyEpochRef.current = null
+      setIamBusy(false)
+    }
+  }
+
+  function resetIamBusy() {
+    iamBusyEpochRef.current = null
+    setIamBusy(false)
+  }
+
   useEffect(() => {
     const epoch = bumpSessionEpoch()
+    resetIamBusy()
     if (!session) {
       setAuditEvents([])
       setRunnerCaps(null)
@@ -188,6 +209,7 @@ export default function App() {
 
   async function onLogout() {
     setError(null)
+    resetIamBusy()
     bumpSessionEpoch()
     setMintedPatFull(null)
     try {
@@ -511,8 +533,8 @@ export default function App() {
                       disabled={iamBusy}
                       onClick={() => {
                         void (async () => {
+                          const opEpoch = beginIamOperation()
                           setError(null)
-                          setIamBusy(true)
                           try {
                             await inviteOrgMember(
                               DEFAULT_ORG,
@@ -520,15 +542,20 @@ export default function App() {
                               memberPassword,
                               'member',
                             )
+                            if (!sessionEpochActive(opEpoch)) {
+                              return
+                            }
                             setMemberHandle('')
                             setMemberPassword('')
                             await refreshIamPanels()
                           } catch (err) {
-                            setError(
-                              err instanceof Error ? err.message : 'member invite failed',
-                            )
+                            if (sessionEpochActive(opEpoch)) {
+                              setError(
+                                err instanceof Error ? err.message : 'member invite failed',
+                              )
+                            }
                           } finally {
-                            setIamBusy(false)
+                            endIamOperation(opEpoch)
                           }
                         })()
                       }}
@@ -624,15 +651,16 @@ export default function App() {
                 disabled={iamBusy}
                 onClick={() => {
                   void (async () => {
-                    const epoch = sessionEpochRef.current
+                    const opEpoch = beginIamOperation()
                     setError(null)
-                    setIamBusy(true)
                     const name = patName.trim() || 'console-pat'
                     try {
                       let created
                       if (patScopeMode === 'selected') {
                         if (!patRepoId) {
-                          setError('select a repo for selected-scope PAT')
+                          if (sessionEpochActive(opEpoch)) {
+                            setError('select a repo for selected-scope PAT')
+                          }
                           return
                         }
                         created = await createScopedPat(DEFAULT_ORG, name, ['repo:read'], {
@@ -642,20 +670,18 @@ export default function App() {
                       } else {
                         created = await createUserPat(DEFAULT_ORG, name)
                       }
-                      if (!sessionEpochActive(epoch)) {
+                      if (!sessionEpochActive(opEpoch)) {
                         return
                       }
                       setMintedPatFull(created.token)
                       setPatName('')
                       await refreshIamPanels()
                     } catch (err) {
-                      if (sessionEpochActive(epoch)) {
+                      if (sessionEpochActive(opEpoch)) {
                         setError(err instanceof Error ? err.message : 'PAT create failed')
                       }
                     } finally {
-                      if (sessionEpochActive(epoch)) {
-                        setIamBusy(false)
-                      }
+                      endIamOperation(opEpoch)
                     }
                   })()
                 }}
