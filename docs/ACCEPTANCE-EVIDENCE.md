@@ -36,4 +36,6 @@
 | `verify-product-production-stack-e2e.sh` | 生产 compose 全链（无 API docker.sock） |
 | `verify-clean-install-runbook.sh` | RUNBOOK quick start 实测 |
 | `configure-production-runner-pat.sh` | 生产 worker 用 selected PAT 写入 `deploy/.env`（由 `verify-product-production-stack-e2e.sh` 覆盖同等 API 路径） |
+| `upgrade-production-compose.sh` | 生产镜像 rebuild + migrate-only + 控制面/worker 滚动；逻辑对齐 `verify-product-stack-e2e.sh` upgrade 段 |
+| `git_http::clone_url_tests` | `MUSEHUB_PUBLIC_HTTP_ORIGIN` 与 `0.0.0.0` bind 映射 |
 | `docs/LOCAL-ACCEPTANCE-RUN.md` | 本地跑批命令/exit/SHA 台账 |

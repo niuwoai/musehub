@@ -30,6 +30,7 @@ services:
       MUSEHUB_GIT_ROOT: /var/lib/musehub/git
       MUSEHUB_ARTIFACT_ROOT: /var/lib/musehub/artifacts
       MUSEHUB_MCP_PRODUCT: ${MUSEHUB_MCP_PRODUCT:-0}
+      MUSEHUB_PUBLIC_HTTP_ORIGIN: ${MUSEHUB_PUBLIC_HTTP_ORIGIN:-http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}}
     volumes:
       - gitdata:/var/lib/musehub/git
       - artifacts:/var/lib/musehub/artifacts

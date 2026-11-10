@@ -64,7 +64,19 @@ docker compose run --rm --entrypoint /docker-entrypoint.sh musehub-server migrat
 
 Host / CI parity (Postgres URL, down then up idempotency): `scripts/verify-product-acceptance.sh` with `DATABASE_URL` or `MUSEHUB_TEST_DATABASE_URL`.
 
+## HTTP Git clone URL
+
+The API listens on `0.0.0.0:8080` inside the container; the UI **`clone_url`** uses `MUSEHUB_PUBLIC_HTTP_ORIGIN` (default `http://127.0.0.1:<gateway-port>`). For real clients, set e.g. `MUSEHUB_PUBLIC_HTTP_ORIGIN=https://musehub.internal` in `deploy/.env` to match how users reach the **gateway** (`/git/...` is proxied).
+
 ## Upgrade
+
+Production profile (rebuild, migrate, recreate control plane + runner when PAT is set):
+
+```bash
+./scripts/upgrade-production-compose.sh
+```
+
+Manual (demo profile):
 
 ```bash
 docker compose build musehub-server gateway
