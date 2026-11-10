@@ -156,12 +156,15 @@ test.describe('protected deployment approval console', () => {
     const adminCookie = `${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.name}=${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.value}`
 
     await deliveryThroughRelease(page, adminCookie)
+    const staleProd = page.waitForResponse(
+      (r) =>
+        r.url().includes('/deployments') &&
+        r.request().method() === 'POST' &&
+        r.status() === 202,
+    )
     void page.getByTestId('deploy-production').click()
     await postSeen
     await page.getByTestId('logout').click()
-    const staleProd = page.waitForResponse(
-      (r) => r.url().includes('/deployments') && r.request().method() === 'POST',
-    )
     releasePost()
     await staleProd
 

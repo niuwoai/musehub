@@ -339,6 +339,8 @@ export default function App() {
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
     setMintedPatFull(null)
+    selectedRepoRef.current = null
+    setSelectedRepo(null)
     try {
       await logout()
     } catch {
