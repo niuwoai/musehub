@@ -141,6 +141,16 @@ async fn deployment_list_scoped_paginated_and_denied() {
     assert_eq!(body["has_more"], true);
     assert_eq!(body["items"].as_array().unwrap().len(), 2);
 
+    let (page2, page2_body) = get_json(
+        &app,
+        "/api/v1/orgs/demo/repos/dep-list/deployments?limit=2&offset=2",
+        Some(&admin_cookie),
+    )
+    .await;
+    assert_eq!(page2, StatusCode::OK);
+    assert_eq!(page2_body["has_more"], false);
+    assert_eq!(page2_body["items"].as_array().unwrap().len(), 1);
+
     let (pending, pending_body) = get_json(
         &app,
         "/api/v1/orgs/demo/repos/dep-list/deployments?state=awaiting_approval",

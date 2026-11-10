@@ -87,9 +87,13 @@ export default function App() {
   const [deploymentApprovalBusy, setDeploymentApprovalBusy] = useState(false)
   const [deploymentLookupId, setDeploymentLookupId] = useState('')
   const [deploymentSummaries, setDeploymentSummaries] = useState<DeploymentSummary[]>([])
+  const [deploymentListMode, setDeploymentListMode] = useState<'pending' | 'all'>('pending')
   const [deploymentListLoading, setDeploymentListLoading] = useState(false)
+  const [deploymentListLoadingMore, setDeploymentListLoadingMore] = useState(false)
   const [deploymentListError, setDeploymentListError] = useState<string | null>(null)
   const [deploymentListHasMore, setDeploymentListHasMore] = useState(false)
+  const deploymentListFetchSeqRef = useRef(0)
+  const DEPLOYMENT_LIST_PAGE = 20
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
   const [orgDisplayName, setOrgDisplayName] = useState('')
@@ -140,9 +144,12 @@ export default function App() {
     setDeploymentLookupId('')
     setDeploymentApprovalBusy(false)
     setDeploymentSummaries([])
+    setDeploymentListMode('pending')
+    deploymentListFetchSeqRef.current += 1
     setDeploymentListError(null)
     setDeploymentListHasMore(false)
     setDeploymentListLoading(false)
+    setDeploymentListLoadingMore(false)
   }
 
   function invalidateDeploymentWork() {
@@ -433,36 +440,92 @@ export default function App() {
     }
   }
 
-  async function refreshDeploymentList(op?: DeploymentOpContext) {
+  function formatDeploymentWhen(iso: string) {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) {
+      return iso
+    }
+    return d.toISOString().replace('T', ' ').slice(0, 19)
+  }
+
+  async function refreshDeploymentList(
+    op?: DeploymentOpContext,
+    opts?: { append?: boolean; mode?: 'pending' | 'all' },
+  ) {
     if (!selectedRepoRef.current) {
       return
     }
     const ctx = op ?? captureDeploymentOp()
-    setDeploymentListLoading(true)
-    setDeploymentListError(null)
+    const mode = opts?.mode ?? deploymentListMode
+    const append = opts?.append ?? false
+    const offset = append ? deploymentSummaries.length : 0
+    const fetchSeq = (deploymentListFetchSeqRef.current += 1)
+    if (append) {
+      setDeploymentListLoadingMore(true)
+    } else {
+      setDeploymentListLoading(true)
+      setDeploymentListLoadingMore(false)
+      setDeploymentListError(null)
+    }
     try {
       const list = await listDeployments(DEFAULT_ORG, ctx.repo, {
-        limit: 20,
-        state: 'awaiting_approval',
+        limit: DEPLOYMENT_LIST_PAGE,
+        offset,
+        ...(mode === 'pending' ? { state: 'awaiting_approval' } : {}),
       })
-      if (!deploymentOpActive(ctx)) {
+      if (
+        !deploymentOpActive(ctx) ||
+        fetchSeq !== deploymentListFetchSeqRef.current
+      ) {
         return
       }
-      setDeploymentSummaries(list.items)
+      if (append) {
+        setDeploymentSummaries((prev) => [...prev, ...list.items])
+      } else {
+        setDeploymentSummaries(list.items)
+      }
       setDeploymentListHasMore(list.has_more)
     } catch (err) {
-      if (deploymentOpActive(ctx)) {
+      if (
+        deploymentOpActive(ctx) &&
+        fetchSeq === deploymentListFetchSeqRef.current
+      ) {
         setDeploymentListError(
           err instanceof Error ? err.message : 'failed to load deployments',
         )
-        setDeploymentSummaries([])
+        if (!append) {
+          setDeploymentSummaries([])
+        }
         setDeploymentListHasMore(false)
       }
     } finally {
-      if (deploymentOpActive(ctx)) {
+      if (
+        deploymentOpActive(ctx) &&
+        fetchSeq === deploymentListFetchSeqRef.current
+      ) {
         setDeploymentListLoading(false)
+        setDeploymentListLoadingMore(false)
       }
     }
+  }
+
+  function onDeploymentListModeChange(mode: 'pending' | 'all') {
+    if (mode === deploymentListMode) {
+      return
+    }
+    setDeploymentListMode(mode)
+    deploymentListFetchSeqRef.current += 1
+    setDeploymentSummaries([])
+    setDeploymentListHasMore(false)
+    setDeploymentListError(null)
+    void refreshDeploymentList(captureDeploymentOp(), { mode })
+  }
+
+  function onLoadMoreDeployments() {
+    if (deploymentListLoading || deploymentListLoadingMore || !deploymentListHasMore) {
+      return
+    }
+    void refreshDeploymentList(captureDeploymentOp(), { append: true })
   }
 
   async function onPickDeploymentFromList(id: string) {
@@ -672,6 +735,9 @@ export default function App() {
         setTrace(tv)
       } else if (deploymentOpActive(op)) {
         setTrace(null)
+      }
+      if (deploymentOpActive(op)) {
+        void refreshDeploymentList(op)
       }
     } catch (err) {
       if (deploymentOpActive(op)) {
@@ -1336,17 +1402,40 @@ export default function App() {
                   </button>
                 ) : null}
                 <div data-testid="deployment-pending-section">
-                  <h4>{t('app.deploymentPendingTitle')}</h4>
+                  <h4>{t('app.deploymentListTitle')}</h4>
+                  <div>
+                    <button
+                      type="button"
+                      data-testid="deployment-view-pending"
+                      aria-pressed={deploymentListMode === 'pending'}
+                      disabled={deploymentListLoading}
+                      onClick={() => onDeploymentListModeChange('pending')}
+                    >
+                      {t('app.deploymentViewPending')}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="deployment-view-all"
+                      aria-pressed={deploymentListMode === 'all'}
+                      disabled={deploymentListLoading}
+                      onClick={() => onDeploymentListModeChange('all')}
+                    >
+                      {t('app.deploymentViewAll')}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     data-testid="refresh-deployments"
-                    disabled={deploymentListLoading}
+                    disabled={deploymentListLoading || deploymentListLoadingMore}
                     onClick={() => void refreshDeploymentList()}
                   >
                     {t('app.refreshDeployments')}
                   </button>
                   {deploymentListLoading ? (
                     <p role="status">{t('app.deploymentListLoading')}</p>
+                  ) : null}
+                  {deploymentListLoadingMore ? (
+                    <p role="status">{t('app.deploymentListLoadingMore')}</p>
                   ) : null}
                   {deploymentListError ? (
                     <p role="alert">{deploymentListError}</p>
@@ -1355,25 +1444,44 @@ export default function App() {
                   !deploymentListError &&
                   deploymentSummaries.length === 0 ? (
                     <p data-testid="deployment-list-empty">
-                      {t('app.deploymentListEmpty')}
+                      {deploymentListMode === 'pending'
+                        ? t('app.deploymentListEmpty')
+                        : t('app.deploymentListEmptyAll')}
                     </p>
                   ) : null}
                   <ul data-testid="deployment-list">
                     {deploymentSummaries.map((d) => (
-                      <li key={d.id}>
+                      <li key={d.id} data-testid={`deployment-list-item-${d.id}`}>
                         <button
                           type="button"
                           data-testid={`deployment-pick-${d.id}`}
                           onClick={() => void onPickDeploymentFromList(d.id)}
                         >
-                          {d.environment_slug} · {d.state}
+                          <span data-testid={`deployment-row-env-${d.id}`}>
+                            {d.environment_slug}
+                          </span>
+                          {' · '}
+                          <span data-testid={`deployment-row-state-${d.id}`}>
+                            {d.state}
+                          </span>
+                          {' · '}
+                          <span data-testid={`deployment-row-updated-${d.id}`}>
+                            {formatDeploymentWhen(d.updated_at)}
+                          </span>
                           {d.plan_hash ? ` · ${d.plan_hash.slice(0, 8)}…` : ''}
                         </button>
                       </li>
                     ))}
                   </ul>
                   {deploymentListHasMore ? (
-                    <p role="status">{t('app.deploymentListHasMore')}</p>
+                    <button
+                      type="button"
+                      data-testid="deployment-load-more"
+                      disabled={deploymentListLoading || deploymentListLoadingMore}
+                      onClick={() => onLoadMoreDeployments()}
+                    >
+                      {t('app.deploymentLoadMore')}
+                    </button>
                   ) : null}
                 </div>
                 <label>
