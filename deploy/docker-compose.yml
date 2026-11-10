@@ -1,0 +1,68 @@
+# MuseHub product stack (Postgres + API + static gateway). No docker.sock on API container.
+name: musehub-product
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: musehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: musehub
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U musehub -d musehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  musehub-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: server-runtime
+    image: musehub-server:local
+    environment:
+      DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@postgres:5432/musehub?sslmode=disable
+      MUSEHUB_SESSION_SECRET: ${MUSEHUB_SESSION_SECRET:?set MUSEHUB_SESSION_SECRET}
+      MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: ${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?set bootstrap password for first init}
+      MUSEHUB_GIT_ROOT: /var/lib/musehub/git
+      MUSEHUB_ARTIFACT_ROOT: /var/lib/musehub/artifacts
+      MUSEHUB_MCP_PRODUCT: ${MUSEHUB_MCP_PRODUCT:-0}
+    volumes:
+      - gitdata:/var/lib/musehub/git
+      - artifacts:/var/lib/musehub/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/readyz | grep -q 'product_api\":\"ok'"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 120s
+    restart: unless-stopped
+    # Internal only — expose via gateway
+    expose:
+      - "8080"
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: gateway-runtime
+    image: musehub-gateway:local
+    depends_on:
+      musehub-server:
+        condition: service_healthy
+    ports:
+      - "${MUSEHUB_GATEWAY_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./Caddyfile.ci:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  gitdata:
+  artifacts:

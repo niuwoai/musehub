@@ -114,7 +114,7 @@ async fn production_mcp_pat_repository_list() {
     );
     assert_eq!(
         data.get("maturity").and_then(Value::as_str),
-        Some("partial_implementation")
+        Some("v1_implemented")
     );
     assert!(data
         .get("implemented_tools")

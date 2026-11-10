@@ -390,6 +390,35 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         .and_then(|v| v.as_str())
         .expect("pipeline id")
         .to_string();
+    let pipe_replay = mcp_client
+        .call_tool(
+            CallToolRequestParams::new("musehub_pipeline_run").with_arguments({
+                let mut m = serde_json::Map::new();
+                m.insert("org_id".into(), serde_json::json!(org_uuid.0.to_string()));
+                m.insert(
+                    "repository_id".into(),
+                    serde_json::json!(repo_uuid.0.to_string()),
+                );
+                m.insert("workflow_path".into(), serde_json::json!("product-ci"));
+                m.insert("target_oid".into(), serde_json::json!(merge_commit));
+                m.insert(
+                    "idempotency_key".into(),
+                    serde_json::json!("oci-mcp-pipeline-v1"),
+                );
+                m
+            }),
+        )
+        .await
+        .expect("mcp pipeline_run replay");
+    assert!(!pipe_replay.is_error.unwrap_or(true));
+    let pipeline_replay_id = pipe_replay
+        .structured_content
+        .as_ref()
+        .and_then(|v| v.get("data"))
+        .and_then(|d| d.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("pipeline replay id");
+    assert_eq!(pipeline_replay_id, pipeline_id.as_str());
     for _ in 0..600 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let st: serde_json::Value = serde_json::from_slice(
@@ -586,7 +615,7 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
     mcp_client.cancel().await.ok();
 
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("python/mcp_product_oci_write.py");
+        .join("python/mcp_product_oci_read_probe.py");
     let pydeps =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps");
     let py_ok = std::process::Command::new("python3")
@@ -608,9 +637,10 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
         let deployment_id_own = deployment_id.to_string();
         let org_s = org_uuid.0.to_string();
         let repo_s = repo_uuid.0.to_string();
+        let pydeps_read = pydeps.clone();
         let out = tokio::task::spawn_blocking(move || {
             std::process::Command::new("python3")
-                .env("PYTHONPATH", &pydeps)
+                .env("PYTHONPATH", &pydeps_read)
                 .arg(&script)
                 .arg("--url")
                 .arg(&url)
@@ -625,15 +655,77 @@ async fn api_pipeline_oci_compose_runner_deploy_trace() {
                 .output()
         })
         .await
-        .expect("join python oci")
-        .expect("python oci mcp");
+        .expect("join python oci read probe")
+        .expect("python oci read probe");
         assert!(
             out.status.success(),
-            "python oci write: stderr={} stdout={}",
+            "python oci read probe: stderr={} stdout={}",
             String::from_utf8_lossy(&out.stderr),
             String::from_utf8_lossy(&out.stdout)
         );
     } else {
         eprintln!("skip python oci mcp: SDK or script missing");
+    }
+
+    let write_script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python/mcp_product_oci_write_probe.py");
+    if py_ok && write_script.is_file() {
+        let py_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let py_addr = py_listener.local_addr().unwrap();
+        let py_router = app.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(py_listener, py_router).await;
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let url = format!("http://{py_addr}/mcp");
+        let api_base = format!("http://{py_addr}");
+        let mcp_token_own = mcp_token.to_string();
+        let _admin_cookie_own = admin_cookie.clone();
+        let release_id_own = release_id.to_string();
+        let merge_commit_own = merge_commit.to_string();
+        let org_s = org_uuid.0.to_string();
+        let repo_s = repo_uuid.0.to_string();
+        let env_s = env_uuid.0.to_string();
+        let pydeps_owned = pydeps.clone();
+        let write_script_owned = write_script.clone();
+        let out = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python3")
+                .env("PYTHONPATH", &pydeps_owned)
+                .arg(&write_script_owned)
+                .arg("--url")
+                .arg(&url)
+                .arg("--bearer")
+                .arg(&mcp_token_own)
+                .arg("--session-cookie")
+                .arg(&admin_cookie)
+                .arg("--api-base")
+                .arg(&api_base)
+                .arg("--org-slug")
+                .arg("demo")
+                .arg("--repo-slug")
+                .arg("oci-product")
+                .arg("--org-id")
+                .arg(org_s)
+                .arg("--repository-id")
+                .arg(repo_s)
+                .arg("--environment-id")
+                .arg(env_s)
+                .arg("--release-id")
+                .arg(release_id_own)
+                .arg("--mode")
+                .arg("full")
+                .arg("--target-oid")
+                .arg(merge_commit_own)
+                .output()
+        })
+        .await
+        .expect("join python write probe")
+        .expect("python write probe");
+        assert!(
+            out.status.success(),
+            "python oci write probe (full): stderr={} stdout={}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
     }
 }

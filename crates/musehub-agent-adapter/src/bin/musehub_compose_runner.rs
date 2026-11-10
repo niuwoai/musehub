@@ -79,6 +79,20 @@ fn main() {
         std::process::exit(2);
     }
 
+    if let Ok(prev) = std::env::var("MUSEHUB_COMPOSE_TEARDOWN_PROJECT") {
+        let prev = prev.trim();
+        if !prev.is_empty() {
+            let _ = Command::new("docker")
+                .args(["compose", "-p", prev, "down", "-v", "--remove-orphans"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            emit(&format!(
+                r#"{{"type":"teardown","project":"{prev}","reason":"prior_stack"}}"#
+            ));
+        }
+    }
+
     let work = match tempfile::tempdir() {
         Ok(d) => d,
         Err(_) => {

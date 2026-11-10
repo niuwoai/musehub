@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && command -v sg >/dev/null && command -v docker >/dev/null; then
+  if ! docker info >/dev/null 2>&1; then
+    export MUSEHUB_E2E_DOCKER_GROUP=1
+    exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1 MUSEHUB_TEST_DATABASE_URL='${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-}}' MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD='${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-}'; cd '$PWD' && ./scripts/run-web-e2e.sh"
+  fi
+fi
+
 DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-}}"
 : "${DATABASE_URL:?DATABASE_URL or MUSEHUB_TEST_DATABASE_URL required}"
 : "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD}"
@@ -14,6 +21,7 @@ mkdir -p "$MUSEHUB_GIT_ROOT"
 SERVER_PIDFILE="${MUSEHUB_E2E_PIDFILE:-/tmp/musehub-e2e-server.pid}"
 SERVER_LOG="${MUSEHUB_E2E_SERVER_LOG:-/tmp/musehub-e2e-server.log}"
 VITE_PIDFILE="${MUSEHUB_E2E_VITE_PID:-/tmp/musehub-e2e-vite.pid}"
+RUNNER_PIDFILE="${MUSEHUB_E2E_RUNNER_PID:-/tmp/musehub-e2e-runner.pid}"
 
 stop_owned() {
   local pidfile=$1
@@ -35,6 +43,7 @@ on_exit() {
     ./scripts/collect-e2e-diagnostics.sh || true
   fi
   stop_owned "$VITE_PIDFILE"
+  stop_owned "$RUNNER_PIDFILE"
   stop_owned "$SERVER_PIDFILE"
 }
 trap on_exit EXIT
@@ -53,9 +62,21 @@ mkdir -p "$MUSEHUB_ARTIFACT_ROOT"
 MUSEHUB_REFERENCE_ADAPTER_BIN="$PWD/target/debug/musehub-agent-reference"
 MUSEHUB_PIPELINE_ADAPTER_BIN="$PWD/target/debug/musehub-pipeline-reference"
 PRODUCT_OCI=0
-if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+docker_ok() {
+  command -v docker >/dev/null || return 1
+  docker info >/dev/null 2>&1 && return 0
+  sg docker -c 'docker info' >/dev/null 2>&1
+}
+
+if docker_ok; then
   chmod +x ./scripts/start-ci-registry.sh
-  if ./scripts/start-ci-registry.sh; then
+  registry_start_ok=0
+  if docker info >/dev/null 2>&1; then
+    ./scripts/start-ci-registry.sh && registry_start_ok=1 || true
+  else
+    sg docker -c './scripts/start-ci-registry.sh' && registry_start_ok=1 || true
+  fi
+  if [[ "$registry_start_ok" == "1" ]]; then
     export MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-127.0.0.1:5000}"
     export MUSEHUB_REQUIRE_PIPELINE_OCI=1
     export MUSEHUB_COMPOSE_ADAPTER_MODE=runner
@@ -65,6 +86,11 @@ if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   fi
 fi
 echo "web_e2e product_oci=$PRODUCT_OCI registry=${MUSEHUB_OCI_REGISTRY:-none}"
+if [[ "$PRODUCT_OCI" == "1" ]]; then
+  export MUSEHUB_PIPELINE_EXECUTOR=remote
+  export MUSEHUB_AGENT_EXECUTOR=remote
+  export MUSEHUB_DEPLOY_EXECUTOR=remote
+fi
 MUSEHUB_COMPOSE_ADAPTER_BIN="$PWD/target/debug/musehub-compose-mock"
 MUSEHUB_COMPOSE_RUNNER_BIN="$PWD/target/debug/musehub-compose-runner"
 for bin in "$MUSEHUB_REFERENCE_ADAPTER_BIN" "$MUSEHUB_PIPELINE_ADAPTER_BIN" "$MUSEHUB_COMPOSE_ADAPTER_BIN" "$MUSEHUB_COMPOSE_RUNNER_BIN"; do
@@ -87,6 +113,9 @@ stop_owned "$SERVER_PIDFILE"
     MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-}" \
     MUSEHUB_REQUIRE_PIPELINE_OCI="${MUSEHUB_REQUIRE_PIPELINE_OCI:-0}" \
     MUSEHUB_COMPOSE_ADAPTER_MODE="${MUSEHUB_COMPOSE_ADAPTER_MODE:-mock}" \
+    MUSEHUB_PIPELINE_EXECUTOR="${MUSEHUB_PIPELINE_EXECUTOR:-inprocess}" \
+    MUSEHUB_AGENT_EXECUTOR="${MUSEHUB_AGENT_EXECUTOR:-inprocess}" \
+    MUSEHUB_DEPLOY_EXECUTOR="${MUSEHUB_DEPLOY_EXECUTOR:-inprocess}" \
     MUSEHUB_INSTANCE_ID="${MUSEHUB_INSTANCE_ID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)}" \
     RUST_LOG="${RUST_LOG:-info}" \
     cargo run -p musehub-server >>"$SERVER_LOG" 2>&1
@@ -103,6 +132,54 @@ if ! curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
   echo "musehub-server failed to start" >&2
   tail -40 "$SERVER_LOG" | sed 's/password.*/password=REDACTED/g' >&2 || true
   exit 1
+fi
+
+if [[ "$PRODUCT_OCI" == "1" ]]; then
+  command -v jq psql >/dev/null || { echo "jq and psql required for OCI web e2e runner" >&2; exit 1; }
+  cargo build -q -p musehub-runnerd
+  COOKIE=$(curl -sf -c - -X POST "http://127.0.0.1:8080/api/v1/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"handle\":\"admin\",\"password\":\"$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD\"}" | awk '/musehub_session/ {print $NF}')
+  curl -sf -X POST "http://127.0.0.1:8080/api/v1/orgs/demo/members" \
+    -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
+    -d '{"handle":"e2e-oci-runner","password":"E2e-Oci-Runner-12!","role":"member"}' >/dev/null || true
+  curl -sf -X POST "http://127.0.0.1:8080/api/v1/orgs/demo/repos" \
+    -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
+    -d '{"slug":"e2e-pat-anchor","description":"pat scope anchor"}' >/dev/null || true
+  ANCHOR_REPO=$(psql "$DATABASE_URL" -Atc "SELECT id FROM repositories WHERE slug='e2e-pat-anchor'" 2>/dev/null || true)
+  PAT_JSON=$(curl -sf -X POST "http://127.0.0.1:8080/api/v1/tokens" \
+    -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
+    -d "{\"name\":\"web-e2e-runner\",\"org\":\"demo\",\"scopes\":[\"pipeline:execute\",\"agent:execute\",\"deploy:execute\",\"checks:write\",\"repo:read\"],\"scope_mode\":\"all_accessible\",\"runner_handle\":\"e2e-oci-runner\"}")
+  RUNNER_PAT=$(echo "$PAT_JSON" | jq -r .token)
+  stop_owned "$RUNNER_PIDFILE"
+  RUNNER_ENV=(
+    MUSEHUB_API_BASE=http://127.0.0.1:8080
+    MUSEHUB_DATABASE_URL="$DATABASE_URL"
+    MUSEHUB_GIT_ROOT="$MUSEHUB_GIT_ROOT"
+    MUSEHUB_ARTIFACT_ROOT="$MUSEHUB_ARTIFACT_ROOT"
+    MUSEHUB_PIPELINE_ADAPTER_BIN="$MUSEHUB_PIPELINE_ADAPTER_BIN"
+    MUSEHUB_REFERENCE_ADAPTER_BIN="$MUSEHUB_REFERENCE_ADAPTER_BIN"
+    MUSEHUB_RUNNER_PAT="$RUNNER_PAT"
+    MUSEHUB_RUNNER_WORK_KINDS=all
+    MUSEHUB_RUNNER_POLL_SECS=1
+    MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-}"
+    MUSEHUB_REQUIRE_PIPELINE_OCI="${MUSEHUB_REQUIRE_PIPELINE_OCI:-0}"
+    MUSEHUB_COMPOSE_ADAPTER_MODE="${MUSEHUB_COMPOSE_ADAPTER_MODE:-runner}"
+    MUSEHUB_COMPOSE_ADAPTER_BIN="$MUSEHUB_COMPOSE_RUNNER_BIN"
+    MUSEHUB_COMPOSE_RUNNER_BIN="$MUSEHUB_COMPOSE_RUNNER_BIN"
+  )
+  _run_runnerd() {
+    env "${RUNNER_ENV[@]}" "$PWD/target/debug/musehub-runnerd" >>"$SERVER_LOG" 2>&1
+  }
+  if groups | grep -qw docker 2>/dev/null; then
+    ( _run_runnerd ) &
+  else
+    ( sg docker -c "cd '$PWD' && env $(printf '%q ' "${RUNNER_ENV[@]}") '$PWD/target/debug/musehub-runnerd'" >>"$SERVER_LOG" 2>&1 ) &
+  fi
+  echo $! >"$RUNNER_PIDFILE"
+  sleep 2
+  curl -sf "http://127.0.0.1:8080/api/v1/runner/capabilities" | jq -e '.pipeline_executor == "remote"' >/dev/null
+  echo "web_e2e remote_pipeline_runner=ok anchor_repo=${ANCHOR_REPO:-none}"
 fi
 
 yarn --cwd web install

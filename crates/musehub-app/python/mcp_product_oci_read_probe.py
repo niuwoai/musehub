@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Python MCP SDK: idempotent replay checks on product write tools (OCI acceptance)."""
+"""Python MCP SDK read-only probe on product /mcp (deployment_trace + capabilities_get).
+
+Does not call pipeline_run, deployment_start, or other write tools. Real Python write
+acceptance remains a separate follow-up job.
+"""
 
 from __future__ import annotations
 
@@ -50,8 +54,15 @@ async def _main() -> None:
             templates = cap_data.get("resource_uri_templates_v1") or []
             if len(templates) < 5:
                 raise RuntimeError("resource_uri_templates_v1 incomplete")
+            reads = cap_data.get("resource_reads_implemented_v1") or []
+            if not reads:
+                raise RuntimeError("resource_reads_implemented_v1 missing")
             out: dict[str, Any] = {
-                "checks_passed": ["deployment_trace", "capabilities_resources_v1"],
+                "checks_passed": [
+                    "deployment_trace_read",
+                    "capabilities_get_read",
+                    "resource_reads_implemented_v1",
+                ],
                 "negotiated_protocol": str(client.protocol_version),
             }
             print(json.dumps(out))

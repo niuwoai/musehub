@@ -8,7 +8,17 @@ cd "$(dirname "$0")/.."
 MUSEHUB_ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-/tmp/musehub-artifacts}"
 BACKUP_DIR="${1:?usage: $0 <backup-dir>}"
 
-command -v pg_restore >/dev/null || { echo "pg_restore required" >&2; exit 1; }
+run_pg() {
+  local tool=$1
+  shift
+  if [[ -n "${MUSEHUB_PG_CLIENT_IMAGE:-}" ]]; then
+    docker run --rm --network host -v "${BACKUP_DIR}:/backup:ro" \
+      "$MUSEHUB_PG_CLIENT_IMAGE" "$tool" "$@"
+  else
+    command -v "$tool" >/dev/null || { echo "$tool required" >&2; exit 1; }
+    "$tool" "$@"
+  fi
+}
 MANIFEST="$BACKUP_DIR/manifest.json"
 [[ -f "$MANIFEST" ]] || { echo "missing manifest.json" >&2; exit 1; }
 
@@ -16,8 +26,12 @@ DB_DUMP=$(python3 -c "import json; print(json.load(open('$MANIFEST'))['database_
 GIT_TAR=$(python3 -c "import json; print(json.load(open('$MANIFEST'))['git_archive'])")
 
 echo "=== restoring database (drop/create public) ==="
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-pg_restore --no-owner --dbname="$DATABASE_URL" "$BACKUP_DIR/$DB_DUMP"
+run_pg psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+if [[ -n "${MUSEHUB_PG_CLIENT_IMAGE:-}" ]]; then
+  run_pg pg_restore --no-owner --dbname="$DATABASE_URL" "/backup/$DB_DUMP"
+else
+  run_pg pg_restore --no-owner --dbname="$DATABASE_URL" "$BACKUP_DIR/$DB_DUMP"
+fi
 
 echo "=== restoring git tree ==="
 rm -rf "$MUSEHUB_GIT_ROOT"

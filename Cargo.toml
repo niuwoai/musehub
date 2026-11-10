@@ -12,6 +12,7 @@ members = [
     "crates/musehub-agent-probe",
     "crates/musehub-mcp-probe",
     "crates/musehub-migrate",
+    "crates/musehub-runnerd",
     "crates/musehub-server",
 ]
 

@@ -35,7 +35,7 @@ test.describe('product slice browser flow', () => {
     await expect(lastRun).toBeVisible({ timeout: 60_000 })
     await expect(lastRun).toContainText(/succeeded/i, { timeout: 120_000 })
 
-    const me = await page.request.get(`${apiBase}/api/v1/me`)
+    const me = await page.request.get('/api/v1/me')
     expect(me.ok()).toBeTruthy()
   })
 })

@@ -155,6 +155,7 @@ async fn member_cannot_issue_checks_write_pat() {
                         "name": "bad",
                         "org": "demo",
                         "scopes": ["checks:write"],
+                        "scope_mode": "all_accessible",
                         "runner_handle": "pipe-member"
                     })
                     .to_string(),
@@ -186,6 +187,7 @@ async fn admin_cannot_delegate_runner_token_to_self() {
                         "name": "self-runner",
                         "org": "demo",
                         "scopes": ["checks:write"],
+                        "scope_mode": "all_accessible",
                         "runner_handle": "admin"
                     })
                     .to_string(),

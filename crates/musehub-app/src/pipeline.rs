@@ -54,8 +54,18 @@ pub async fn seed_repo_environment(
     repo_id: Uuid,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO environments (id, org_id, repo_id, slug, name)
-         VALUES ($1, $2, $3, 'test', 'Test')
+        "INSERT INTO environments (id, org_id, repo_id, slug, name, requires_approval)
+         VALUES ($1, $2, $3, 'test', 'Test', false)
+         ON CONFLICT (repo_id, slug) DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO environments (id, org_id, repo_id, slug, name, requires_approval)
+         VALUES ($1, $2, $3, 'production', 'Production', true)
          ON CONFLICT (repo_id, slug) DO NOTHING",
     )
     .bind(Uuid::new_v4())
@@ -249,29 +259,56 @@ pub(crate) async fn spawn_pipeline_run(
     let run_id = Uuid::new_v4();
     let attempt_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
-    let instance_id = state.instance_id;
+    let remote = crate::runner_api::pipeline_executor_remote();
+    let instance_id = if remote {
+        None
+    } else {
+        Some(state.instance_id)
+    };
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
+    let lease_sql = if remote {
+        "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
+         requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11)"
+    } else {
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
          requested_by, run_attempt_id, pr_id, issue_id, agent_run_id, run_kind, lease_holder, lease_until)
          VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9,$10,$11,$12,
-           CURRENT_TIMESTAMP + ($13::text || ' seconds')::interval)",
-    )
-    .bind(run_id)
-    .bind(org_id)
-    .bind(repo_id)
-    .bind(&source_oid)
-    .bind(&workflow)
-    .bind(principal_id)
-    .bind(attempt_id)
-    .bind(pr_id)
-    .bind(issue_id)
-    .bind(agent_run_id)
-    .bind(run_kind)
-    .bind(instance_id)
-    .bind(crate::lease::LEASE_SECS)
-    .execute(&mut *tx)
-    .await?;
+           CURRENT_TIMESTAMP + ($13::text || ' seconds')::interval)"
+    };
+    if remote {
+        sqlx::query(lease_sql)
+            .bind(run_id)
+            .bind(org_id)
+            .bind(repo_id)
+            .bind(&source_oid)
+            .bind(&workflow)
+            .bind(principal_id)
+            .bind(attempt_id)
+            .bind(pr_id)
+            .bind(issue_id)
+            .bind(agent_run_id)
+            .bind(run_kind)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(lease_sql)
+            .bind(run_id)
+            .bind(org_id)
+            .bind(repo_id)
+            .bind(&source_oid)
+            .bind(&workflow)
+            .bind(principal_id)
+            .bind(attempt_id)
+            .bind(pr_id)
+            .bind(issue_id)
+            .bind(agent_run_id)
+            .bind(run_kind)
+            .bind(instance_id.unwrap())
+            .bind(crate::lease::lease_secs())
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         "INSERT INTO pipeline_jobs (id, org_id, repo_id, pipeline_run_id, job_key, state)
          VALUES ($1,$2,$3,$4,$5,'queued')",
@@ -285,32 +322,34 @@ pub(crate) async fn spawn_pipeline_run(
     .await?;
     tx.commit().await?;
 
-    let pool = state.pool.clone();
-    let git_root = state.git_root.clone();
-    let artifact_root = state.artifact_root.clone();
-    let pipeline_bin = state.pipeline_adapter_bin.clone();
-    let supervisor = state.pipeline_supervisor.clone();
-    let instance_id = state.instance_id;
-    let source_oid_spawn = source_oid.clone();
-    let run_kind_owned = run_kind.to_string();
-    tokio::spawn(async move {
-        run_pipeline_job(
-            pool,
-            git_root,
-            artifact_root,
-            pipeline_bin,
-            supervisor,
-            instance_id,
-            storage_key,
-            run_id,
-            job_id,
-            org_id,
-            repo_id,
-            source_oid_spawn,
-            run_kind_owned,
-        )
-        .await;
-    });
+    if !remote {
+        let pool = state.pool.clone();
+        let git_root = state.git_root.clone();
+        let artifact_root = state.artifact_root.clone();
+        let pipeline_bin = state.pipeline_adapter_bin.clone();
+        let supervisor = state.pipeline_supervisor.clone();
+        let instance_id = state.instance_id;
+        let source_oid_spawn = source_oid.clone();
+        let run_kind_owned = run_kind.to_string();
+        tokio::spawn(async move {
+            execute_pipeline_job(
+                pool,
+                git_root,
+                artifact_root,
+                pipeline_bin,
+                supervisor,
+                instance_id,
+                storage_key,
+                run_id,
+                job_id,
+                org_id,
+                repo_id,
+                source_oid_spawn,
+                run_kind_owned,
+            )
+            .await;
+        });
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -380,7 +419,7 @@ pub async fn cancel_pipeline_run(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_pipeline_job(
+pub async fn execute_pipeline_job(
     pool: PgPool,
     git_root: PathBuf,
     artifact_root: PathBuf,
@@ -398,14 +437,20 @@ async fn run_pipeline_job(
     let work_lease = match crate::lease::try_begin_pipeline_work(&pool, run_id, instance_id).await {
         Ok(lease) => lease,
         Err(_) => {
-            let _ = sqlx::query(
-                "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
-                 updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
-            )
-            .bind(run_id)
-            .execute(&pool)
-            .await;
-            return;
+            if let Some(lease) =
+                crate::lease::lookup_pipeline_work_lease(&pool, run_id, instance_id).await
+            {
+                lease
+            } else {
+                let _ = sqlx::query(
+                    "UPDATE pipeline_runs SET state = 'failed', error_code = 'lease_held_by_peer',
+                     updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
+                )
+                .bind(run_id)
+                .execute(&pool)
+                .await;
+                return;
+            }
         }
     };
     let _renew_guard = crate::lease::pipeline_lease_renew_guard(
@@ -422,20 +467,36 @@ async fn run_pipeline_job(
     .await;
 
     if cancel_flag(&pool, run_id).await {
-        mark_canceled(&pool, run_id, job_id).await;
+        let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
         return;
     }
 
     let artifact_id = Uuid::new_v4();
     let dir = artifact_storage_dir(&artifact_root, org_id, repo_id, artifact_id);
     if std::fs::create_dir_all(&dir).is_err() {
-        mark_failed(&pool, run_id, job_id, "artifact_dir_failed").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "artifact_dir_failed",
+        )
+        .await;
         return;
     }
     let file_path = match safe_join(&dir, ARTIFACT_NAME) {
         Ok(path) => path,
         Err(_) => {
-            mark_failed(&pool, run_id, job_id, "artifact_path_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "artifact_path_failed",
+            )
+            .await;
             return;
         }
     };
@@ -464,6 +525,9 @@ async fn run_pipeline_job(
     if let Ok(reg) = std::env::var("MUSEHUB_OCI_REGISTRY") {
         cmd.env("MUSEHUB_OCI_REGISTRY", reg);
     }
+    if let Ok(hold) = std::env::var("MUSEHUB_PIPELINE_HOLD_SECS") {
+        cmd.env("MUSEHUB_PIPELINE_HOLD_SECS", hold);
+    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -472,7 +536,15 @@ async fn run_pipeline_job(
         Ok(child) => child,
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            mark_failed(&pool, run_id, job_id, "adapter_spawn_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "adapter_spawn_failed",
+            )
+            .await;
             return;
         }
     };
@@ -480,28 +552,56 @@ async fn run_pipeline_job(
         supervisor.register(run_id, pid).await;
     }
 
-    let deadline = Duration::from_secs(300);
-    let finished = tokio::time::timeout(deadline, child.wait_with_output()).await;
-    let output = match finished {
-        Ok(Ok(out)) => out,
-        _ => {
+    let output = match wait_pipeline_child(child, &pool, run_id).await {
+        Ok(out) => out,
+        Err(ChildWaitOutcome::Canceled) => {
             let _ = supervisor.cancel(run_id).await;
             let _ = quarantine_artifact(&pool, artifact_id).await;
-            mark_failed(&pool, run_id, job_id, "pipeline_timeout").await;
+            let _ = mark_canceled(&pool, run_id, job_id, instance_id, work_lease.epoch).await;
+            supervisor.finish(run_id).await;
+            return;
+        }
+        Err(ChildWaitOutcome::TimedOut) => {
+            let _ = supervisor.cancel(run_id).await;
+            let _ = quarantine_artifact(&pool, artifact_id).await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_timeout",
+            )
+            .await;
+            supervisor.finish(run_id).await;
+            return;
+        }
+        Err(ChildWaitOutcome::IoFailed) => {
+            let _ = quarantine_artifact(&pool, artifact_id).await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_adapter_failed",
+            )
+            .await;
             supervisor.finish(run_id).await;
             return;
         }
     };
-    if cancel_flag(&pool, run_id).await {
-        let _ = supervisor.cancel(run_id).await;
-        let _ = quarantine_artifact(&pool, artifact_id).await;
-        mark_canceled(&pool, run_id, job_id).await;
-        supervisor.finish(run_id).await;
-        return;
-    }
     if !output.status.success() {
         let _ = quarantine_artifact(&pool, artifact_id).await;
-        mark_failed(&pool, run_id, job_id, "pipeline_adapter_failed").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "pipeline_adapter_failed",
+        )
+        .await;
         return;
     }
     let oci_from_adapter = parse_pipeline_stdout(&output.stdout);
@@ -512,14 +612,30 @@ async fn run_pipeline_job(
                 .is_err()
             {
                 let _ = std::fs::remove_file(&file_path);
-                mark_failed(&pool, run_id, job_id, "artifact_db_finalize_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "artifact_db_finalize_failed",
+                )
+                .await;
                 return;
             }
         }
         Err(_) => {
             let _ = quarantine_artifact(&pool, artifact_id).await;
             let _ = std::fs::remove_file(&file_path);
-            mark_failed(&pool, run_id, job_id, "artifact_verify_failed").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "artifact_verify_failed",
+            )
+            .await;
             return;
         }
     }
@@ -527,14 +643,30 @@ async fn run_pipeline_job(
         && run_kind == KIND_RELEASE
         && oci_from_adapter.is_none()
     {
-        mark_failed(&pool, run_id, job_id, "pipeline_oci_missing").await;
+        let _ = mark_failed(
+            &pool,
+            run_id,
+            job_id,
+            instance_id,
+            work_lease.epoch,
+            "pipeline_oci_missing",
+        )
+        .await;
         return;
     }
     if let Some(oci_ref) = oci_from_adapter {
         let oci_path = match safe_join(&dir, artifacts::ARTIFACT_OCI_REF_NAME) {
             Ok(p) => p,
             Err(_) => {
-                mark_failed(&pool, run_id, job_id, "oci_artifact_path_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "oci_artifact_path_failed",
+                )
+                .await;
                 return;
             }
         };
@@ -542,14 +674,30 @@ async fn run_pipeline_job(
             let _ = std::fs::write(&oci_path, &oci_ref);
         }
         if crate::security::validate_oci_image_ref(&oci_ref).is_err() {
-            mark_failed(&pool, run_id, job_id, "pipeline_oci_invalid").await;
+            let _ = mark_failed(
+                &pool,
+                run_id,
+                job_id,
+                instance_id,
+                work_lease.epoch,
+                "pipeline_oci_invalid",
+            )
+            .await;
             return;
         }
         let oci_id = Uuid::new_v4();
         let (sha, len) = match artifacts::sha256_file(&oci_path) {
             Ok(v) => v,
             Err(_) => {
-                mark_failed(&pool, run_id, job_id, "oci_artifact_verify_failed").await;
+                let _ = mark_failed(
+                    &pool,
+                    run_id,
+                    job_id,
+                    instance_id,
+                    work_lease.epoch,
+                    "oci_artifact_verify_failed",
+                )
+                .await;
                 return;
             }
         };
@@ -570,19 +718,89 @@ async fn run_pipeline_job(
         .execute(&pool)
         .await;
     }
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    let job_ok = crate::lease::finalize_pipeline_job_state(
+        &pool,
+        job_id,
+        run_id,
+        instance_id,
+        work_lease.epoch,
+        "succeeded",
     )
-    .bind(job_id)
-    .execute(&pool)
-    .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    .await
+    .unwrap_or(false);
+    if job_ok {
+        if let Ok((attempt_id,)) =
+            sqlx::query_as("SELECT run_attempt_id FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+        {
+            let _ = crate::mcp::contract_domain::append_pipeline_job_log(
+                &pool,
+                org_id,
+                repo_id,
+                job_id,
+                attempt_id,
+                "pipeline job completed successfully",
+            )
+            .await;
+        }
+    }
+    let run_ok = crate::lease::finalize_pipeline_run_state(
+        &pool,
+        run_id,
+        instance_id,
+        work_lease.epoch,
+        "succeeded",
+        None,
     )
-    .bind(run_id)
-    .execute(&pool)
-    .await;
+    .await
+    .unwrap_or(false);
+    if !job_ok || !run_ok {
+        let _ = quarantine_artifact(&pool, artifact_id).await;
+        let _ = std::fs::remove_file(&file_path);
+    }
     supervisor.finish(run_id).await;
+}
+
+enum ChildWaitOutcome {
+    Canceled,
+    TimedOut,
+    IoFailed,
+}
+
+async fn wait_pipeline_child(
+    child: tokio::process::Child,
+    pool: &PgPool,
+    run_id: Uuid,
+) -> Result<std::process::Output, ChildWaitOutcome> {
+    let deadline = Duration::from_secs(300);
+    let cancel_watch = async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            if cancel_flag(pool, run_id).await {
+                break;
+            }
+        }
+    };
+    let waited = tokio::time::timeout(deadline, async {
+        tokio::select! {
+            out = child.wait_with_output() => Either::Left(out),
+            () = cancel_watch => Either::Right(()),
+        }
+    })
+    .await;
+    match waited {
+        Ok(Either::Left(Ok(output))) => Ok(output),
+        Ok(Either::Left(Err(_))) => Err(ChildWaitOutcome::IoFailed),
+        Ok(Either::Right(())) => Err(ChildWaitOutcome::Canceled),
+        Err(_) => Err(ChildWaitOutcome::TimedOut),
+    }
+}
+
+enum Either<L, R> {
+    Left(L),
+    Right(R),
 }
 
 async fn cancel_flag(pool: &PgPool, run_id: Uuid) -> bool {
@@ -595,20 +813,58 @@ async fn cancel_flag(pool: &PgPool, run_id: Uuid) -> bool {
     )
 }
 
-async fn mark_failed(pool: &PgPool, run_id: Uuid, job_id: Uuid, code: &str) {
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+async fn mark_failed(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    code: &str,
+) -> bool {
+    let _ = crate::lease::finalize_pipeline_job_state(
+        pool,
+        job_id,
+        run_id,
+        instance_id,
+        epoch,
+        "failed",
     )
-    .bind(job_id)
-    .execute(pool)
     .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'failed', error_code = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    crate::lease::finalize_pipeline_run_state(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+        "failed",
+        Some(code),
     )
-    .bind(run_id)
-    .bind(code)
-    .execute(pool)
-    .await;
+    .await
+    .unwrap_or(false)
+}
+
+async fn mark_succeeded_stale_blocked(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    let run_ok = crate::lease::finalize_pipeline_run_state(
+        pool,
+        run_id,
+        instance_id,
+        epoch,
+        "succeeded",
+        None,
+    )
+    .await
+    .unwrap_or(false);
+    if !run_ok {
+        return false;
+    }
+    crate::lease::finalize_pipeline_job_state(pool, job_id, run_id, instance_id, epoch, "succeeded")
+        .await
+        .unwrap_or(false)
 }
 
 fn parse_pipeline_stdout(stdout: &[u8]) -> Option<String> {
@@ -629,17 +885,33 @@ fn parse_pipeline_stdout(stdout: &[u8]) -> Option<String> {
     None
 }
 
-async fn mark_canceled(pool: &PgPool, run_id: Uuid, job_id: Uuid) {
-    let _ = sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'canceled', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+async fn mark_canceled(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    let _ = crate::lease::finalize_pipeline_job_state(
+        pool,
+        job_id,
+        run_id,
+        instance_id,
+        epoch,
+        "canceled",
     )
-    .bind(job_id)
-    .execute(pool)
     .await;
-    let _ = sqlx::query(
-        "UPDATE pipeline_runs SET state = 'canceled', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(pool)
-    .await;
+    crate::lease::finalize_pipeline_run_state(pool, run_id, instance_id, epoch, "canceled", None)
+        .await
+        .unwrap_or(false)
+}
+
+pub async fn try_publish_stale_pipeline_success_for_test(
+    pool: &PgPool,
+    run_id: Uuid,
+    job_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+) -> bool {
+    mark_succeeded_stale_blocked(pool, run_id, job_id, instance_id, epoch).await
 }

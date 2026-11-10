@@ -39,9 +39,6 @@ pub async fn resolve_repo(
     org_id: Uuid,
     repository_id: Uuid,
 ) -> Result<RepoAccess, AppError> {
-    if !pat_auth::pat_org_allowed(pat.org_id, org_id) {
-        return Err(AppError::Forbidden);
-    }
     let org_row = sqlx::query_as::<_, (String,)>("SELECT slug FROM organizations WHERE id = $1")
         .bind(org_id)
         .fetch_optional(&state.pool)
@@ -49,7 +46,7 @@ pub async fn resolve_repo(
     let Some((org_slug,)) = org_row else {
         return Err(AppError::NotFound);
     };
-    crate::org_id_for_member(&state.pool, &org_slug, pat.principal_id).await?;
+    crate::grants::ensure_pat_repo_access(&state.pool, pat, org_id, repository_id).await?;
     let repo = sqlx::query_as::<_, (String,)>(
         "SELECT slug FROM repositories WHERE id = $1 AND org_id = $2",
     )

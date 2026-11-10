@@ -25,6 +25,9 @@ pub const REFERENCE_ADAPTER: &str = "reference";
 /// Production target adapter name (requires user credentials when live).
 pub const CODEX_ADAPTER: &str = "codex";
 
+/// Explicit deterministic sim binary (not a live model).
+pub const CODEX_SIM_ADAPTER: &str = "codex-sim";
+
 /// Task handed to an adapter process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTask {

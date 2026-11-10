@@ -270,6 +270,120 @@ export async function publishRelease(org: string, repo: string, releaseId: strin
   })
 }
 
+export type OrgSettings = {
+  display_name: string
+  preferences: { default_collaborator_role: string }
+  pipeline_executor: string
+  agent_executor: string
+  compose_adapter_mode: string
+  product_profile: string
+  require_pipeline_oci: boolean
+  runner_dependencies: string[]
+}
+
+export type RepoGrant = {
+  principal_id: string
+  handle: string
+  role: string
+}
+
+export type RunnerTokenMasked = {
+  id: string
+  name: string
+  token_prefix: string
+  scopes: string[]
+  scope_mode: string
+}
+
+export type PatCreated = {
+  id: string
+  token: string
+  note: string
+}
+
+export async function getOrgSettings(org: string) {
+  return api<OrgSettings>(`/api/v1/orgs/${org}/settings`)
+}
+
+export async function patchOrgSettings(
+  org: string,
+  body: { display_name?: string; preferences?: { default_collaborator_role: string } },
+) {
+  return api<OrgSettings>(`/api/v1/orgs/${org}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function listRepoGrants(org: string, repo: string) {
+  return api<RepoGrant[]>(`/api/v1/orgs/${org}/repos/${repo}/grants`)
+}
+
+export async function grantRepoCollaborator(
+  org: string,
+  repo: string,
+  handle: string,
+  role: string,
+) {
+  return api<void>(`/api/v1/orgs/${org}/repos/${repo}/collaborators`, {
+    method: 'POST',
+    body: JSON.stringify({ handle, role }),
+  })
+}
+
+export async function listRunnerTokens(org: string) {
+  return api<RunnerTokenMasked[]>(`/api/v1/orgs/${org}/runner-tokens`)
+}
+
+export type AuditEvent = {
+  id: string
+  actor_id: string
+  action: string
+  resource_type: string
+  resource_id: string
+  decision: string
+  occurred_at: string
+  metadata?: unknown
+}
+
+export type RunnerCapabilities = {
+  pipeline_executor: string
+  agent_executor: string
+  deploy_executor: string
+  lease_seconds: number
+  scopes_accepted: string[]
+  note: string
+}
+
+export async function listAuditEvents(org: string, limit = 25) {
+  return api<AuditEvent[]>(
+    `/api/v1/orgs/${org}/audit/events?limit=${encodeURIComponent(String(limit))}`,
+  )
+}
+
+export async function getRunnerCapabilities() {
+  return api<RunnerCapabilities>('/api/v1/runner/capabilities')
+}
+
+export async function createScopedPat(
+  org: string,
+  name: string,
+  scopes: string[],
+  opts: { scope_mode?: string; repo_ids?: string[]; runner_handle?: string },
+) {
+  return api<PatCreated>('/api/v1/tokens', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      org,
+      scopes,
+      scope_mode: opts.scope_mode ?? 'selected',
+      repo_ids: opts.repo_ids,
+      runner_handle: opts.runner_handle,
+    }),
+  })
+}
+
 export async function startDeployment(
   org: string,
   repo: string,

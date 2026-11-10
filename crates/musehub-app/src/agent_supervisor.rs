@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::lease::{finalize_agent_run_state, WorkLease};
+use crate::lease::finalize_agent_run_state;
 
 pub fn new_supervisor() -> Arc<AgentSupervisor> {
     Arc::new(AgentSupervisor::default())
@@ -98,10 +98,14 @@ pub async fn run_agent_job(
     deadline: Duration,
     budget_tokens: Option<u64>,
 ) {
-    let work_lease: WorkLease =
-        match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
-            Ok(lease) => lease,
-            Err(_) => {
+    let work_lease = match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
+        Ok(lease) => lease,
+        Err(_) => {
+            if let Some(lease) =
+                crate::lease::lookup_agent_work_lease(&pool, run_id, instance_id).await
+            {
+                lease
+            } else {
                 let _ = sqlx::query(
                     "UPDATE agent_runs SET state = 'failed', error_code = 'lease_held_by_peer',
                  updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'queued'",
@@ -111,7 +115,8 @@ pub async fn run_agent_job(
                 .await;
                 return;
             }
-        };
+        }
+    };
     let epoch = work_lease.epoch;
     let _renew_guard =
         crate::lease::agent_lease_renew_guard(pool.clone(), run_id, instance_id, epoch);
@@ -153,6 +158,16 @@ pub async fn run_agent_job(
         .args(["checkout", "-B", &branch, "main"])
         .status();
 
+    let message = if message.is_empty() {
+        sqlx::query_as::<_, (String,)>("SELECT task_message FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .map(|(m,)| m)
+            .unwrap_or_default()
+    } else {
+        message
+    };
     let task = AgentTask {
         kind: "implementation".to_string(),
         message,

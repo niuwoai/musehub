@@ -29,6 +29,7 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 rmcp = { workspace = true }
 schemars = { version = "1", features = ["derive"] }
 tokio-util = { workspace = true }
+urlencoding = "2.1"
 
 [dev-dependencies]
 sha2 = "0.10"

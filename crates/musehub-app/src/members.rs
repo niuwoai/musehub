@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
@@ -28,7 +28,7 @@ fn parse_role(role: Option<String>) -> Result<&'static str, AppError> {
     }
 }
 
-async fn require_org_admin(
+pub(crate) async fn require_org_admin(
     pool: &sqlx::PgPool,
     org_slug: &str,
     principal_id: Uuid,
@@ -121,12 +121,27 @@ pub struct GrantRepoRequest {
     pub role: Option<String>,
 }
 
-fn parse_repo_role(role: Option<String>) -> Result<&'static str, AppError> {
-    match role.as_deref().unwrap_or("reader") {
-        "reader" => Ok("reader"),
-        "contributor" => Ok("contributor"),
-        "maintainer" => Ok("maintainer"),
-        other => Err(AppError::Validation(format!("invalid repo role: {other}"))),
+async fn grantor_org_role(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    principal_id: Uuid,
+) -> Result<String, AppError> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+    )
+    .bind(org_id)
+    .bind(principal_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+fn role_rank(role: &str) -> u8 {
+    match role {
+        "reader" => 1,
+        "developer" => 2,
+        "maintainer" => 3,
+        _ => 0,
     }
 }
 
@@ -148,9 +163,111 @@ pub async fn grant_repo_collaborator(
     let Some((member_id,)) = member else {
         return Err(AppError::NotFound);
     };
-    let role = parse_repo_role(body.role)?;
+    if member_id == principal_id {
+        return Err(AppError::Validation(
+            "cannot grant repository access to yourself".to_string(),
+        ));
+    }
+    let mut role = body.role.clone();
+    if role.is_none() {
+        let prefs = crate::org_config::load_preferences(&state.pool, org_id).await?;
+        role = Some(prefs.default_collaborator_role);
+    }
+    let role = crate::org_config::parse_repo_role(role)?;
+    let grantor = grantor_org_role(&state.pool, org_id, principal_id).await?;
+    if role == "maintainer" && grantor != "owner" {
+        return Err(AppError::Forbidden);
+    }
+    let member_org_role = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+    )
+    .bind(org_id)
+    .bind(member_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((member_org_role,)) = member_org_role else {
+        return Err(AppError::Validation(
+            "target is not an org member".to_string(),
+        ));
+    };
+    if role_rank(role) > role_rank(&grantor) && grantor != "owner" {
+        return Err(AppError::Forbidden);
+    }
+    if role_rank(role) > role_rank(&member_org_role) + 1 && grantor != "owner" {
+        return Err(AppError::Validation(
+            "cannot elevate beyond membership".to_string(),
+        ));
+    }
     grant_repo_access(&state.pool, org_id, repo_id, member_id, role).await?;
+    let request_id = crate::audit::request_id_from_headers(&headers);
+    let _ = crate::audit::record(
+        &state.pool,
+        Some(org_id),
+        Some(repo_id),
+        principal_id,
+        None,
+        "repository.grant",
+        "repository_grant",
+        repo_id,
+        request_id,
+        "allow",
+        serde_json::json!({
+            "principal_id": member_id,
+            "role": role,
+        }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_repo_grants(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+) -> Result<Json<Vec<crate::grants::RepoGrantView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let grants = crate::grants::list_repo_grants(&state.pool, org_id, repo_id).await?;
+    Ok(Json(grants))
+}
+
+#[derive(Deserialize)]
+pub struct RevokeGrantQuery {
+    pub principal_id: Uuid,
+}
+
+pub async fn revoke_repo_grant(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+    Query(query): Query<RevokeGrantQuery>,
+) -> Result<StatusCode, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let removed =
+        crate::grants::revoke_repo_grant(&state.pool, org_id, repo_id, query.principal_id).await?;
+    if removed {
+        let request_id = crate::audit::request_id_from_headers(&headers);
+        let _ = crate::audit::record(
+            &state.pool,
+            Some(org_id),
+            Some(repo_id),
+            principal_id,
+            None,
+            "repository.grant.revoke",
+            "repository_grant",
+            repo_id,
+            request_id,
+            "allow",
+            serde_json::json!({ "principal_id": query.principal_id }),
+        )
+        .await;
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 pub async fn grant_repo_access(

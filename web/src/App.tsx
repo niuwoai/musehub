@@ -11,6 +11,15 @@ import {
   createRelease,
   createRepo,
   DeploymentTrace,
+  getOrgSettings,
+  patchOrgSettings,
+  grantRepoCollaborator,
+  listRepoGrants,
+  listRunnerTokens,
+  listAuditEvents,
+  getRunnerCapabilities,
+  type AuditEvent,
+  type RunnerCapabilities,
   getAgentRun,
   getDeploymentTrace,
   Issue,
@@ -51,12 +60,47 @@ export default function App() {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
+  const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
+  const [orgDisplayName, setOrgDisplayName] = useState('')
+  const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
+  const [grantHandle, setGrantHandle] = useState('')
+  const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
+  const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
+  const [runnerTokens, setRunnerTokens] = useState<
+    Awaited<ReturnType<typeof listRunnerTokens>>
+  >([])
 
   useEffect(() => {
     me()
       .then((principal) => setSession(principal.handle))
       .catch(() => setSession(null))
   }, [])
+
+  useEffect(() => {
+    if (!session) {
+      setAuditEvents([])
+      setRunnerCaps(null)
+      setRunnerTokens([])
+      return
+    }
+    void (async () => {
+      try {
+        const [audit, caps, tokens] = await Promise.all([
+          listAuditEvents(DEFAULT_ORG, 30),
+          getRunnerCapabilities(),
+          listRunnerTokens(DEFAULT_ORG),
+        ])
+        setAuditEvents(audit)
+        setRunnerCaps(caps)
+        setRunnerTokens(tokens)
+      } catch {
+        setAuditEvents([])
+        setRunnerCaps(null)
+        setRunnerTokens([])
+      }
+    })()
+  }, [session])
 
   async function refreshRepos() {
     const data = await listRepos(DEFAULT_ORG)
@@ -90,6 +134,11 @@ export default function App() {
       setPulls(prs)
       const data = await listIssues(DEFAULT_ORG, slug)
       setIssues(data)
+      const s = await getOrgSettings(DEFAULT_ORG)
+      setSettings(s)
+      setOrgDisplayName(s.display_name)
+      const g = await listRepoGrants(DEFAULT_ORG, slug)
+      setGrants(g)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to load repository')
     }
@@ -245,6 +294,52 @@ export default function App() {
           <p>
             {t('app.signedInAs')} <strong>{session}</strong>
           </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="audit-panel">
+              <h3>Audit (read-only)</h3>
+              {auditEvents.length === 0 ? (
+                <p>No audit events yet.</p>
+              ) : (
+                <ul style={{ maxHeight: '12rem', overflow: 'auto', margin: 0, paddingLeft: '1.2rem' }}>
+                  {auditEvents.map((ev) => (
+                    <li key={ev.id}>
+                      <code>{ev.occurred_at.slice(0, 19)}</code> {ev.action}{' '}
+                      <span>
+                        {ev.resource_type}/{ev.resource_id.slice(0, 8)}…
+                      </span>{' '}
+                      · {ev.decision}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="runner-status-panel">
+              <h3>Runner status</h3>
+              {runnerCaps ? (
+                <>
+                  <p data-testid="runner-executors">
+                    pipeline {runnerCaps.pipeline_executor} · agent {runnerCaps.agent_executor} ·
+                    deploy {runnerCaps.deploy_executor}
+                  </p>
+                  <p>lease {runnerCaps.lease_seconds}s · scopes: {runnerCaps.scopes_accepted.join(', ')}</p>
+                  <p style={{ color: '#57606a', fontSize: '0.9rem' }}>{runnerCaps.note}</p>
+                </>
+              ) : (
+                <p>Unable to load runner capabilities.</p>
+              )}
+              {runnerTokens.length > 0 ? (
+                <ul>
+                  {runnerTokens.map((tok) => (
+                    <li key={tok.id}>
+                      {tok.name}: <code>{tok.token_prefix}…</code> ({tok.scope_mode})
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No runner tokens (masked list only).</p>
+              )}
+            </Panel>
+          </div>
           <button type="button" onClick={() => void onCreateRepo()}>
             {t('app.createRepo')}
           </button>
@@ -261,6 +356,71 @@ export default function App() {
           {selectedRepo ? (
             <Panel style={{ marginTop: '1rem' }}>
               <h2>{selectedRepo}</h2>
+              {settings ? (
+                <div data-testid="org-settings">
+                  <label>
+                    Org display name
+                    <input
+                      data-testid="org-display-name"
+                      value={orgDisplayName}
+                      onChange={(e) => setOrgDisplayName(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    data-testid="save-org-settings"
+                    onClick={async () => {
+                      const next = await patchOrgSettings(DEFAULT_ORG, {
+                        display_name: orgDisplayName,
+                        preferences: {
+                          default_collaborator_role:
+                            settings.preferences.default_collaborator_role || 'reader',
+                        },
+                      })
+                      setSettings(next)
+                    }}
+                  >
+                    Save org settings
+                  </button>
+                  <p>
+                    pipeline: {settings.pipeline_executor} · agent:{' '}
+                    {settings.agent_executor} · compose:{' '}
+                    {settings.compose_adapter_mode} ({settings.product_profile})
+                    {mintedTokenPrefix ? ` · runner token prefix: ${mintedTokenPrefix}` : ''}
+                  </p>
+                </div>
+              ) : null}
+              <div data-testid="repo-grants" style={{ marginBottom: '1rem' }}>
+                <strong>Repo grants</strong>
+                <ul>
+                  {grants.map((g) => (
+                    <li key={g.handle}>
+                      {g.handle} ({g.role})
+                    </li>
+                  ))}
+                </ul>
+                <input
+                  placeholder="handle"
+                  value={grantHandle}
+                  onChange={(e) => setGrantHandle(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!selectedRepo || !grantHandle.trim()) return
+                    await grantRepoCollaborator(
+                      DEFAULT_ORG,
+                      selectedRepo,
+                      grantHandle.trim(),
+                      'reader',
+                    )
+                    setGrants(await listRepoGrants(DEFAULT_ORG, selectedRepo))
+                    setGrantHandle('')
+                  }}
+                >
+                  Grant reader
+                </button>
+              </div>
               <button
                 type="button"
                 data-testid="refresh-repo"

@@ -24,8 +24,9 @@ use crate::error::AppError;
 use crate::mcp::auth::{self, deny_runner_only_pat, require_scope, resolve_repo};
 use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
-    agent_run_cancel, agent_run_start, deployment_start, issue_create, pipeline_run, plan_accept,
-    plan_create, pr_review, repo_summary_json,
+    agent_run_cancel, agent_run_start, deployment_rollback, deployment_start, issue_create,
+    issue_update, pipeline_run, plan_accept, plan_create, pr_create, pr_review, repo_summary_json,
+    repository_create, IssueUpdatePatch, PlanStepInput,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
@@ -36,6 +37,15 @@ use crate::AppState;
 
 const READ_SCOPE: &str = "repo:read";
 const WRITE_SCOPE: &str = "repo:write";
+const AUDIT_READ_SCOPE: &str = "audit:read";
+
+fn require_audit_read(pat: &crate::pat_auth::PatContext) -> Result<(), AppError> {
+    if require_scope(pat, AUDIT_READ_SCOPE).is_ok() || require_scope(pat, READ_SCOPE).is_ok() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
 
 #[derive(Clone)]
 pub struct ProductionMcpServer {
@@ -47,7 +57,7 @@ impl ProductionMcpServer {
     pub fn new(state: Arc<AppState>) -> Self {
         Self {
             state,
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router() + server_contract::contract_tool_router(),
         }
     }
 }
@@ -138,7 +148,81 @@ struct IssueCreateInput {
     title: String,
     #[serde(default)]
     body: String,
+    #[serde(default)]
+    criteria: Vec<crate::mcp::contract_domain::CriterionInput>,
     idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct IssueUpdatePatchInput {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct IssueUpdateInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    issue_id: String,
+    expected_version: i32,
+    #[serde(flatten)]
+    patch: IssueUpdatePatchInput,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RepositoryCreateInput {
+    org_id: String,
+    slug: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    default_branch: Option<String>,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PrCreateInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    title: String,
+    #[serde(default)]
+    body: String,
+    source_branch: String,
+    target_branch: String,
+    expected_head_oid: String,
+    #[serde(default)]
+    issue_revision_ids: Vec<String>,
+    #[serde(default)]
+    draft: bool,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PrMergeInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    pr_id: String,
+    #[serde(default)]
+    expected_version: Option<i32>,
+    expected_head_oid: String,
+    expected_base_oid: String,
+    expected_candidate_oid: String,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PrListInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default, flatten)]
+    page: PageInput,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -147,6 +231,8 @@ struct PlanCreateInput {
     repo: RepoInput,
     issue_revision_id: String,
     body: String,
+    #[serde(default)]
+    steps: Vec<PlanStepInput>,
     idempotency_key: String,
 }
 
@@ -212,6 +298,32 @@ struct DeploymentStartInput {
     #[serde(default)]
     config_version: Option<i64>,
     idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DeploymentRollbackInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    environment_id: String,
+    target_healthy_deployment_id: String,
+    #[serde(default)]
+    expected_environment_version: Option<i64>,
+    #[serde(default)]
+    reason: Option<String>,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct AuditListInput {
+    org_id: String,
+    #[serde(default)]
+    repository_id: Option<String>,
+    #[serde(default)]
+    resource_type: Option<String>,
+    #[serde(default)]
+    resource_id: Option<String>,
+    #[serde(default, flatten)]
+    page: PageInput,
 }
 
 fn app_error_to_mcp(err: AppError) -> ErrorData {
@@ -493,6 +605,75 @@ impl ProductionMcpServer {
     }
 
     #[tool(
+        name = "musehub_repository_create",
+        description = "Create a repository in an organization (org admin)",
+        annotations(destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn musehub_repository_create(
+        &self,
+        Parameters(input): Parameters<RepositoryCreateInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let org_id = parse_uuid("org_id", &input.org_id)?;
+        if !crate::pat_auth::pat_org_allowed(pat.org_id, org_id) {
+            return Ok(domain_err(AppError::Forbidden));
+        }
+        let org_slug: (String,) = sqlx::query_as("SELECT slug FROM organizations WHERE id = $1")
+            .bind(org_id)
+            .fetch_optional(&self.state.pool)
+            .await
+            .map_err(|e| app_error_to_mcp(e.into()))?
+            .ok_or_else(|| app_error_to_mcp(AppError::NotFound))?;
+        let canonical = json!({
+            "org_id": input.org_id,
+            "slug": input.slug,
+            "description": input.description,
+            "default_branch": input.default_branch,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(org_id),
+            "musehub_repository_create",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        match repository_create(
+            &self.state,
+            org_id,
+            &org_slug.0,
+            pat.principal_id,
+            &input.slug,
+            input.description.as_deref(),
+            input.default_branch.as_deref(),
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
         name = "musehub_issue_list",
         description = "List issues in a repository",
         annotations(read_only_hint = true)
@@ -624,12 +805,84 @@ impl ProductionMcpServer {
             pat.principal_id,
             &input.title,
             &input.body,
+            &input.criteria,
         )
         .await
         {
             Ok(data) => {
                 let envelope = ToolEnvelope::success(data);
                 let stored = envelope_value(&envelope);
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_issue_update",
+        description = "Update an issue (CAS on revision)",
+        annotations(idempotent_hint = true)
+    )]
+    async fn musehub_issue_update(
+        &self,
+        Parameters(input): Parameters<IssueUpdateInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let issue_id = parse_uuid("issue_id", &input.issue_id)?;
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "issue_id": input.issue_id,
+            "expected_version": input.expected_version,
+            "title": input.patch.title,
+            "body": input.patch.body,
+            "state": input.patch.state,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_issue_update",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let patch = IssueUpdatePatch {
+            title: input.patch.title,
+            body: input.patch.body,
+            state: input.patch.state,
+        };
+        match issue_update(
+            &self.state,
+            &access,
+            pat.principal_id,
+            issue_id,
+            input.expected_version,
+            patch,
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
                 let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
                 Ok(CallToolResult::structured(stored))
             }
@@ -658,8 +911,8 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let plan_id = parse_uuid("plan_id", &input.plan_id)?;
-        let row = sqlx::query_as::<_, (Uuid, i32, String, Uuid, String)>(
-            "SELECT id, version, state, issue_revision_id, body FROM implementation_plans
+        let row = sqlx::query_as::<_, (Uuid, i32, String, Uuid, String, serde_json::Value)>(
+            "SELECT id, version, state, issue_revision_id, body, steps FROM implementation_plans
              WHERE id = $1 AND repo_id = $2",
         )
         .bind(plan_id)
@@ -667,7 +920,7 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, version, state, revision_id, body)) = row else {
+        let Some((id, version, state, revision_id, body, steps)) = row else {
             return Ok(domain_err(AppError::NotFound));
         };
         Ok(domain_ok(json!({
@@ -676,6 +929,7 @@ impl ProductionMcpServer {
             "state": state,
             "issue_revision_id": revision_id.to_string(),
             "body": body,
+            "steps": steps,
         })))
     }
 
@@ -702,6 +956,7 @@ impl ProductionMcpServer {
             "repository_id": input.repo.repository_id,
             "issue_revision_id": input.issue_revision_id,
             "body": input.body,
+            "steps": input.steps,
         });
         let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
         let action = begin_idempotent_write(
@@ -720,7 +975,15 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
-        match plan_create(&self.state, &access, issue_revision_id, &input.body).await {
+        match plan_create(
+            &self.state,
+            &access,
+            issue_revision_id,
+            &input.body,
+            &input.steps,
+        )
+        .await
+        {
             Ok(data) => {
                 let stored = envelope_value(&ToolEnvelope::success(data));
                 let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
@@ -859,6 +1122,220 @@ impl ProductionMcpServer {
             "base_oid": base_oid,
             "checks": checks,
         })))
+    }
+
+    #[tool(
+        name = "musehub_pr_list",
+        description = "List pull requests in a repository",
+        annotations(read_only_hint = true)
+    )]
+    async fn musehub_pr_list(
+        &self,
+        Parameters(input): Parameters<PrListInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, READ_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let limit = page_limit(input.page.limit);
+        let state_filter = input.state.as_deref().map(|s| s.trim().to_lowercase());
+        let rows = if let Some(st) = state_filter.as_deref() {
+            sqlx::query_as::<_, (Uuid, i64, String, String, String, String)>(
+                "SELECT id, number, title, source_branch, target_branch, state
+                 FROM pull_requests WHERE repo_id = $1 AND state = $2
+                 ORDER BY number DESC LIMIT $3",
+            )
+            .bind(access.repo_id)
+            .bind(st)
+            .bind(limit)
+            .fetch_all(&self.state.pool)
+            .await
+        } else {
+            sqlx::query_as::<_, (Uuid, i64, String, String, String, String)>(
+                "SELECT id, number, title, source_branch, target_branch, state
+                 FROM pull_requests WHERE repo_id = $1 ORDER BY number DESC LIMIT $2",
+            )
+            .bind(access.repo_id)
+            .bind(limit)
+            .fetch_all(&self.state.pool)
+            .await
+        }
+        .map_err(|e| app_error_to_mcp(e.into()))?;
+        let has_more = rows.len() as i64 == limit;
+        let items: Vec<Value> = rows
+            .into_iter()
+            .map(|(id, number, title, source_branch, target_branch, state)| {
+                json!({
+                    "id": id.to_string(),
+                    "number": number,
+                    "title": title,
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "state": state,
+                })
+            })
+            .collect();
+        Ok(domain_ok_page(
+            json!({ "items": items }),
+            page_meta(has_more, None),
+        ))
+    }
+
+    #[tool(
+        name = "musehub_pr_create",
+        description = "Open a pull request for an existing branch",
+        annotations(idempotent_hint = true)
+    )]
+    async fn musehub_pr_create(
+        &self,
+        Parameters(input): Parameters<PrCreateInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let mut issue_revision_ids = Vec::new();
+        for raw in &input.issue_revision_ids {
+            issue_revision_ids.push(parse_uuid("issue_revision_id", raw)?);
+        }
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "title": input.title,
+            "body": input.body,
+            "source_branch": input.source_branch,
+            "target_branch": input.target_branch,
+            "expected_head_oid": input.expected_head_oid,
+            "issue_revision_ids": input.issue_revision_ids,
+            "draft": input.draft,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_pr_create",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let target_branch = if input.target_branch.trim().is_empty() {
+            None
+        } else {
+            Some(input.target_branch.as_str())
+        };
+        match pr_create(
+            &self.state,
+            &access,
+            pat.principal_id,
+            &input.title,
+            &input.source_branch,
+            target_branch,
+            &input.expected_head_oid,
+            &issue_revision_ids,
+            input.draft,
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_pr_merge",
+        description = "Merge an open pull request (CAS on base/head)",
+        annotations(destructive_hint = true, idempotent_hint = true)
+    )]
+    async fn musehub_pr_merge(
+        &self,
+        Parameters(input): Parameters<PrMergeInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let pr_id = parse_uuid("pr_id", &input.pr_id)?;
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "pr_id": input.pr_id,
+            "expected_version": input.expected_version,
+            "expected_head_oid": input.expected_head_oid,
+            "expected_base_oid": input.expected_base_oid,
+            "expected_candidate_oid": input.expected_candidate_oid,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_pr_merge",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let storage_key: (Uuid,) =
+            sqlx::query_as("SELECT storage_key FROM repositories WHERE id = $1")
+                .bind(access.repo_id)
+                .fetch_one(&self.state.pool)
+                .await
+                .map_err(|e| app_error_to_mcp(e.into()))?;
+        match crate::pr::merge_pull_request_by_id(
+            &self.state,
+            access.repo_id,
+            storage_key.0,
+            pat.principal_id,
+            pr_id,
+            &input.expected_head_oid,
+            &input.expected_base_oid,
+            &input.expected_candidate_oid,
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
     }
 
     #[tool(
@@ -1228,6 +1705,155 @@ impl ProductionMcpServer {
     }
 
     #[tool(
+        name = "musehub_deployment_rollback",
+        description = "Rollback an environment to a previous healthy deployment",
+        annotations(idempotent_hint = true, destructive_hint = true)
+    )]
+    async fn musehub_deployment_rollback(
+        &self,
+        Parameters(input): Parameters<DeploymentRollbackInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_scope(&pat, WRITE_SCOPE) {
+            return Ok(domain_err(e));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(a) => a,
+            Err(e) => return Ok(domain_err(e)),
+        };
+        let environment_id = parse_uuid("environment_id", &input.environment_id)?;
+        let target_id = parse_uuid(
+            "target_healthy_deployment_id",
+            &input.target_healthy_deployment_id,
+        )?;
+        let canonical = json!({
+            "org_id": input.repo.org_id,
+            "repository_id": input.repo.repository_id,
+            "environment_id": input.environment_id,
+            "target_healthy_deployment_id": input.target_healthy_deployment_id,
+            "expected_environment_version": input.expected_environment_version,
+            "reason": input.reason,
+        });
+        let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+        let action = begin_idempotent_write(
+            &self.state.pool,
+            pat.principal_id,
+            Some(access.org_id),
+            "musehub_deployment_rollback",
+            &input.idempotency_key,
+            &canonical_json,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        if let IdempotencyAction::Replay(stored) = action {
+            return Ok(CallToolResult::structured(stored));
+        }
+        let IdempotencyAction::Proceed { record_id } = action else {
+            return Ok(domain_err(AppError::Other("idempotency".into())));
+        };
+        let attempt_id = Uuid::new_v4();
+        match deployment_rollback(
+            &self.state,
+            &access,
+            environment_id,
+            target_id,
+            attempt_id,
+            input.reason.clone(),
+        )
+        .await
+        {
+            Ok(data) => {
+                let stored = envelope_value(&ToolEnvelope::success(data));
+                let _ = complete_idempotent_write(&self.state.pool, record_id, &stored, None).await;
+                Ok(CallToolResult::structured(stored))
+            }
+            Err(e) => {
+                let _ = fail_idempotent_write(&self.state.pool, record_id).await;
+                Ok(domain_err(e))
+            }
+        }
+    }
+
+    #[tool(
+        name = "musehub_audit_list",
+        description = "List audit events for an organization",
+        annotations(read_only_hint = true)
+    )]
+    async fn musehub_audit_list(
+        &self,
+        Parameters(input): Parameters<AuditListInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(e) = require_audit_read(&pat) {
+            return Ok(domain_err(e));
+        }
+        let org_id = parse_uuid("org_id", &input.org_id)?;
+        if !crate::pat_auth::pat_org_allowed(pat.org_id, org_id) {
+            return Ok(domain_err(AppError::Forbidden));
+        }
+        let member: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+        )
+        .bind(org_id)
+        .bind(pat.principal_id)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| app_error_to_mcp(e.into()))?;
+        if member.is_none() {
+            return Ok(domain_err(AppError::Forbidden));
+        }
+        let repo_id = match input.repository_id.as_deref() {
+            Some(raw) => Some(parse_uuid("repository_id", raw)?),
+            None => None,
+        };
+        let resource_id = match input.resource_id.as_deref() {
+            Some(raw) => Some(parse_uuid("resource_id", raw)?),
+            None => None,
+        };
+        if let Some(rid) = repo_id {
+            let belongs: Option<(i32,)> =
+                sqlx::query_as("SELECT 1 FROM repositories WHERE id = $1 AND org_id = $2")
+                    .bind(rid)
+                    .bind(org_id)
+                    .fetch_optional(&self.state.pool)
+                    .await
+                    .map_err(|e| app_error_to_mcp(e.into()))?;
+            if belongs.is_none() {
+                return Ok(domain_err(AppError::NotFound));
+            }
+        }
+        let limit = page_limit(input.page.limit);
+        let items = crate::audit::query_org_audit(
+            &self.state.pool,
+            org_id,
+            repo_id,
+            input.resource_type.clone(),
+            resource_id,
+            limit,
+        )
+        .await
+        .map_err(app_error_to_mcp)?;
+        let rows: Vec<Value> = items
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "id": e.id.to_string(),
+                    "org_id": e.org_id.map(|u| u.to_string()),
+                    "repo_id": e.repo_id.map(|u| u.to_string()),
+                    "actor_id": e.actor_id.to_string(),
+                    "action": e.action,
+                    "resource_type": e.resource_type,
+                    "resource_id": e.resource_id.to_string(),
+                    "decision": e.decision,
+                    "metadata": e.metadata,
+                    "occurred_at": e.occurred_at,
+                })
+            })
+            .collect();
+        Ok(domain_ok(json!({ "items": rows })))
+    }
+
+    #[tool(
         name = "musehub_release_get",
         description = "Get a release record",
         annotations(read_only_hint = true)
@@ -1401,3 +2027,6 @@ impl ProductionMcpServer {
         })))
     }
 }
+
+#[path = "server_contract.rs"]
+mod server_contract;

@@ -68,35 +68,8 @@ jobs:
         run: chmod +x ./scripts/verify-backup-restore.sh && ./scripts/verify-backup-restore.sh
       - name: product security integration tests
         run: |
-          cargo test -p musehub-app --test security_db -- --test-threads=1
-          cargo test -p musehub-app --test agent_cancel_e2e -- --test-threads=1
-          cargo test -p musehub-app --test protected_branch_git -- --test-threads=1
-          cargo test -p musehub-app --test auth_matrix -- --test-threads=1
-          cargo test -p musehub-app --test plan_immutable -- --test-threads=1
-          cargo test -p musehub-app --test pr_gates_e2e -- --test-threads=1
-          cargo test -p musehub-app --test pr_security_e2e -- --test-threads=1
-          cargo test -p musehub-app --test agent_budget -- --test-threads=1
-          cargo test -p musehub-app --test pat_scope -- --test-threads=1
-          cargo test -p musehub-app --test pipeline_delivery_e2e -- --test-threads=1
-          cargo test -p musehub-app --test pipeline_security_e2e -- --test-threads=1
-          cargo test -p musehub-app --test pipeline_runner_pat_e2e -- --test-threads=1
-          cargo test -p musehub-app --test pipeline_cancel_e2e -- --test-threads=1
-          cargo test -p musehub-app --test pipeline_oci_negative_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_security_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_matrix -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_auth_http_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_validation_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_write_matrix_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_resources_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_guards_e2e -- --test-threads=1
-          MUSEHUB_MCP_PRODUCT=1 cargo test -p musehub-app --test production_mcp_cross_tenant_resources_e2e -- --test-threads=1
-          env CARGO_BIN_EXE_musehub-agent-codex-sim="$PWD/target/debug/musehub-agent-codex-sim" \
-            cargo test -p musehub-app --test agent_codex_mainline_select_e2e -- --test-threads=1
-          env CARGO_BIN_EXE_musehub-agent-codex-fixture="$PWD/target/debug/musehub-agent-codex-fixture" \
-            cargo test -p musehub-app --test agent_codex_fixture_e2e -- --test-threads=1
-          cargo test -p musehub-app --test codex_adapter_e2e -- --test-threads=1
-          cargo test -p musehub-mcp-probe --test matrix python_mcp_sdk -- --test-threads=1
+          chmod +x ./scripts/run-ci-security-integration-local.sh
+          ./scripts/run-ci-security-integration-local.sh
 
   pipeline-oci-product:
     runs-on: ubuntu-latest
@@ -190,3 +163,30 @@ jobs:
         run: |
           chmod +x ./scripts/verify-compose-runner-e2e.sh
           ./scripts/verify-compose-runner-e2e.sh
+
+  product-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: product Docker stack E2E
+        run: |
+          chmod +x ./scripts/verify-product-stack-e2e.sh
+          ./scripts/verify-product-stack-e2e.sh
+
+  product-production-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DOCKER_BUILDKIT: 0
+      COMPOSE_DOCKER_CLI_BUILD: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: production compose stack E2E (remote worker)
+        run: |
+          chmod +x ./scripts/verify-product-production-stack-e2e.sh
+          export MUSEHUB_E2E_DOCKER_GROUP=1
+          ./scripts/verify-product-production-stack-e2e.sh

@@ -7,7 +7,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use musehub_app::{boot_reconcile, lease, prepare, product_router, AppState as ProductState};
+use musehub_app::{
+    boot_reconcile, compose_mode_from_env, lease, prepare, product_profile, product_router,
+    runner_api, AppState as ProductState, ComposeAdapterMode,
+};
 use musehub_core::version;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -34,6 +37,20 @@ struct ReadinessChecks {
     process: &'static str,
     database: &'static str,
     git_storage: &'static str,
+    product_api: &'static str,
+    /// `mock` default in product image; use `runner` + verified OCI path for real compose.
+    compose_adapter_mode: &'static str,
+    pipeline_executor: &'static str,
+    agent_executor: &'static str,
+    product_profile: &'static str,
+}
+
+fn compose_adapter_mode_label() -> &'static str {
+    match compose_mode_from_env() {
+        ComposeAdapterMode::Mock => "mock",
+        ComposeAdapterMode::Runner => "runner",
+        ComposeAdapterMode::Auto => "auto",
+    }
 }
 
 #[derive(Serialize)]
@@ -79,7 +96,12 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Some(_) => DATABASE_ERROR,
         None => NOT_CONFIGURED,
     };
-    let ready = database == PROCESS_OK && git_storage == PROCESS_OK;
+    let product_api = if state.product.is_some() {
+        PROCESS_OK
+    } else {
+        DATABASE_ERROR
+    };
+    let ready = database == PROCESS_OK && git_storage == PROCESS_OK && product_api == PROCESS_OK;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -94,6 +116,19 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 process: PROCESS_OK,
                 database,
                 git_storage,
+                product_api,
+                compose_adapter_mode: compose_adapter_mode_label(),
+                pipeline_executor: if runner_api::pipeline_executor_remote() {
+                    "remote"
+                } else {
+                    "in_process"
+                },
+                agent_executor: if runner_api::agent_executor_remote() {
+                    "remote"
+                } else {
+                    "in_process"
+                },
+                product_profile: product_profile::profile_label(),
             },
         }),
     )
