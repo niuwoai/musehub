@@ -782,6 +782,7 @@ pub async fn issue_update(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn pr_create(
     state: &Arc<AppState>,
     access: &RepoAccess,
