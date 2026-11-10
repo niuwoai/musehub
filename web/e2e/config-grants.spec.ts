@@ -42,7 +42,7 @@ test.describe('org config and grants UI', () => {
     const name = `Demo Org ${Date.now()}`
     await page.getByTestId('org-display-name').fill(name)
     const settingsPath = '/api/v1/orgs/demo/settings'
-    await Promise.all([
+    const [saveResponse] = await Promise.all([
       page.waitForResponse(
         (response) =>
           response.request().method() === 'PATCH' &&
@@ -52,6 +52,8 @@ test.describe('org config and grants UI', () => {
       ),
       page.getByTestId('save-org-settings').click(),
     ])
+    const patched = await saveResponse.json()
+    expect(patched.display_name).toBe(name)
     const settings = await page.request.get(`${apiBase}${settingsPath}`)
     expect(settings.ok()).toBeTruthy()
     const body = await settings.json()
