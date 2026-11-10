@@ -10,10 +10,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({}))
     throw new Error((body as { message?: string }).message ?? response.statusText)
   }
-  if (response.status === 204) {
+  if (response.status === 204 || response.status === 205) {
     return undefined as T
   }
-  return (await response.json()) as T
+  const text = await response.text()
+  if (!text) {
+    return undefined as T
+  }
+  return JSON.parse(text) as T
 }
 
 export type Principal = { id: string; handle: string }

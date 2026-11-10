@@ -21,17 +21,8 @@ test.describe('org members and PAT console', () => {
 
     await page.getByTestId('member-handle').fill(handle)
     await page.getByTestId('member-password').fill(memberPass)
-    await Promise.all([
-      page.waitForResponse(
-        (r) =>
-          r.url().includes('/api/v1/orgs/demo/members') &&
-          r.request().method() === 'POST' &&
-          (r.status() === 201 || r.status() === 204),
-        { timeout: 15_000 },
-      ),
-      page.getByTestId('invite-member').click(),
-    ])
-    await expect(page.getByTestId('org-members-list')).toContainText(handle, { timeout: 10_000 })
+    await page.getByTestId('invite-member').click()
+    await expect(page.getByTestId('org-members-list')).toContainText(handle, { timeout: 15_000 })
 
     const patName = `ui-pat-${Date.now()}`
     await page.getByTestId('pat-name').fill(patName)

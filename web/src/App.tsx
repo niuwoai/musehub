@@ -78,6 +78,25 @@ export default function App() {
   const [grantHandle, setGrantHandle] = useState('')
   const [mintedPatFull, setMintedPatFull] = useState<string | null>(null)
   const sessionEpochRef = useRef(0)
+  const iamPanelsGenerationRef = useRef(0)
+  const sessionHandleRef = useRef<string | null>(null)
+  const orgMembersRevisionRef = useRef(0)
+
+  useEffect(() => {
+    sessionHandleRef.current = session
+  }, [session])
+
+  function bumpOrgMembersRevision() {
+    orgMembersRevisionRef.current += 1
+  }
+
+  function bumpIamPanelsGeneration() {
+    iamPanelsGenerationRef.current += 1
+  }
+
+  function iamPanelsGenerationActive(generation: number) {
+    return iamPanelsGenerationRef.current === generation
+  }
   const [orgMembers, setOrgMembers] = useState<OrgMember[]>([])
   const [membersAdmin, setMembersAdmin] = useState(false)
   const [memberHandle, setMemberHandle] = useState('')
@@ -96,8 +115,8 @@ export default function App() {
 
   useEffect(() => {
     me()
-      .then((principal) => setSession(principal.handle))
-      .catch(() => setSession(null))
+      .then((principal) => setSession((prev) => prev ?? principal.handle))
+      .catch(() => setSession((prev) => (prev === null ? null : prev)))
   }, [])
 
   function bumpSessionEpoch() {
@@ -130,6 +149,7 @@ export default function App() {
 
   useEffect(() => {
     const epoch = bumpSessionEpoch()
+    bumpIamPanelsGeneration()
     resetIamBusy()
     if (!session) {
       setAuditEvents([])
@@ -139,71 +159,82 @@ export default function App() {
       setOrgMembers([])
       setMembersAdmin(false)
       setMintedPatFull(null)
+      bumpOrgMembersRevision()
       return
     }
+    const panelsGeneration = iamPanelsGenerationRef.current
+    const membersRevisionBaseline = orgMembersRevisionRef.current
     void (async () => {
       const pats = await listMyTokens().catch(() => [] as PatMasked[])
-      if (!sessionEpochActive(epoch)) {
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setMyTokens(pats)
       const caps = await getRunnerCapabilities().catch(() => null)
-      if (!sessionEpochActive(epoch)) {
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setRunnerCaps(caps)
       const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => [] as AuditEvent[])
-      if (!sessionEpochActive(epoch)) {
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setAuditEvents(audit)
       const runner = await listRunnerTokens(DEFAULT_ORG).catch(
         () => [] as Awaited<ReturnType<typeof listRunnerTokens>>,
       )
-      if (!sessionEpochActive(epoch)) {
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setRunnerTokens(runner)
       try {
         const members = await listOrgMembers(DEFAULT_ORG)
-        if (!sessionEpochActive(epoch)) {
+        if (
+          !sessionEpochActive(epoch) ||
+          !iamPanelsGenerationActive(panelsGeneration) ||
+          orgMembersRevisionRef.current !== membersRevisionBaseline
+        ) {
           return
         }
         setOrgMembers(members)
         setMembersAdmin(true)
       } catch {
-        if (!sessionEpochActive(epoch)) {
+        if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
           return
         }
         setOrgMembers([])
         setMembersAdmin(false)
       }
     })()
+    return () => {
+      bumpIamPanelsGeneration()
+    }
   }, [session])
 
   async function refreshIamPanels() {
     const epoch = sessionEpochRef.current
+    const panelsGeneration = iamPanelsGenerationRef.current
     try {
       const pats = await listMyTokens()
-      if (!sessionEpochActive(epoch)) {
+      if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setMyTokens(pats)
     } catch (err) {
-      if (sessionEpochActive(epoch)) {
+      if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration)) {
         setError(err instanceof Error ? err.message : 'PAT list failed')
       }
       return
     }
     const audit = await listAuditEvents(DEFAULT_ORG, 40).catch(() => null)
-    if (sessionEpochActive(epoch) && audit) {
+    if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && audit) {
       setAuditEvents(audit)
     }
-    if (membersAdmin) {
-      const members = await listOrgMembers(DEFAULT_ORG).catch(() => null)
-      if (sessionEpochActive(epoch) && members) {
-        setOrgMembers(members)
-      }
+    const members = await listOrgMembers(DEFAULT_ORG).catch(() => null)
+    if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && members) {
+      bumpOrgMembersRevision()
+      setOrgMembers(members)
+      setMembersAdmin(true)
     }
   }
 
@@ -211,6 +242,7 @@ export default function App() {
     setError(null)
     resetIamBusy()
     bumpSessionEpoch()
+    bumpIamPanelsGeneration()
     setMintedPatFull(null)
     try {
       await logout()
@@ -231,10 +263,12 @@ export default function App() {
     try {
       await login(loginForm.handle, loginForm.password)
       const principal = await me()
+      resetIamBusy()
       bumpSessionEpoch()
+      bumpIamPanelsGeneration()
       setMintedPatFull(null)
       setSession(principal.handle)
-      await refreshRepos()
+      await Promise.all([refreshRepos(), refreshIamPanels()])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'login failed')
     }
@@ -276,10 +310,16 @@ export default function App() {
     await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
   }
 
-  async function pollRun(runId: string) {
+  async function pollRun(runId: string, runEpoch: number) {
     // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
     for (let i = 0; i < 360; i++) {
+      if (!sessionEpochActive(runEpoch)) {
+        throw new Error('agent run poll aborted (session changed)')
+      }
       const run = await getAgentRun(runId)
+      if (!sessionEpochActive(runEpoch)) {
+        throw new Error('agent run poll aborted (session changed)')
+      }
       setLastRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
         return run
@@ -291,6 +331,7 @@ export default function App() {
 
   async function onRunAgent(issue: Issue) {
     if (!selectedRepo) return
+    const runEpoch = sessionEpochRef.current
     setAgentRunStarting(true)
     try {
       const run = await startAgentRun(
@@ -299,8 +340,11 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
+      if (!sessionEpochActive(runEpoch)) {
+        return
+      }
       setLastRun(run)
-      await pollRun(run.id)
+      await pollRun(run.id, runEpoch)
       await loadIssues(selectedRepo)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'agent run failed')
@@ -311,8 +355,9 @@ export default function App() {
 
   async function onCancelRun() {
     if (!lastRun) return
+    const runEpoch = sessionEpochRef.current
     await cancelAgentRun(lastRun.id)
-    await pollRun(lastRun.id)
+    await pollRun(lastRun.id, runEpoch)
   }
 
   async function onCreatePrFromRun() {
@@ -475,6 +520,7 @@ export default function App() {
                                       m.handle,
                                       e.target.value,
                                     )
+                                    bumpIamPanelsGeneration()
                                     await refreshIamPanels()
                                   } catch (err) {
                                     setError(
@@ -497,6 +543,7 @@ export default function App() {
                                   setError(null)
                                   try {
                                     await disableOrgMember(DEFAULT_ORG, m.handle)
+                                    bumpIamPanelsGeneration()
                                     await refreshIamPanels()
                                   } catch (err) {
                                     setError(
@@ -536,18 +583,23 @@ export default function App() {
                           const opEpoch = beginIamOperation()
                           setError(null)
                           try {
+                            const invitedHandle = memberHandle.trim()
+                            bumpOrgMembersRevision()
                             await inviteOrgMember(
                               DEFAULT_ORG,
-                              memberHandle.trim(),
+                              invitedHandle,
                               memberPassword,
                               'member',
                             )
-                            if (!sessionEpochActive(opEpoch)) {
-                              return
+                            bumpIamPanelsGeneration()
+                            const members = await listOrgMembers(DEFAULT_ORG)
+                            bumpOrgMembersRevision()
+                            setOrgMembers(members)
+                            setMembersAdmin(true)
+                            if (sessionEpochActive(opEpoch)) {
+                              setMemberHandle('')
+                              setMemberPassword('')
                             }
-                            setMemberHandle('')
-                            setMemberPassword('')
-                            await refreshIamPanels()
                           } catch (err) {
                             if (sessionEpochActive(opEpoch)) {
                               setError(
@@ -593,6 +645,7 @@ export default function App() {
                               return
                             }
                             setMintedPatFull(null)
+                            bumpIamPanelsGeneration()
                             await refreshIamPanels()
                           } catch (err) {
                             if (sessionEpochActive(epoch)) {
@@ -675,6 +728,7 @@ export default function App() {
                       }
                       setMintedPatFull(created.token)
                       setPatName('')
+                      bumpIamPanelsGeneration()
                       await refreshIamPanels()
                     } catch (err) {
                       if (sessionEpochActive(opEpoch)) {
