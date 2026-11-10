@@ -21,7 +21,7 @@
 | Compose 远端 worker | DEP / compose-runner | `[x]` 本地 | `verify-compose-runner-e2e.sh` + production stack OCI deploy |
 | 干净安装 / Runbook | OPS-01 | `[x]` 本地 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `configure-production-runner-pat.sh` + `deploy/RUNBOOK.md` |
 | `selected` PAT 选仓 | 最小 RBAC | `[~]` | `grants_security_e2e`, `production_mcp_selected_repo_e2e`, Playwright `run-config-grants-e2e.sh` |
-| IAM 成员 / PAT 控制台 | IAM-01/02 运营面 | `[~]` | `iam_disabled_user_e2e`; Playwright `iam-members-pat.spec.ts` + `audit-runner` 无 PAT 泄露；**无** SSH key API、**无**多区域/多租户 SSH 服务验收 |
+| IAM 成员 / PAT 控制台 | IAM-01/02 运营面 | `[~]` | `iam_disabled_user_e2e`, `iam_org_privilege_e2e`; Playwright `iam-members-pat` / `audit-runner`；禁用为 **全局** principal；**无** SSH key API、**无**多租户 SSH 验收 |
 | 用户可编辑配置 | OPS | `[~]` | `organizations.preferences` + Web Playwright |
 | OAuth / 多区域 HA | V1 外 | `[ ]` | 未扩展 |
 

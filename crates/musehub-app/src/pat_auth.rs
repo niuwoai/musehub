@@ -55,7 +55,10 @@ pub async fn authenticate_pat_context(pool: &PgPool, token: &str) -> Result<PatC
     else {
         return Err(AppError::Unauthorized);
     };
-    if principal_status != "active" || revoked_at.is_some() || expires_at < OffsetDateTime::now_utc() {
+    if principal_status != "active"
+        || revoked_at.is_some()
+        || expires_at < OffsetDateTime::now_utc()
+    {
         return Err(AppError::Unauthorized);
     }
     let _ = sqlx::query(

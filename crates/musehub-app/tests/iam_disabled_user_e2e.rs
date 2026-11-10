@@ -77,8 +77,7 @@ async fn disabled_user_rejected_on_api_pat_and_git() {
     let pat_json: serde_json::Value =
         serde_json::from_slice(&pat_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let token = pat_json["token"].as_str().unwrap().to_string();
-    let auth = base64::engine::general_purpose::STANDARD
-        .encode(format!("iam-dis-member:{token}"));
+    let auth = base64::engine::general_purpose::STANDARD.encode(format!("iam-dis-member:{token}"));
     let git_ok = app
         .clone()
         .oneshot(

@@ -19,7 +19,7 @@ MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制�
 | 3. Runner PAT + worker | `./scripts/configure-production-runner-pat.sh --start`（写入 `MUSEHUB_RUNNER_PAT` 并启动 `musehub-runner`） |
 | 4. 公网/内网 Git 地址 | 在 `deploy/.env` 设置 `MUSEHUB_PUBLIC_HTTP_ORIGIN`（HTTP 或 HTTPS，与网关入口一致），UI 中 `clone_url` 才可用 |
 | 5. HTTPS 网关（生产可选） | `MUSEHUB_GATEWAY_TLS_MODE=manual\|acme`、域名与证书路径见 `deploy/.env.example` 与 `deploy/RUNBOOK.md`；`./scripts/render-gateway-caddyfile.sh` 后 `./scripts/upgrade-production-compose.sh`；TLS 开启时 **`MUSEHUB_PUBLIC_HTTP_ORIGIN` 应为 `https://…`** |
-| 6. 打开 UI | 默认 HTTP：`http://<主机>:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}`；TLS 已启用时用 `https://<MUSEHUB_GATEWAY_TLS_DOMAIN>`；控制台 **Members / PAT** 面板（组织 owner/admin 管理成员；PAT 仅创建时展示一次） |
+| 6. 打开 UI | 默认 HTTP：`http://<主机>:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}`；TLS 已启用时用 `https://<MUSEHUB_GATEWAY_TLS_DOMAIN>`；控制台 **Members / PAT**（owner 才能管理 owner；邀请不可降权；**禁用用户为全局 principal**，非仅当前 org） |
 | 7. 升级 / 迁移 / 备份 | `./scripts/upgrade-production-compose.sh`；日常迁移由容器 entrypoint 自动 `up`；`scripts/backup-musehub-state.sh` |
 | 8. 主机重启后自启（可选） | `sudo ./scripts/install-musehub-systemd.sh` → `systemctl enable --now musehub-control-plane`；`musehub-runner` 仅在 `MUSEHUB_RUNNER_PAT` 已配置时实际启动 worker |
 

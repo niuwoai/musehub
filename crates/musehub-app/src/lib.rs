@@ -919,7 +919,17 @@ async fn list_pats_handler(
     headers: HeaderMap,
 ) -> Result<Json<Vec<PatMaskedView>>, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
-    let rows = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, String, time::OffsetDateTime)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            Vec<String>,
+            String,
+            time::OffsetDateTime,
+        ),
+    >(
         "SELECT id, name, token_prefix, scopes, scope_mode, expires_at
          FROM access_tokens
          WHERE principal_id = $1 AND revoked_at IS NULL

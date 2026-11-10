@@ -37,6 +37,22 @@ fn parse_org_role_strict(role: &str) -> Result<&'static str, AppError> {
     }
 }
 
+fn org_role_rank(role: &str) -> u8 {
+    match role {
+        "member" => 1,
+        "admin" => 2,
+        "owner" => 3,
+        _ => 0,
+    }
+}
+
+fn ensure_actor_may_manage_membership(actor_role: &str, target_role: &str) -> Result<(), AppError> {
+    if target_role == "owner" && actor_role != "owner" {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
 async fn principal_id_for_handle(pool: &sqlx::PgPool, handle: &str) -> Result<Uuid, AppError> {
     let normalized = normalize_handle(handle);
     let row =
@@ -47,7 +63,11 @@ async fn principal_id_for_handle(pool: &sqlx::PgPool, handle: &str) -> Result<Uu
     row.map(|(id,)| id).ok_or(AppError::NotFound)
 }
 
-async fn actor_org_role(pool: &sqlx::PgPool, org_id: Uuid, actor_id: Uuid) -> Result<String, AppError> {
+async fn actor_org_role(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    actor_id: Uuid,
+) -> Result<String, AppError> {
     let row = sqlx::query_as::<_, (String,)>(
         "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
     )
@@ -127,7 +147,7 @@ pub async fn patch_org_member(
     let actor_id = super::require_session(&state.pool, &headers).await?;
     let org_id = require_org_admin(&state.pool, &org, actor_id).await?;
     let target_id = principal_id_for_handle(&state.pool, &handle).await?;
-  let new_role = parse_org_role_strict(&body.role)?;
+    let new_role = parse_org_role_strict(&body.role)?;
     let actor_role = actor_org_role(&state.pool, org_id, actor_id).await?;
     if new_role == "owner" && actor_role != "owner" {
         return Err(AppError::Forbidden);
@@ -136,7 +156,9 @@ pub async fn patch_org_member(
         return Err(AppError::Forbidden);
     }
     if target_id == actor_id {
-        return Err(AppError::Validation("cannot change your own org role".to_string()));
+        return Err(AppError::Validation(
+            "cannot change your own org role".to_string(),
+        ));
     }
     let current = sqlx::query_as::<_, (String,)>(
         "SELECT role FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
@@ -148,19 +170,21 @@ pub async fn patch_org_member(
     let Some((current_role,)) = current else {
         return Err(AppError::NotFound);
     };
-    if current_role == "owner" && new_role != "owner" && count_active_owners(&state.pool, org_id).await? <= 1 {
+    ensure_actor_may_manage_membership(&actor_role, &current_role)?;
+    if current_role == "owner"
+        && new_role != "owner"
+        && count_active_owners(&state.pool, org_id).await? <= 1
+    {
         return Err(AppError::Validation(
             "cannot demote the last org owner".to_string(),
         ));
     }
-    sqlx::query(
-        "UPDATE memberships SET role = $3 WHERE org_id = $1 AND principal_id = $2",
-    )
-    .bind(org_id)
-    .bind(target_id)
-    .bind(new_role)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("UPDATE memberships SET role = $3 WHERE org_id = $1 AND principal_id = $2")
+        .bind(org_id)
+        .bind(target_id)
+        .bind(new_role)
+        .execute(&state.pool)
+        .await?;
     let request_id = crate::audit::request_id_from_headers(&headers);
     let _ = crate::audit::record(
         &state.pool,
@@ -204,6 +228,8 @@ pub async fn disable_org_member(
     let Some((role,)) = membership else {
         return Err(AppError::NotFound);
     };
+    let actor_role = actor_org_role(&state.pool, org_id, actor_id).await?;
+    ensure_actor_may_manage_membership(&actor_role, &role)?;
     if role == "owner" && count_active_owners(&state.pool, org_id).await? <= 1 {
         return Err(AppError::Validation(
             "cannot disable the last org owner".to_string(),
@@ -249,16 +275,21 @@ pub async fn revoke_member_sessions(
     let actor_id = super::require_session(&state.pool, &headers).await?;
     let org_id = require_org_admin(&state.pool, &org, actor_id).await?;
     let target_id = principal_id_for_handle(&state.pool, &handle).await?;
-    let active = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM memberships WHERE org_id = $1 AND principal_id = $2 AND status = 'active'",
+    let membership = sqlx::query_as::<_, (String, String)>(
+        "SELECT role, status FROM memberships WHERE org_id = $1 AND principal_id = $2",
     )
     .bind(org_id)
     .bind(target_id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
-    if active.0 == 0 {
+    let Some((target_role, mem_status)) = membership else {
+        return Err(AppError::NotFound);
+    };
+    if mem_status != "active" {
         return Err(AppError::NotFound);
     }
+    let actor_role = actor_org_role(&state.pool, org_id, actor_id).await?;
+    ensure_actor_may_manage_membership(&actor_role, &target_role)?;
     let revoked = crate::auth::revoke_all_sessions_for_principal(&state.pool, target_id).await?;
     let request_id = crate::audit::request_id_from_headers(&headers);
     let _ = crate::audit::record(
@@ -326,6 +357,17 @@ pub async fn invite_member(
             .fetch_optional(&state.pool)
             .await?;
     let member_id = if let Some((id,)) = existing {
+        let principal_status =
+            sqlx::query_as::<_, (String,)>("SELECT status FROM principals WHERE id = $1")
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await?
+                .0;
+        if principal_status != "active" {
+            return Err(AppError::Conflict(
+                "principal is disabled; re-enable is not available via invite".to_string(),
+            ));
+        }
         id
     } else {
         let id = Uuid::new_v4();
@@ -352,10 +394,69 @@ pub async fn invite_member(
         tx.commit().await?;
         id
     };
-    let inserted = sqlx::query(
+    let existing_membership = sqlx::query_as::<_, (String, String)>(
+        "SELECT role, status FROM memberships WHERE org_id = $1 AND principal_id = $2",
+    )
+    .bind(org_id)
+    .bind(member_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if let Some((existing_role, mem_status)) = existing_membership {
+        if mem_status != "active" {
+            return Err(AppError::Conflict(
+                "membership inactive; cannot re-invite without owner re-enable".to_string(),
+            ));
+        }
+        let existing_rank = org_role_rank(&existing_role);
+        let requested_rank = org_role_rank(role);
+        if requested_rank < existing_rank {
+            return Err(AppError::Conflict(format!(
+                "invite cannot lower membership role from {existing_role} to {role}"
+            )));
+        }
+        if requested_rank == existing_rank {
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        let promoted_role = role;
+        if promoted_role == "admin" && actor_role != "owner" {
+            return Err(AppError::Forbidden);
+        }
+        if promoted_role == "owner" && actor_role != "owner" {
+            return Err(AppError::Forbidden);
+        }
+        sqlx::query("UPDATE memberships SET role = $3 WHERE org_id = $1 AND principal_id = $2")
+            .bind(org_id)
+            .bind(member_id)
+            .bind(promoted_role)
+            .execute(&state.pool)
+            .await?;
+        let request_id = crate::audit::request_id_from_headers(&headers);
+        let _ = crate::audit::record(
+            &state.pool,
+            Some(org_id),
+            None,
+            principal_id,
+            None,
+            "org.member.role.update",
+            "membership",
+            member_id,
+            request_id,
+            "allow",
+            serde_json::json!({
+                "handle": handle,
+                "from_role": existing_role,
+                "to_role": promoted_role,
+                "via": "invite",
+            }),
+        )
+        .await;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    sqlx::query(
         "INSERT INTO memberships (id, org_id, principal_id, role, status)
-         VALUES ($1, $2, $3, $4, 'active')
-         ON CONFLICT (org_id, principal_id) DO UPDATE SET role = EXCLUDED.role, status = 'active'",
+         VALUES ($1, $2, $3, $4, 'active')",
     )
     .bind(Uuid::new_v4())
     .bind(org_id)
@@ -363,9 +464,6 @@ pub async fn invite_member(
     .bind(role)
     .execute(&state.pool)
     .await?;
-    if inserted.rows_affected() == 0 {
-        return Err(AppError::Other("membership insert failed".to_string()));
-    }
     let request_id = crate::audit::request_id_from_headers(&headers);
     let _ = crate::audit::record(
         &state.pool,
