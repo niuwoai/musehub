@@ -30,7 +30,7 @@
 
 | 主题 | 状态 | 现状 |
 |------|------|------|
-| 干净机器一键安装/启动 | `[x]` 脚本 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `deploy/RUNBOOK.md`；无 systemd |
+| 干净机器一键安装/启动 | `[x]` 脚本 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `configure-production-runner-pat.sh` + `deploy/RUNBOOK.md`；无 systemd |
 | 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例 + `verify-caddyfile-layout.sh`；CI 经 HTTP 网关验路径 |
 | DB 迁移升级 Runbook | `[~]` | compose 入口与 host `verify-product-acceptance.sh` migrate 对齐见 `deploy/RUNBOOK.md` |
 | 最小 RBAC / PAT scope / 审计 | `[~]` | `selected` PAT **不**因 owner/admin 绕过选仓；`production_mcp_selected_repo_e2e`；grant 审计 + 禁自授 |

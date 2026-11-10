@@ -20,9 +20,11 @@ Control plane **must not** mount `docker.sock`. Pipeline / agent / deploy run on
 
 ```bash
 ./scripts/install-production-compose.sh          # generates deploy/.env if missing; starts postgres+server+gateway
-# Mint MUSEHUB_RUNNER_PAT via UI or API, set in deploy/.env, then:
-cd deploy && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d musehub-runner
+./scripts/configure-production-runner-pat.sh --start   # mint selected PAT → deploy/.env → start musehub-runner
 ```
+
+Manual PAT (UI/API) remains supported: set `MUSEHUB_RUNNER_PAT` in `deploy/.env`, then  
+`cd deploy && docker compose -f docker-compose.yml -f docker-compose.production.yml up -d musehub-runner`.
 
 Full acceptance on a dev machine with Docker:  
 `./scripts/verify-product-production-stack-e2e.sh` → `product_production_stack_e2e=ok`.

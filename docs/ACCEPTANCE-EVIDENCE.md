@@ -19,7 +19,7 @@
 | 控制面无 docker.sock | 架构 / DEP | `[x]` | production stack 断言；`RUNNER-BOUNDARY.md` |
 | Agent 远端 worker | README 独立 Linux Runner | `[x]` 本地 | `verify-remote-agent-e2e.sh` + production stack agent 步；**非**物理双主机 |
 | Compose 远端 worker | DEP / compose-runner | `[x]` 本地 | `verify-compose-runner-e2e.sh` + production stack OCI deploy |
-| 干净安装 / Runbook | OPS-01 | `[x]` 本地 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `deploy/RUNBOOK.md` |
+| 干净安装 / Runbook | OPS-01 | `[x]` 本地 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `configure-production-runner-pat.sh` + `deploy/RUNBOOK.md` |
 | `selected` PAT 选仓 | 最小 RBAC | `[~]` | `grants_security_e2e`, `production_mcp_selected_repo_e2e`, Playwright `run-config-grants-e2e.sh` |
 | 用户可编辑配置 | OPS | `[~]` | `organizations.preferences` + Web Playwright |
 | OAuth / 多区域 HA | V1 外 | `[ ]` | 未扩展 |
@@ -35,4 +35,5 @@
 | `run-ci-security-integration-local.sh` | 本地镜像 CI security/MCP/runner + **remote deploy/agent cancel/kill/budget** 子进程脚本 |
 | `verify-product-production-stack-e2e.sh` | 生产 compose 全链（无 API docker.sock） |
 | `verify-clean-install-runbook.sh` | RUNBOOK quick start 实测 |
+| `configure-production-runner-pat.sh` | 生产 worker 用 selected PAT 写入 `deploy/.env`（由 `verify-product-production-stack-e2e.sh` 覆盖同等 API 路径） |
 | `docs/LOCAL-ACCEPTANCE-RUN.md` | 本地跑批命令/exit/SHA 台账 |
