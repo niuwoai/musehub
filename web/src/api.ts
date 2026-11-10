@@ -91,6 +91,21 @@ export type Deployment = {
   approval_required: boolean
 }
 
+export type DeploymentSummary = {
+  id: string
+  environment_slug: string
+  release_id: string
+  state: string
+  plan_hash?: string | null
+  approval_required: boolean
+  updated_at: string
+}
+
+export type DeploymentListResponse = {
+  items: DeploymentSummary[]
+  has_more: boolean
+}
+
 export type DeploymentApprovalResult = {
   deployment_id: string
   decision: string
@@ -479,6 +494,27 @@ export async function createUserPat(org: string, name: string) {
     method: 'POST',
     body: JSON.stringify({ name, org }),
   })
+}
+
+export async function listDeployments(
+  org: string,
+  repo: string,
+  options?: { limit?: number; state?: string; environment_slug?: string },
+) {
+  const params = new URLSearchParams()
+  if (options?.limit != null) {
+    params.set('limit', String(options.limit))
+  }
+  if (options?.state) {
+    params.set('state', options.state)
+  }
+  if (options?.environment_slug) {
+    params.set('environment_slug', options.environment_slug)
+  }
+  const qs = params.toString()
+  return api<DeploymentListResponse>(
+    `/api/v1/orgs/${org}/repos/${repo}/deployments${qs ? `?${qs}` : ''}`,
+  )
 }
 
 export async function getDeployment(org: string, repo: string, deploymentId: string) {

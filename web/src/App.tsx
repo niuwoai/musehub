@@ -36,7 +36,9 @@ import {
   getDeployment,
   getDeploymentTrace,
   approveDeployment,
+  listDeployments,
   type Deployment,
+  type DeploymentSummary,
   Issue,
   listIssues,
   listPullRequests,
@@ -84,6 +86,10 @@ export default function App() {
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null)
   const [deploymentApprovalBusy, setDeploymentApprovalBusy] = useState(false)
   const [deploymentLookupId, setDeploymentLookupId] = useState('')
+  const [deploymentSummaries, setDeploymentSummaries] = useState<DeploymentSummary[]>([])
+  const [deploymentListLoading, setDeploymentListLoading] = useState(false)
+  const [deploymentListError, setDeploymentListError] = useState<string | null>(null)
+  const [deploymentListHasMore, setDeploymentListHasMore] = useState(false)
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
   const [orgDisplayName, setOrgDisplayName] = useState('')
@@ -133,6 +139,10 @@ export default function App() {
     setTrace(null)
     setDeploymentLookupId('')
     setDeploymentApprovalBusy(false)
+    setDeploymentSummaries([])
+    setDeploymentListError(null)
+    setDeploymentListHasMore(false)
+    setDeploymentListLoading(false)
   }
 
   function invalidateDeploymentWork() {
@@ -411,9 +421,72 @@ export default function App() {
       setSettings(s)
       setOrgDisplayName(s.display_name)
       setGrants(g)
+      if (deploymentOpActive(op)) {
+        void refreshDeploymentList(op)
+      }
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'failed to load repository')
+      }
+    }
+  }
+
+  async function refreshDeploymentList(op?: DeploymentOpContext) {
+    if (!selectedRepoRef.current) {
+      return
+    }
+    const ctx = op ?? captureDeploymentOp()
+    setDeploymentListLoading(true)
+    setDeploymentListError(null)
+    try {
+      const list = await listDeployments(DEFAULT_ORG, ctx.repo, {
+        limit: 20,
+        state: 'awaiting_approval',
+      })
+      if (!deploymentOpActive(ctx)) {
+        return
+      }
+      setDeploymentSummaries(list.items)
+      setDeploymentListHasMore(list.has_more)
+    } catch (err) {
+      if (deploymentOpActive(ctx)) {
+        setDeploymentListError(
+          err instanceof Error ? err.message : 'failed to load deployments',
+        )
+        setDeploymentSummaries([])
+        setDeploymentListHasMore(false)
+      }
+    } finally {
+      if (deploymentOpActive(ctx)) {
+        setDeploymentListLoading(false)
+      }
+    }
+  }
+
+  async function onPickDeploymentFromList(id: string) {
+    if (!selectedRepo) return
+    const op = captureDeploymentOp()
+    setDeploymentLookupId(id)
+    setError(null)
+    try {
+      const dep = await getDeployment(DEFAULT_ORG, selectedRepo, id)
+      if (!deploymentOpActive(op)) {
+        return
+      }
+      setActiveDeployment(dep)
+      setDeploymentId(dep.id)
+      if (dep.state !== 'awaiting_approval') {
+        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        if (!deploymentOpActive(op)) {
+          return
+        }
+        setTrace(tv)
+      } else if (deploymentOpActive(op)) {
+        setTrace(null)
+      }
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'deployment load failed')
       }
     }
   }
@@ -646,6 +719,9 @@ export default function App() {
         setTrace(tv)
       } else if (deploymentOpActive(op)) {
         setTrace(null)
+      }
+      if (deploymentOpActive(op)) {
+        void refreshDeploymentList(op)
       }
     } catch (err) {
       if (deploymentOpActive(op)) {
@@ -1257,6 +1333,47 @@ export default function App() {
                     {t('app.deployProductionProtected')}
                   </button>
                 ) : null}
+                <div data-testid="deployment-pending-section">
+                  <h4>{t('app.deploymentPendingTitle')}</h4>
+                  <button
+                    type="button"
+                    data-testid="refresh-deployments"
+                    disabled={deploymentListLoading}
+                    onClick={() => void refreshDeploymentList()}
+                  >
+                    {t('app.refreshDeployments')}
+                  </button>
+                  {deploymentListLoading ? (
+                    <p role="status">{t('app.deploymentListLoading')}</p>
+                  ) : null}
+                  {deploymentListError ? (
+                    <p role="alert">{deploymentListError}</p>
+                  ) : null}
+                  {!deploymentListLoading &&
+                  !deploymentListError &&
+                  deploymentSummaries.length === 0 ? (
+                    <p data-testid="deployment-list-empty">
+                      {t('app.deploymentListEmpty')}
+                    </p>
+                  ) : null}
+                  <ul data-testid="deployment-list">
+                    {deploymentSummaries.map((d) => (
+                      <li key={d.id}>
+                        <button
+                          type="button"
+                          data-testid={`deployment-pick-${d.id}`}
+                          onClick={() => void onPickDeploymentFromList(d.id)}
+                        >
+                          {d.environment_slug} · {d.state}
+                          {d.plan_hash ? ` · ${d.plan_hash.slice(0, 8)}…` : ''}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {deploymentListHasMore ? (
+                    <p role="status">{t('app.deploymentListHasMore')}</p>
+                  ) : null}
+                </div>
                 <label>
                   {t('app.loadDeploymentById')}
                   <input

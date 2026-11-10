@@ -159,8 +159,11 @@ test.describe('protected deployment approval console', () => {
     void page.getByTestId('deploy-production').click()
     await postSeen
     await page.getByTestId('logout').click()
+    const staleProd = page.waitForResponse(
+      (r) => r.url().includes('/deployments') && r.request().method() === 'POST',
+    )
     releasePost()
-    await page.waitForTimeout(300)
+    await staleProd
 
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
