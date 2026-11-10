@@ -68,9 +68,9 @@ curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST -H 'Content-Type: applicatio
 REPO_ID=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/orgs/demo/repos" \
   | jq -r --arg s "$ANCHOR_SLUG" '.[] | select(.slug == $s) | .id' | head -1)
 if [[ -z "$REPO_ID" || "$REPO_ID" == null ]]; then
-  REPO_ID=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/orgs/demo/repos" | jq -r '.[0].id')
+  echo "configure_runner_pat=fail anchor repo slug=$ANCHOR_SLUG not in org list (create may have failed; will not bind PAT to another repo)" >&2
+  exit 1
 fi
-[[ -n "$REPO_ID" && "$REPO_ID" != null ]] || { echo "configure_runner_pat=fail no repo for PAT scope" >&2; exit 1; }
 
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h "$RUNNER_MEMBER" '{handle:$h,role:"developer"}')" \
