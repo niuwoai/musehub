@@ -17,8 +17,9 @@ MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制�
 | 1. 克隆与依赖 | Docker Engine + Compose v2、`jq`、`curl` |
 | 2. 生产控制面 | `./scripts/install-production-compose.sh` → 生成 `deploy/.env`（**保存输出的 admin 密码**） |
 | 3. Runner PAT + worker | `./scripts/configure-production-runner-pat.sh --start`（写入 `MUSEHUB_RUNNER_PAT` 并启动 `musehub-runner`） |
-| 4. 打开 UI | 浏览器访问 `http://<主机>:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}`，使用 `admin` 登录 |
-| 5. 升级 / 迁移 / 备份 | [deploy/RUNBOOK.md](deploy/RUNBOOK.md)；迁移由容器 entrypoint 自动 `up`；`scripts/backup-musehub-state.sh` |
+| 4. 公网/内网 Git 地址 | 在 `deploy/.env` 设置 `MUSEHUB_PUBLIC_HTTP_ORIGIN`（如 `https://musehub.your.corp`），与网关入口一致，UI 中 `clone_url` 才可用 |
+| 5. 打开 UI | 浏览器访问 `http://<主机>:${MUSEHUB_GATEWAY_HTTP_PORT:-8080}`，使用 `admin` 登录 |
+| 6. 升级 / 迁移 / 备份 | `./scripts/upgrade-production-compose.sh`；日常迁移由容器 entrypoint 自动 `up`；`scripts/backup-musehub-state.sh` |
 
 实验室 **demo profile**（API 进程内执行器、compose-mock）：`deploy/RUNBOOK.md` Quick start 或 `./scripts/verify-clean-install-runbook.sh`。
 

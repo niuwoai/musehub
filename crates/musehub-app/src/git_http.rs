@@ -181,6 +181,54 @@ fn parse_cgi_output(stdout: &[u8]) -> Result<(u16, Vec<(String, String)>, Bytes)
     Ok((status, headers, body))
 }
 
+/// Base URL operators give to users for HTTP Git (`/git/...`). Prefer `MUSEHUB_PUBLIC_HTTP_ORIGIN`
+/// (gateway front door); otherwise map container bind `0.0.0.0:port` to `http://127.0.0.1:port`.
+pub fn public_http_origin(bind_display: &str) -> String {
+    if let Ok(raw) = std::env::var("MUSEHUB_PUBLIC_HTTP_ORIGIN") {
+        let trimmed = raw.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let host_port = if let Some(rest) = bind_display.strip_prefix("0.0.0.0:") {
+        format!("127.0.0.1:{rest}")
+    } else if let Some(rest) = bind_display.strip_prefix("[::]:") {
+        format!("127.0.0.1:{rest}")
+    } else {
+        bind_display.to_string()
+    };
+    if host_port.starts_with("http://") || host_port.starts_with("https://") {
+        host_port.trim_end_matches('/').to_string()
+    } else {
+        format!("http://{host_port}")
+    }
+}
+
 pub fn git_clone_url(bind_display: &str, org_slug: &str, repo_slug: &str) -> String {
-    format!("http://{bind_display}/git/{org_slug}/{repo_slug}.git")
+    let origin = public_http_origin(bind_display);
+    format!("{origin}/git/{org_slug}/{repo_slug}.git")
+}
+
+#[cfg(test)]
+mod clone_url_tests {
+    use super::*;
+
+    #[test]
+    fn public_origin_honors_env() {
+        std::env::set_var("MUSEHUB_PUBLIC_HTTP_ORIGIN", "https://musehub.corp.example");
+        assert_eq!(
+            public_http_origin("0.0.0.0:8080"),
+            "https://musehub.corp.example"
+        );
+        std::env::remove_var("MUSEHUB_PUBLIC_HTTP_ORIGIN");
+    }
+
+    #[test]
+    fn clone_url_maps_wildcard_bind_to_loopback() {
+        std::env::remove_var("MUSEHUB_PUBLIC_HTTP_ORIGIN");
+        assert_eq!(
+            git_clone_url("0.0.0.0:8080", "demo", "app"),
+            "http://127.0.0.1:8080/git/demo/app.git"
+        );
+    }
 }

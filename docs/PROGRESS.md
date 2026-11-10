@@ -32,7 +32,8 @@
 |------|------|------|
 | 干净机器一键安装/启动 | `[x]` 脚本 | `verify-clean-install-runbook.sh` + `install-production-compose.sh` + `configure-production-runner-pat.sh` + `deploy/RUNBOOK.md`；无 systemd |
 | 生产静态 Web + 反代 TLS | `[~]` | 网关镜像托管 `web/dist`；`Caddyfile` TLS 示例 + `verify-caddyfile-layout.sh`；CI 经 HTTP 网关验路径 |
-| DB 迁移升级 Runbook | `[~]` | compose 入口与 host `verify-product-acceptance.sh` migrate 对齐见 `deploy/RUNBOOK.md` |
+| DB 迁移升级 Runbook | `[x]` 脚本 | `upgrade-production-compose.sh` + entrypoint migrate；host `verify-product-acceptance.sh` |
+| HTTP Git `clone_url` 可达 | `[x]` 配置 | `MUSEHUB_PUBLIC_HTTP_ORIGIN`（默认 localhost 网关端口）；非 0.0.0.0 展示 |
 | 最小 RBAC / PAT scope / 审计 | `[~]` | `selected` PAT **不**因 owner/admin 绕过选仓；`production_mcp_selected_repo_e2e`；grant 审计 + 禁自授 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[x]` 本地 | `musehub-runnerd` + `run-ci-security-integration-local.sh`（remote pipeline/agent/deploy + cancel/kill/budget/epoch）；production stack；**非**物理双主机 |

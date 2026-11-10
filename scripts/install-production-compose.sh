@@ -16,7 +16,11 @@ if [[ ! -f .env ]]; then
   sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$PW/" .env
   sed -i "s/^MUSEHUB_SESSION_SECRET=.*/MUSEHUB_SESSION_SECRET=$SEC/" .env
   sed -i "s/^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=.*/MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=$ADM/" .env
+  GW_PORT="$(grep '^MUSEHUB_GATEWAY_HTTP_PORT=' .env | cut -d= -f2 | tr -d '\r')"
+  GW_PORT="${GW_PORT:-8080}"
+  sed -i "s|^MUSEHUB_PUBLIC_HTTP_ORIGIN=.*|MUSEHUB_PUBLIC_HTTP_ORIGIN=http://127.0.0.1:${GW_PORT}|" .env
   echo "install_production=generated_secrets env=deploy/.env admin_password=$ADM"
+  echo "install_production=hint set MUSEHUB_PUBLIC_HTTP_ORIGIN in deploy/.env to your gateway hostname for Git clone"
 fi
 
 export MUSEHUB_RUNNER_PAT="${MUSEHUB_RUNNER_PAT:-placeholder-set-after-bootstrap}"
