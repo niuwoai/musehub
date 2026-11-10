@@ -295,6 +295,23 @@ export type RunnerTokenMasked = {
   scope_mode: string
 }
 
+export type OrgMember = {
+  principal_id: string
+  handle: string
+  org_role: string
+  principal_status: string
+  membership_status: string
+}
+
+export type PatMasked = {
+  id: string
+  name: string
+  token_prefix: string
+  scopes: string[]
+  scope_mode: string
+  expires_at: string
+}
+
 export type PatCreated = {
   id: string
   token: string
@@ -381,6 +398,59 @@ export async function createScopedPat(
       repo_ids: opts.repo_ids,
       runner_handle: opts.runner_handle,
     }),
+  })
+}
+
+export async function listOrgMembers(org: string) {
+  return api<OrgMember[]>(`/api/v1/orgs/${org}/members`)
+}
+
+export async function inviteOrgMember(
+  org: string,
+  handle: string,
+  password: string,
+  role: string,
+) {
+  return api<void>(`/api/v1/orgs/${org}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ handle, password, role }),
+  })
+}
+
+export async function patchOrgMemberRole(org: string, handle: string, role: string) {
+  return api<void>(`/api/v1/orgs/${org}/members/${encodeURIComponent(handle)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  })
+}
+
+export async function disableOrgMember(org: string, handle: string) {
+  return api<void>(
+    `/api/v1/orgs/${org}/members/${encodeURIComponent(handle)}/disable`,
+    { method: 'POST' },
+  )
+}
+
+export async function revokeOrgMemberSessions(org: string, handle: string) {
+  return api<{ sessions_revoked: number }>(
+    `/api/v1/orgs/${org}/members/${encodeURIComponent(handle)}/revoke-sessions`,
+    { method: 'POST' },
+  )
+}
+
+export async function listMyTokens() {
+  return api<PatMasked[]>('/api/v1/tokens')
+}
+
+export async function revokePat(tokenId: string) {
+  return api<void>(`/api/v1/tokens/${tokenId}`, { method: 'DELETE' })
+}
+
+/** User PAT with default read/write scopes (shown once on create). */
+export async function createUserPat(org: string, name: string) {
+  return api<PatCreated>('/api/v1/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ name, org }),
   })
 }
 

@@ -21,17 +21,41 @@ pub async fn authenticate_pat_context(pool: &PgPool, token: &str) -> Result<PatC
         return Err(AppError::Unauthorized);
     }
     let token_hash = pat::hash_pat(token);
-    let row = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Vec<String>, String, OffsetDateTime, Option<OffsetDateTime>)>(
-        "SELECT id, principal_id, org_id, scopes, scope_mode, expires_at, revoked_at FROM access_tokens WHERE token_hash = $1",
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            Option<Uuid>,
+            Vec<String>,
+            String,
+            String,
+            OffsetDateTime,
+            Option<OffsetDateTime>,
+        ),
+    >(
+        "SELECT t.id, t.principal_id, t.org_id, t.scopes, t.scope_mode, p.status, t.expires_at, t.revoked_at
+         FROM access_tokens t
+         JOIN principals p ON p.id = t.principal_id
+         WHERE t.token_hash = $1",
     )
     .bind(&token_hash)
     .fetch_optional(pool)
     .await?;
-    let Some((token_id, principal_id, org_id, scopes, scope_mode, expires_at, revoked_at)) = row
+    let Some((
+        token_id,
+        principal_id,
+        org_id,
+        scopes,
+        scope_mode,
+        principal_status,
+        expires_at,
+        revoked_at,
+    )) = row
     else {
         return Err(AppError::Unauthorized);
     };
-    if revoked_at.is_some() || expires_at < OffsetDateTime::now_utc() {
+    if principal_status != "active" || revoked_at.is_some() || expires_at < OffsetDateTime::now_utc() {
         return Err(AppError::Unauthorized);
     }
     let _ = sqlx::query(

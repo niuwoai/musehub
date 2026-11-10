@@ -20,16 +20,19 @@ pub async fn authenticate_pat(pool: &PgPool, token: &str) -> Result<Uuid, AppErr
         return Err(AppError::Unauthorized);
     }
     let token_hash = hash_pat(token);
-    let row = sqlx::query_as::<_, (Uuid, OffsetDateTime, Option<OffsetDateTime>)>(
-        "SELECT principal_id, expires_at, revoked_at FROM access_tokens WHERE token_hash = $1",
+    let row = sqlx::query_as::<_, (Uuid, String, OffsetDateTime, Option<OffsetDateTime>)>(
+        "SELECT t.principal_id, p.status, t.expires_at, t.revoked_at
+         FROM access_tokens t
+         JOIN principals p ON p.id = t.principal_id
+         WHERE t.token_hash = $1",
     )
     .bind(&token_hash)
     .fetch_optional(pool)
     .await?;
-    let Some((principal_id, expires_at, revoked_at)) = row else {
+    let Some((principal_id, status, expires_at, revoked_at)) = row else {
         return Err(AppError::Unauthorized);
     };
-    if revoked_at.is_some() || expires_at < OffsetDateTime::now_utc() {
+    if status != "active" || revoked_at.is_some() || expires_at < OffsetDateTime::now_utc() {
         return Err(AppError::Unauthorized);
     }
     let _ = sqlx::query(

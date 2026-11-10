@@ -84,6 +84,20 @@ pub async fn login(
     Ok((principal_id, token))
 }
 
+pub async fn revoke_all_sessions_for_principal(
+    pool: &PgPool,
+    principal_id: Uuid,
+) -> Result<u64, AppError> {
+    let updated = sqlx::query(
+        "UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP
+         WHERE principal_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(principal_id)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected())
+}
+
 pub async fn logout(pool: &PgPool, token: &str) -> Result<(), AppError> {
     let token_hash = hash_token(token);
     sqlx::query(

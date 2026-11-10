@@ -99,9 +99,27 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/auth/login", post(login_handler))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route("/api/v1/me", get(me_handler))
-        .route("/api/v1/tokens", post(create_pat_handler))
+        .route(
+            "/api/v1/tokens",
+            get(list_pats_handler).post(create_pat_handler),
+        )
         .route("/api/v1/tokens/{token_id}", delete(revoke_pat_handler))
-        .route("/api/v1/orgs/{org}/members", post(members::invite_member))
+        .route(
+            "/api/v1/orgs/{org}/members",
+            get(members::list_org_members).post(members::invite_member),
+        )
+        .route(
+            "/api/v1/orgs/{org}/members/{handle}",
+            patch(members::patch_org_member),
+        )
+        .route(
+            "/api/v1/orgs/{org}/members/{handle}/disable",
+            post(members::disable_org_member),
+        )
+        .route(
+            "/api/v1/orgs/{org}/members/{handle}/revoke-sessions",
+            post(members::revoke_member_sessions),
+        )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/collaborators",
             post(members::grant_repo_collaborator),
@@ -847,6 +865,16 @@ async fn revoke_pat_handler(
     Path(token_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
+    let row = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT name, org_id FROM access_tokens WHERE id = $1 AND principal_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(token_id)
+    .bind(principal_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((name, org_id)) = row else {
+        return Err(AppError::NotFound);
+    };
     let updated = sqlx::query(
         "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND principal_id = $2 AND revoked_at IS NULL",
@@ -858,7 +886,64 @@ async fn revoke_pat_handler(
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    let request_id = audit::request_id_from_headers(&headers);
+    let _ = audit::record(
+        &state.pool,
+        org_id,
+        None,
+        principal_id,
+        None,
+        "token.revoke",
+        "access_token",
+        token_id,
+        request_id,
+        "allow",
+        serde_json::json!({ "name": name }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct PatMaskedView {
+    id: Uuid,
+    name: String,
+    token_prefix: String,
+    scopes: Vec<String>,
+    scope_mode: String,
+    expires_at: String,
+}
+
+async fn list_pats_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PatMaskedView>>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let rows = sqlx::query_as::<_, (Uuid, String, String, Vec<String>, String, time::OffsetDateTime)>(
+        "SELECT id, name, token_prefix, scopes, scope_mode, expires_at
+         FROM access_tokens
+         WHERE principal_id = $1 AND revoked_at IS NULL
+         ORDER BY created_at DESC",
+    )
+    .bind(principal_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(id, name, token_prefix, scopes, scope_mode, expires_at)| PatMaskedView {
+                    id,
+                    name,
+                    token_prefix,
+                    scopes,
+                    scope_mode,
+                    expires_at: expires_at
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_else(|_| expires_at.to_string()),
+                },
+            )
+            .collect(),
+    ))
 }
 
 async fn create_pat_handler(
@@ -925,6 +1010,30 @@ async fn create_pat_handler(
     } else {
         pat::create_pat(&state.pool, principal_id, org_id, &body.name).await?
     };
+    let audit_scope_mode = if body.scopes.is_some() {
+        scope_mode
+    } else {
+        "all_accessible"
+    };
+    let request_id = audit::request_id_from_headers(&headers);
+    let _ = audit::record(
+        &state.pool,
+        org_id,
+        None,
+        principal_id,
+        None,
+        "token.create",
+        "access_token",
+        id,
+        request_id,
+        "allow",
+        serde_json::json!({
+            "name": body.name,
+            "scope_mode": audit_scope_mode,
+            "scopes": body.scopes,
+        }),
+    )
+    .await;
     Ok(Json(PatCreatedView {
         id,
         token,

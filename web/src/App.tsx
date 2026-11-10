@@ -17,8 +17,17 @@ import {
   listRepoGrants,
   listRunnerTokens,
   listAuditEvents,
+  listOrgMembers,
+  inviteOrgMember,
+  patchOrgMemberRole,
+  disableOrgMember,
+  listMyTokens,
+  createUserPat,
+  revokePat,
   getRunnerCapabilities,
   type AuditEvent,
+  type OrgMember,
+  type PatMasked,
   type RunnerCapabilities,
   getAgentRun,
   getDeploymentTrace,
@@ -66,6 +75,13 @@ export default function App() {
   const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
   const [grantHandle, setGrantHandle] = useState('')
   const [mintedTokenPrefix, setMintedTokenPrefix] = useState<string | null>(null)
+  const [mintedPatFull, setMintedPatFull] = useState<string | null>(null)
+  const [orgMembers, setOrgMembers] = useState<OrgMember[]>([])
+  const [membersAdmin, setMembersAdmin] = useState(false)
+  const [memberHandle, setMemberHandle] = useState('')
+  const [memberPassword, setMemberPassword] = useState('')
+  const [myTokens, setMyTokens] = useState<PatMasked[]>([])
+  const [patName, setPatName] = useState('')
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [runnerCaps, setRunnerCaps] = useState<RunnerCapabilities | null>(null)
   const [runnerTokens, setRunnerTokens] = useState<
@@ -87,21 +103,41 @@ export default function App() {
     }
     void (async () => {
       try {
-        const [audit, caps, tokens] = await Promise.all([
+        const [audit, caps, tokens, pats] = await Promise.all([
           listAuditEvents(DEFAULT_ORG, 30),
           getRunnerCapabilities(),
           listRunnerTokens(DEFAULT_ORG),
+          listMyTokens(),
         ])
         setAuditEvents(audit)
         setRunnerCaps(caps)
         setRunnerTokens(tokens)
+        setMyTokens(pats)
       } catch {
         setAuditEvents([])
         setRunnerCaps(null)
         setRunnerTokens([])
+        setMyTokens([])
+      }
+      try {
+        const members = await listOrgMembers(DEFAULT_ORG)
+        setOrgMembers(members)
+        setMembersAdmin(true)
+      } catch {
+        setOrgMembers([])
+        setMembersAdmin(false)
       }
     })()
   }, [session])
+
+  async function refreshIamPanels() {
+    const audit = await listAuditEvents(DEFAULT_ORG, 40)
+    setAuditEvents(audit)
+    setMyTokens(await listMyTokens())
+    if (membersAdmin) {
+      setOrgMembers(await listOrgMembers(DEFAULT_ORG))
+    }
+  }
 
   async function refreshRepos() {
     const data = await listRepos(DEFAULT_ORG)
@@ -321,6 +357,132 @@ export default function App() {
                   ))}
                 </ul>
               )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="org-members">
+              <h3>Organization members</h3>
+              {!membersAdmin ? (
+                <p>Member admin requires org owner/admin.</p>
+              ) : (
+                <>
+                  <ul data-testid="org-members-list" style={{ paddingLeft: '1.2rem' }}>
+                    {orgMembers.map((m) => (
+                      <li key={m.principal_id}>
+                        {m.handle} · {m.org_role} · {m.principal_status}
+                        {m.principal_status === 'active' && m.handle !== session ? (
+                          <>
+                            {' '}
+                            <select
+                              aria-label={`role-${m.handle}`}
+                              value={m.org_role}
+                              onChange={(e) =>
+                                void patchOrgMemberRole(DEFAULT_ORG, m.handle, e.target.value).then(
+                                  () => refreshIamPanels(),
+                                )
+                              }
+                            >
+                              <option value="member">member</option>
+                              <option value="admin">admin</option>
+                              <option value="owner">owner</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void disableOrgMember(DEFAULT_ORG, m.handle).then(() =>
+                                  refreshIamPanels(),
+                                )
+                              }
+                            >
+                              Disable
+                            </button>
+                          </>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  <div>
+                    <input
+                      data-testid="member-handle"
+                      placeholder="handle"
+                      value={memberHandle}
+                      onChange={(e) => setMemberHandle(e.target.value)}
+                    />
+                    <input
+                      data-testid="member-password"
+                      type="password"
+                      placeholder="initial password"
+                      value={memberPassword}
+                      onChange={(e) => setMemberPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      data-testid="invite-member"
+                      onClick={() =>
+                        void inviteOrgMember(
+                          DEFAULT_ORG,
+                          memberHandle.trim(),
+                          memberPassword,
+                          'member',
+                        ).then(() => {
+                          setMemberHandle('')
+                          setMemberPassword('')
+                          return refreshIamPanels()
+                        })
+                      }
+                    >
+                      Add member
+                    </button>
+                  </div>
+                </>
+              )}
+            </Panel>
+            <Panel style={{ flex: '1 1 18rem' }} data-testid="pat-management">
+              <h3>Personal access tokens</h3>
+              {mintedPatFull ? (
+                <p data-testid="pat-minted-once">
+                  Copy now (shown once): <code>{mintedPatFull}</code>
+                </p>
+              ) : (
+                <p>Minted tokens are shown once at creation only.</p>
+              )}
+              <ul data-testid="pat-masked-list">
+                {myTokens.map((t) => (
+                  <li key={t.id}>
+                    {t.name}: <code>{t.token_prefix}…</code> ({t.scope_mode})
+                    <button
+                      type="button"
+                      data-testid={`revoke-pat-${t.id}`}
+                      onClick={() =>
+                        void revokePat(t.id).then(() => {
+                          setMintedPatFull(null)
+                          return refreshIamPanels()
+                        })
+                      }
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <input
+                data-testid="pat-name"
+                placeholder="token name"
+                value={patName}
+                onChange={(e) => setPatName(e.target.value)}
+              />
+              <button
+                type="button"
+                data-testid="create-pat"
+                onClick={() =>
+                  void createUserPat(DEFAULT_ORG, patName.trim() || 'console-pat').then((created) => {
+                    setMintedPatFull(created.token)
+                    setPatName('')
+                    setMintedTokenPrefix(created.token.slice(0, 12))
+                    return refreshIamPanels()
+                  })
+                }
+              >
+                Create PAT
+              </button>
             </Panel>
             <Panel style={{ flex: '1 1 18rem' }} data-testid="runner-status-panel">
               <h3>Runner status</h3>

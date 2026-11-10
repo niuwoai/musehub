@@ -15,8 +15,12 @@ test.describe('audit and runner status panels', () => {
     await expect(page.getByTestId('audit-panel')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('runner-status-panel')).toBeVisible()
     await expect(page.getByTestId('runner-executors')).toBeVisible()
+    await expect(page.getByTestId('pat-management')).toBeVisible()
     const bodyText = await page.locator('body').innerText()
     expect(bodyText).not.toMatch(fullPatLike)
+    await page.reload()
+    await expect(page.getByTestId('audit-panel')).toBeVisible()
+    expect(await page.locator('body').innerText()).not.toMatch(fullPatLike)
   })
 
   test('runner capabilities API is readable with session', async ({ request }) => {
