@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.0-rc5]
+
+### Added
+
+- `./scripts/dev-local-stack.sh`：`init` / `start` / `status` / `stop` 本地 loopback 开发栈（migrate + readyz 门禁 + Vite）；`verify-dev-local-stack.sh` CI 冒烟。
+- `scripts/lib/sed-portable.sh`：macOS/Linux 兼容的 `sed_inplace`；生产 `install-production-compose` / runbook 验证已复用。
+
 ### Fixed
 
 - Migration `0005_fk_indexes` for BOOT-02 schema check; Git HTTP route fix (`/git/{org}/{repo}.git/...`).

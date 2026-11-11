@@ -6,7 +6,7 @@
 
 | 步骤 | 证据（自动/脚本） | 本 Phase 1 控制台变化 | Mock / 边界 | 下一小缺口（不阻塞） |
 |------|-------------------|------------------------|-------------|----------------------|
-| 安装 / migration / 启动 | `deploy/RUNBOOK.md`、`product-stack` CI | `/login` 深链；`session-boot` 恢复中不误踢回登录 | 需本地 Postgres + migrate 手工步骤 | Mac 上 README 一键脚本与 Compose 卷路径一致性（文档级） |
+| 安装 / migration / 启动 | `./scripts/dev-local-stack.sh`、`deploy/RUNBOOK.md` | `/login` 深链；`session-boot` 恢复中不误踢回登录 | 需自备 Postgres；生产 remote runner 另见 `install-production-compose.sh` | Mac：Homebrew PG + 本脚本；生产 `sed` 已 portable |
 | 登录 / 会话 | `session-routing.spec.ts`、`00-product-flow` | 未登录深链 → 登录后 `from` 回跳；刷新深链保留 | bootstrap 密码仅首次 | 浏览器后退栈未单独测（可用手动点验） |
 | 建仓库 | Playwright `createRepoViaUi` | 创建后进入 `/issues`（与列表点选一致） | 仍为 demo org | — |
 | Issue → 计划 → Agent | `00-product-flow` | `/issues` | reference agent | 多 Issue 时滚动（Phase 2） |

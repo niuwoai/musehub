@@ -2,6 +2,8 @@
 # Exercises deploy/RUNBOOK.md quick start on a throwaway compose project (demo profile).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/sed-portable.sh
+source "$ROOT/scripts/lib/sed-portable.sh"
 cd "$ROOT"
 if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && getent group docker >/dev/null 2>&1; then
   exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1; cd '$PWD' && ./scripts/verify-clean-install-runbook.sh"
@@ -20,10 +22,10 @@ cp "$ROOT/deploy/.env.example" "$ENV_FILE"
 PW="$(openssl rand -hex 12)"
 SEC="$(openssl rand -hex 20)"
 ADM="Runbook-$(openssl rand -hex 6)"
-sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$PW/" "$ENV_FILE"
-sed -i "s/^MUSEHUB_SESSION_SECRET=.*/MUSEHUB_SESSION_SECRET=$SEC/" "$ENV_FILE"
-sed -i "s/^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=.*/MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=$ADM/" "$ENV_FILE"
-sed -i "s/^MUSEHUB_GATEWAY_HTTP_PORT=.*/MUSEHUB_GATEWAY_HTTP_PORT=$MUSEHUB_GATEWAY_HTTP_PORT/" "$ENV_FILE"
+sed_inplace "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$PW/" "$ENV_FILE"
+sed_inplace "s/^MUSEHUB_SESSION_SECRET=.*/MUSEHUB_SESSION_SECRET=$SEC/" "$ENV_FILE"
+sed_inplace "s/^MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=.*/MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD=$ADM/" "$ENV_FILE"
+sed_inplace "s/^MUSEHUB_GATEWAY_HTTP_PORT=.*/MUSEHUB_GATEWAY_HTTP_PORT=$MUSEHUB_GATEWAY_HTTP_PORT/" "$ENV_FILE"
 {
   echo "MUSEHUB_CI_POSTGRES_PORT=$MUSEHUB_CI_POSTGRES_PORT"
   echo "MUSEHUB_CI_API_HOST_PORT=$MUSEHUB_CI_API_HOST_PORT"
