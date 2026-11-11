@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import type { Page } from '@playwright/test'
 
+import { switchDeploymentListToAll } from './helpers/delivery'
 import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
@@ -20,24 +21,6 @@ async function fillLoginForm(page: Page, handle: string, pass: string) {
   await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('login-handle-input').fill(handle)
   await page.getByLabel(/password|密码/i).fill(pass)
-}
-
-async function switchDeploymentListToAll(page: Page) {
-  await expect(page.getByTestId('refresh-deployments')).toBeEnabled({ timeout: 30_000 })
-  const allList = page.waitForResponse(
-    (r) => {
-      const url = r.url()
-      return (
-        r.request().method() === 'GET' &&
-        url.includes('/deployments') &&
-        !url.includes('state=awaiting_approval')
-      )
-    },
-    { timeout: 30_000 },
-  )
-  await expect(page.getByTestId('deployment-view-all')).toBeEnabled()
-  await page.getByTestId('deployment-view-all').click()
-  await allList
 }
 
 function delayedGate() {
