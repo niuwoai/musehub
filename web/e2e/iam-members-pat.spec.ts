@@ -54,6 +54,8 @@ test.describe('org members and PAT console', () => {
     const row = tokens.find((t) => t.name === patName)
     expect(row?.id).toBeTruthy()
     await goAccountTokens(page)
+    await expect(page.getByTestId('pat-masked-list')).toContainText(patName, { timeout: 15_000 })
+    await expect(page.getByTestId(`revoke-pat-${row!.id}`)).toBeVisible({ timeout: 15_000 })
     await page.getByTestId(`revoke-pat-${row!.id}`).click()
     await expect(page.getByTestId('pat-masked-list')).not.toContainText(patName)
 

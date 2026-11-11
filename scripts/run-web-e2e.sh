@@ -200,4 +200,9 @@ done
 
 export DATABASE_URL
 export MUSEHUB_PRODUCT_OCI_E2E="${MUSEHUB_PRODUCT_OCI_E2E:-0}"
-yarn --cwd web test:e2e
+if [[ -n "${PLAYWRIGHT_ARGS:-}" ]]; then
+  # shellcheck disable=SC2086
+  yarn --cwd web test:e2e ${PLAYWRIGHT_ARGS}
+else
+  yarn --cwd web test:e2e
+fi
