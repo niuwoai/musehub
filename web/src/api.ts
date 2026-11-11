@@ -22,7 +22,41 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type Principal = { id: string; handle: string }
 export type Repository = { id: string; slug: string; state: string; clone_url: string }
-export type Issue = { id: string; number: number; title: string; state: string }
+export type Issue = {
+  id: string
+  number: number
+  title: string
+  state: string
+  labels?: string[]
+  assignee_handle?: string | null
+}
+export type IssueListPage = {
+  items: Issue[]
+  next_cursor: string | null
+  has_more: boolean
+}
+export type IssueDetail = Issue & {
+  body: string
+  assignee_id?: string | null
+  author_handle: string
+  close_reason?: string | null
+}
+export type DiscussionComment = {
+  id: string
+  body: string
+  author_handle: string
+  anchor?: unknown
+  outdated: boolean
+  resolved: boolean
+  created_at: string
+}
+export type SshKey = { id: string; name: string; fingerprint: string; created_at: string }
+export type PullRequestDetail = PullRequest & {
+  row_version: number
+  author_handle: string
+  base_oid?: string
+  head_oid?: string
+}
 export type AgentRun = {
   id: string
   adapter_kind: string
@@ -207,8 +241,57 @@ export async function createRepo(org: string, slug: string) {
   })
 }
 
-export async function listIssues(org: string, repo: string) {
-  return api<Issue[]>(`/api/v1/orgs/${org}/repos/${repo}/issues`)
+export async function listIssuesPage(
+  org: string,
+  repo: string,
+  params?: { state?: string; label?: string; assignee?: string; cursor?: string; limit?: number },
+) {
+  const qs = new URLSearchParams()
+  if (params?.state) qs.set('state', params.state)
+  if (params?.label) qs.set('label', params.label)
+  if (params?.assignee) qs.set('assignee', params.assignee)
+  if (params?.cursor) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return api<IssueListPage>(`/api/v1/orgs/${org}/repos/${repo}/issues${suffix}`)
+}
+
+export async function listIssues(
+  org: string,
+  repo: string,
+  params?: { state?: string; label?: string; assignee?: string; cursor?: string },
+) {
+  const page = await listIssuesPage(org, repo, params)
+  return page.items
+}
+
+export async function getIssue(org: string, repo: string, issueNumber: number) {
+  return api<IssueDetail>(`/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}`)
+}
+
+export async function patchIssue(
+  org: string,
+  repo: string,
+  issueNumber: number,
+  body: Record<string, unknown>,
+) {
+  return api<IssueDetail>(`/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function listIssueComments(org: string, repo: string, issueNumber: number) {
+  return api<DiscussionComment[]>(
+    `/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}/comments`,
+  )
+}
+
+export async function postIssueComment(org: string, repo: string, issueNumber: number, body: string) {
+  return api<DiscussionComment>(
+    `/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}/comments`,
+    { method: 'POST', body: JSON.stringify({ body }) },
+  )
 }
 
 export async function createIssue(org: string, repo: string, title: string) {
@@ -254,6 +337,97 @@ export async function cancelAgentRun(runId: string) {
 
 export async function listPullRequests(org: string, repo: string) {
   return api<PullRequest[]>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`)
+}
+
+export async function getPullRequest(org: string, repo: string, number: number) {
+  return api<PullRequestDetail>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}`,
+  )
+}
+
+export async function getPullRequestDiff(org: string, repo: string, number: number, path?: string) {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+  return api<Record<string, unknown>>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/diff${qs}`,
+  )
+}
+
+export async function submitPrReview(
+  org: string,
+  repo: string,
+  number: number,
+  decision: 'approve' | 'request_changes' | 'comment',
+  body?: string,
+) {
+  return api<void>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/reviews`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, body }),
+  })
+}
+
+export async function listPrComments(org: string, repo: string, number: number) {
+  return api<DiscussionComment[]>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/comments`,
+  )
+}
+
+export async function postPrComment(
+  org: string,
+  repo: string,
+  number: number,
+  body: string,
+  anchor?: Record<string, unknown>,
+) {
+  return api<DiscussionComment>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/comments`,
+    { method: 'POST', body: JSON.stringify({ body, anchor }) },
+  )
+}
+
+export async function syncPullRequest(org: string, repo: string, number: number, expectedRowVersion: number) {
+  return api<PullRequest>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/sync`, {
+    method: 'PATCH',
+    body: JSON.stringify({ expected_row_version: expectedRowVersion }),
+  })
+}
+
+export async function listGitCommits(org: string, repo: string, ref: string) {
+  return api<{ items: { oid: string; summary: string; author: string }[] }>(
+    `/api/v1/orgs/${org}/repos/${repo}/git/commits?ref=${encodeURIComponent(ref)}`,
+  )
+}
+
+export async function listGitTree(org: string, repo: string, commit: string, path: string) {
+  return api<{ items: { path: string; kind: string; oid: string; size?: number }[] }>(
+    `/api/v1/orgs/${org}/repos/${repo}/git/tree?commit=${encodeURIComponent(commit)}&path=${encodeURIComponent(path)}`,
+  )
+}
+
+export async function readGitBlob(
+  org: string,
+  repo: string,
+  commit: string,
+  path: string,
+  startLine = 1,
+) {
+  return api<{ binary: boolean; text?: string | null; truncated?: boolean }>(
+    `/api/v1/orgs/${org}/repos/${repo}/git/blob?commit=${encodeURIComponent(commit)}&path=${encodeURIComponent(path)}&start_line=${startLine}`,
+  )
+}
+
+export async function listSshKeys() {
+  return api<SshKey[]>('/api/v1/ssh-keys')
+}
+
+export async function createSshKey(name: string, publicKey: string) {
+  return api<SshKey>('/api/v1/ssh-keys', {
+    method: 'POST',
+    body: JSON.stringify({ name, public_key: publicKey }),
+  })
+}
+
+export async function revokeSshKey(keyId: string) {
+  return api<void>(`/api/v1/ssh-keys/${keyId}`, { method: 'DELETE' })
 }
 
 export async function getPrCiFailure(org: string, repo: string, prNumber: number) {

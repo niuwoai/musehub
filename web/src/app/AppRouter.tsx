@@ -17,7 +17,10 @@ import { RunnerPage } from '../pages/RunnerPage'
 import { AccountSecurityPage } from '../pages/AccountSecurityPage'
 import { AccountTokensPage } from '../pages/AccountTokensPage'
 import { RepoIssuesPage } from '../pages/RepoIssuesPage'
+import { IssueDetailPage } from '../pages/IssueDetailPage'
 import { RepoPullsPage } from '../pages/RepoPullsPage'
+import { PullDetailPage } from '../pages/PullDetailPage'
+import { RepoCodePage } from '../pages/RepoCodePage'
 import { RepoDeliveryPage } from '../pages/RepoDeliveryPage'
 import { RepoSettingsPage } from '../pages/RepoSettingsPage'
 import { SessionBootScreen } from '../pages/SessionBootScreen'
@@ -158,10 +161,34 @@ export function AppRouter() {
           }
         />
         <Route
+          path="/org/:org/repos/:slug/issues/:number"
+          element={
+            <OrgScopeGuard>
+              <IssueDetailPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
           path="/org/:org/repos/:slug/pulls"
           element={
             <OrgScopeGuard>
               <RepoPullsPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/pulls/:number"
+          element={
+            <OrgScopeGuard>
+              <PullDetailPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/code"
+          element={
+            <OrgScopeGuard>
+              <RepoCodePage />
             </OrgScopeGuard>
           }
         />

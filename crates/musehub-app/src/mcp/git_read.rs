@@ -8,10 +8,56 @@ use crate::error::AppError;
 use crate::security::validate_git_oid;
 
 pub fn validate_repo_path(path: &str) -> Result<(), AppError> {
-    if path.is_empty() || path.contains("..") || path.starts_with('/') {
+    if path.contains("..") || path.starts_with('/') {
         return Err(AppError::Validation("invalid path".to_string()));
     }
     Ok(())
+}
+
+/// Rejects empty paths (blob/diff); tree root uses `validate_repo_path("")`.
+pub fn validate_repo_path_non_empty(path: &str) -> Result<(), AppError> {
+    validate_repo_path(path)?;
+    if path.is_empty() {
+        return Err(AppError::Validation("invalid path".to_string()));
+    }
+    Ok(())
+}
+
+const MAX_GIT_CMD_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
+fn git_command_output_limited(args: &[&str], max_bytes: usize) -> Result<Vec<u8>, AppError> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("git")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Other("git stdout".into()))?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 65536];
+    loop {
+        let n = stdout
+            .read(&mut chunk)
+            .map_err(|e| AppError::Other(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > max_bytes {
+            let _ = child.kill();
+            return Err(AppError::Validation("git output too large".into()));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let status = child.wait().map_err(|e| AppError::Other(e.to_string()))?;
+    if !status.success() {
+        return Err(AppError::NotFound);
+    }
+    Ok(buf)
 }
 
 pub fn git_tree_entries(
@@ -92,22 +138,15 @@ pub fn git_read_file_at(
     max_lines: u32,
 ) -> Result<Value, AppError> {
     validate_git_oid(commit_oid).map_err(AppError::Validation)?;
-    validate_repo_path(path)?;
+    validate_repo_path_non_empty(path)?;
     let spec = format!("{commit_oid}:{path}");
-    let output = std::process::Command::new("git")
-        .args([
-            "--git-dir",
-            bare.to_str()
-                .ok_or_else(|| AppError::Other("git path".into()))?,
-            "show",
-            &spec,
-        ])
-        .output()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if !output.status.success() {
-        return Err(AppError::NotFound);
-    }
-    let bytes = &output.stdout;
+    let git_dir = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("git path".into()))?;
+    let bytes = git_command_output_limited(
+        &["--git-dir", git_dir, "show", &spec],
+        MAX_GIT_CMD_OUTPUT_BYTES,
+    )?;
     const MAX_BYTES: usize = 256 * 1024;
     let truncated_bytes = bytes.len() > MAX_BYTES;
     let is_binary = bytes.iter().take(8192).any(|&b| b == 0);
@@ -124,7 +163,7 @@ pub fn git_read_file_at(
     let text = String::from_utf8_lossy(if truncated_bytes {
         &bytes[..MAX_BYTES]
     } else {
-        bytes
+        &bytes
     });
     let lines: Vec<&str> = text.lines().collect();
     let start = (start_line.saturating_sub(1)) as usize;
@@ -287,4 +326,82 @@ pub fn git_pr_file_diff(
 ) -> Result<(Vec<Value>, bool), AppError> {
     let (items, _, has_more) = git_commit_compare(bare, base_oid, head_oid, path, limit)?;
     Ok((items, has_more))
+}
+
+pub fn git_log_commits(
+    bare: &Path,
+    ref_oid: &str,
+    limit: i64,
+) -> Result<(Vec<Value>, bool), AppError> {
+    validate_git_oid(ref_oid).map_err(AppError::Validation)?;
+    let fetch_n = limit.saturating_add(1).max(1);
+    let git_dir = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("git path".into()))?;
+    let bytes = git_command_output_limited(
+        &[
+            "--git-dir",
+            git_dir,
+            "log",
+            ref_oid,
+            "--format=%H%x09%an%x09%s%x09%ct",
+            "-n",
+            &fetch_n.to_string(),
+        ],
+        MAX_GIT_CMD_OUTPUT_BYTES,
+    )?;
+    let stdout = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
+    let has_more = lines.len() as i64 > limit;
+    let take = usize::try_from(limit).unwrap_or(50).min(lines.len());
+    let mut items = Vec::new();
+    for line in lines.iter().take(take) {
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        items.push(json!({
+            "oid": parts[0],
+            "author": parts[1],
+            "summary": parts[2],
+            "committed_at_epoch": parts[3].parse::<i64>().unwrap_or(0),
+        }));
+    }
+    Ok((items, has_more))
+}
+
+pub fn git_unified_diff(
+    bare: &Path,
+    base_oid: &str,
+    head_oid: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Value, AppError> {
+    validate_git_oid(base_oid).map_err(AppError::Validation)?;
+    validate_git_oid(head_oid).map_err(AppError::Validation)?;
+    validate_repo_path_non_empty(path)?;
+    let git_dir = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("git path".into()))?;
+    let spec = format!("{base_oid}..{head_oid}");
+    let bytes = git_command_output_limited(
+        &["--git-dir", git_dir, "diff", &spec, "--", path],
+        MAX_GIT_CMD_OUTPUT_BYTES,
+    )?;
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated {
+        &bytes[..max_bytes]
+    } else {
+        &bytes[..]
+    };
+    let text = String::from_utf8_lossy(slice);
+    let is_binary = bytes.iter().take(8192).any(|&b| b == 0);
+    Ok(json!({
+        "path": path,
+        "base_oid": base_oid,
+        "head_oid": head_oid,
+        "binary": is_binary,
+        "unified": if is_binary { Value::Null } else { json!(text) },
+        "truncated": truncated,
+    }))
 }

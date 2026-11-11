@@ -10,7 +10,12 @@ export const paths = {
   accountSecurity: () => '/account/security',
   accountTokens: () => '/account/tokens',
   repoIssues: (org: string, slug: string) => `/org/${org}/repos/${slug}/issues`,
+  repoIssue: (org: string, slug: string, number: number) =>
+    `/org/${org}/repos/${slug}/issues/${number}`,
   repoPulls: (org: string, slug: string) => `/org/${org}/repos/${slug}/pulls`,
+  repoPull: (org: string, slug: string, number: number) =>
+    `/org/${org}/repos/${slug}/pulls/${number}`,
+  repoCode: (org: string, slug: string) => `/org/${org}/repos/${slug}/code`,
   repoDelivery: (org: string, slug: string) => `/org/${org}/repos/${slug}/delivery`,
   repoSettings: (org: string, slug: string) => `/org/${org}/repos/${slug}/settings`,
 } as const

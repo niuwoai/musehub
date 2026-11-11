@@ -93,6 +93,13 @@ export function AppShell() {
                 {t('nav.repoPulls')}
               </NavLink>
               <NavLink
+                to={paths.repoCode(org, slug)}
+                className="repo-tab"
+                data-testid="nav-repo-code"
+              >
+                {t('nav.repoCode')}
+              </NavLink>
+              <NavLink
                 to={paths.repoDelivery(org, slug)}
                 className="repo-tab"
                 data-testid="nav-repo-delivery"

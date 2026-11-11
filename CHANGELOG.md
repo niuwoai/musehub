@@ -11,6 +11,8 @@
 
 ### Added
 
+- **S1 协作切片（Web + REST）**：Issue 列表创建与筛选/游标一致；Code `code-commit-oid` + 扩展 Playwright；PR 评论 `FOR UPDATE` 与 sync 锁；负责人须 **repo grant**；Issue 详情 i18n；并发 sync/comment E2E（**不含** Git-over-SSH 守护进程）。
+- `s1_collaboration_http_e2e`、`web/e2e/s1-collaboration.spec.ts`。
 - 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
 - `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。
 - GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。

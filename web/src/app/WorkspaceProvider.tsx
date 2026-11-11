@@ -158,7 +158,7 @@ export type WorkspaceValue = {
   loadIssues: (slug: string, preservePrNumber?: number) => Promise<void>
   refreshRepos: () => Promise<void>
   selectRepo: (slug: string) => void
-  onCreateIssue: () => Promise<void>
+  onCreateIssue: () => Promise<Issue | null>
   onAcceptPlan: (issue: Issue) => Promise<void>
   onRunAgent: (issue: Issue) => Promise<void>
   onCancelRun: () => Promise<void>
@@ -971,9 +971,10 @@ function useWorkspaceState(): WorkspaceValue {
   }
 
   async function onCreateIssue() {
-    if (!selectedRepo) return
-    await createIssue(activeOrg, selectedRepo, 'Slice issue')
+    if (!selectedRepo) return null
+    const created = await createIssue(activeOrg, selectedRepo, 'Slice issue')
     await loadIssues(selectedRepo)
+    return created
   }
 
   async function onAcceptPlan(issue: Issue) {

@@ -5,7 +5,7 @@ pub mod capabilities;
 pub(crate) mod contract_domain;
 mod domain;
 pub mod envelope;
-mod git_read;
+pub(crate) mod git_read;
 mod http;
 pub(crate) mod idempotency;
 mod pagination;
