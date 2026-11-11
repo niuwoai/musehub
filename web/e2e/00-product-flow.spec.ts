@@ -1,12 +1,9 @@
 import { expect, test } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
-import type { Page } from '@playwright/test'
+import { repoNavButtons } from './helpers/repo'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
-const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
-
-import { repoNavButtons } from './helpers/repo'
 
 test.describe('product slice browser flow', () => {
   test.skip(

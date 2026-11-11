@@ -36,7 +36,7 @@ test.describe('org config and grants UI', () => {
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    const repo = page.locator('section > ul').first().getByRole('button').last()
+    const repo = page.getByTestId('repo-list').getByRole('button').last()
     await repo.click()
     await expect(page.getByTestId('org-settings')).toBeVisible({ timeout: 15_000 })
   const tokenLike = /mhp_[a-zA-Z0-9]+/

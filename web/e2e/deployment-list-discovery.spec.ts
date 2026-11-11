@@ -12,7 +12,7 @@ import { expectLoggedInAs } from './helpers/session'
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 
 function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
+  return page.getByTestId('repo-list').getByRole('button')
 }
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {

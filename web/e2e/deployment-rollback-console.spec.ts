@@ -12,7 +12,7 @@ const ROLLBACK_RESULT_ID = 'r3333333-3333-4333-8333-333333333333'
 const RELEASE_ID = '22222222-2222-4222-8222-222222222222'
 
 function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
+  return page.getByTestId('repo-list').getByRole('button')
 }
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
