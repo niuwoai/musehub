@@ -573,12 +573,13 @@ async fn stale_approval_after_new_commit_requires_resync() {
         .unwrap();
     assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
 
-    app.clone()
+    let detail = app
+        .clone()
         .oneshot(
             Request::builder()
-                .method("PATCH")
+                .method("GET")
                 .uri(format!(
-                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/sync"
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}"
                 ))
                 .header(header::COOKIE, &admin_cookie)
                 .body(Body::empty())
@@ -586,6 +587,31 @@ async fn stale_approval_after_new_commit_requires_resync() {
         )
         .await
         .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let row_version = serde_json::from_slice::<serde_json::Value>(
+        &detail.into_body().collect().await.unwrap().to_bytes(),
+    )
+    .unwrap()["row_version"]
+    .as_i64()
+    .unwrap();
+    let synced = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/sync"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(
+                    serde_json::json!({ "expected_row_version": row_version }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(synced.status(), StatusCode::OK);
     app.clone()
         .oneshot(
             Request::builder()
