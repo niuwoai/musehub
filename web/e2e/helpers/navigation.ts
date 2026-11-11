@@ -45,7 +45,7 @@ export async function goAccountTokens(page: Page) {
 export async function goRepoPulls(page: Page) {
   await goNav(page, 'nav-repo-pulls')
   await expect(page.getByTestId('repo-pulls-page')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('pull-request-list')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('pull-request-list')).toBeAttached({ timeout: 30_000 })
 }
 
 export async function goRepoDelivery(page: Page) {

@@ -6,6 +6,14 @@ import { goRepoDelivery, goRepoIssues, goRepoPulls } from './navigation'
 export async function switchDeploymentListToAll(page: Page): Promise<void> {
   await expect(page.getByTestId('refresh-deployments')).toBeEnabled({ timeout: 30_000 })
   await expect(page.getByTestId('deployment-view-pending')).toHaveAttribute('aria-pressed', 'true')
+  const pendingRefresh = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      r.url().includes('state=awaiting_approval') &&
+      /\/deployments\?/.test(r.url()),
+  )
+  await page.getByTestId('refresh-deployments').click()
+  await pendingRefresh
   await expect(
     page
       .getByTestId('deployment-list-empty')
