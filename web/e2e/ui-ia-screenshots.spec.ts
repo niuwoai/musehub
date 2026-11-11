@@ -12,6 +12,7 @@ test.describe('UI IA screenshots', () => {
   test('capture key routes', async ({ page }) => {
     await loginFromHome(page, password!)
     await expectLoggedInAs(page, 'admin')
+    await page.goto('/org/demo/repos')
     await page.screenshot({ path: '/opt/cursor/artifacts/web-login-repos.png', fullPage: true })
 
     await goOrgSettings(page)
@@ -20,6 +21,7 @@ test.describe('UI IA screenshots', () => {
     await goAudit(page)
     await page.screenshot({ path: '/opt/cursor/artifacts/web-audit.png', fullPage: true })
 
+    await page.goto('/org/demo/repos')
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await openRepoBySlug(page, slug)

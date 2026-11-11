@@ -36,7 +36,6 @@ test.describe('org config and grants UI', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
     await goOrgSettings(page)
   const tokenLike = /mhp_[a-zA-Z0-9]+/
     await expect(page.getByTestId('org-settings')).not.toContainText(tokenLike)
