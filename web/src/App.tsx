@@ -138,7 +138,8 @@ export default function App() {
   }
 
   type AgentOpContext = DeploymentOpContext & {
-    issueId: string
+    issueId: string | null
+    agentRunId: string | null
     pollEpoch: number
   }
 
@@ -242,11 +243,28 @@ export default function App() {
     return agentRunPollEpochRef.current === epoch
   }
 
-  function captureAgentOp(issueId: string, repoSlug?: string): AgentOpContext {
+  function captureAgentStartOp(issueId: string, repoSlug?: string): AgentOpContext {
     return {
       ...captureDeploymentOp(repoSlug),
       issueId,
+      agentRunId: null,
       pollEpoch: agentRunPollEpochRef.current,
+    }
+  }
+
+  function captureAgentCancelOp(runId: string, repoSlug?: string): AgentOpContext {
+    return {
+      ...captureDeploymentOp(repoSlug),
+      issueId: null,
+      agentRunId: runId,
+      pollEpoch: agentRunPollEpochRef.current,
+    }
+  }
+
+  function releaseAgentStartBusy(op: AgentOpContext) {
+    if (agentStartOpRef.current && agentOpMatches(agentStartOpRef.current, op)) {
+      agentStartOpRef.current = null
+      setAgentRunStarting(false)
     }
   }
 
@@ -263,6 +281,7 @@ export default function App() {
       a.repoGeneration === b.repoGeneration &&
       a.repo === b.repo &&
       a.issueId === b.issueId &&
+      a.agentRunId === b.agentRunId &&
       a.pollEpoch === b.pollEpoch
     )
   }
@@ -771,7 +790,7 @@ export default function App() {
   async function onRunAgent(issue: Issue) {
     if (!selectedRepo || agentRunStarting) return
     bumpAgentRunPollEpoch()
-    const op = captureAgentOp(issue.id)
+    const op = captureAgentStartOp(issue.id)
     agentStartOpRef.current = op
     setAgentRunStarting(true)
     setError(null)
@@ -797,32 +816,35 @@ export default function App() {
         setError(err instanceof Error ? err.message : 'agent run failed')
       }
     } finally {
-      if (agentStartOpRef.current && agentOpMatches(agentStartOpRef.current, op)) {
-        agentStartOpRef.current = null
-        if (agentOpActive(op)) {
-          setAgentRunStarting(false)
-        }
-      }
+      releaseAgentStartBusy(op)
     }
   }
 
   async function onCancelRun() {
     if (!selectedRepo || !lastRun) return
+    const heldStart = agentStartOpRef.current
+    const runId = lastRun.id
     bumpAgentRunPollEpoch()
-    const op = captureAgentOp(lastRun.id)
+    const op = captureAgentCancelOp(runId)
     setError(null)
     try {
-      await cancelAgentRun(lastRun.id)
+      await cancelAgentRun(runId)
       if (!agentOpActive(op)) {
         return
       }
-      const finished = await pollRun(lastRun.id, op)
+      const finished = await pollRun(runId, op)
       if (finished && agentOpActive(op)) {
         applyAgentRun(finished)
       }
     } catch (err) {
       if (agentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'agent cancel failed')
+      }
+    } finally {
+      if (heldStart) {
+        releaseAgentStartBusy(heldStart)
+      } else {
+        setAgentRunStarting(false)
       }
     }
   }

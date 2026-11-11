@@ -90,7 +90,7 @@ test.describe('agent run start repo guard', () => {
 
     await page.goto('/')
     await page.getByLabel(/password|密码/i).fill(password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
+    await page.getByRole('button', { name: /sign in|login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
 
@@ -131,8 +131,21 @@ test.describe('agent run start repo guard', () => {
     await paused.unroute()
 
     await openRepoBySlug(page, staleSlug)
-    await expect(runReferenceAgentButton(page).first()).toBeEnabled({
+    await expect(runReferenceAgentButton(page).first()).toBeVisible({
       timeout: 15_000,
     })
+
+    const recoveryPost = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/repos/${staleSlug}/agent-runs`) &&
+        r.request().method() === 'POST',
+      { timeout: 180_000 },
+    )
+    await runReferenceAgentButton(page).first().click()
+    const recoveryResponse = await recoveryPost
+    expect(recoveryResponse.ok()).toBeTruthy()
+    const recoveryJson = (await recoveryResponse.json()) as { id: string }
+    expect(recoveryJson.id).not.toBe(STALE_AGENT_FIXTURE_ID)
+    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 180_000 })
   })
 })
