@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { goAccountTokens, goOrgMembers } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -25,14 +26,17 @@ test.describe('ordinary member PAT console', () => {
     })
     expect(invite.ok()).toBeTruthy()
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(memberPass)
     await page.getByTestId('login-handle-input').fill(handle)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, handle)
 
-    await expect(page.getByTestId('pat-management')).toBeVisible()
-    await expect(page.getByText(/Member admin requires org owner\/admin/i)).toBeVisible()
+    await goOrgMembers(page)
+    await expect(page.getByTestId('org-members')).toContainText(
+      /Member admin requires|需要组织 owner/i,
+    )
+    await goAccountTokens(page)
 
     const patName = `member-pat-${Date.now()}`
     await page.getByTestId('pat-name').fill(patName)

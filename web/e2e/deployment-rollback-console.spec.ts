@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test'
 
 import type { Page } from '@playwright/test'
 
+import { switchDeploymentListToAll } from './helpers/delivery'
+import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -12,13 +14,13 @@ const ROLLBACK_RESULT_ID = 'r3333333-3333-4333-8333-333333333333'
 const RELEASE_ID = '22222222-2222-4222-8222-222222222222'
 
 function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
+  return page.getByTestId('repo-list').getByRole('button')
 }
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
-  const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
-  await loginForm.getByLabel(/password|密码/i).fill(pass)
+  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('login-handle-input').fill(handle)
+  await page.getByLabel(/password|密码/i).fill(pass)
 }
 
 function delayedGate() {
@@ -154,17 +156,18 @@ test.describe('deployment rollback console', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slug)
 
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
-
-    await page.getByTestId('deployment-view-all').click()
+    await switchDeploymentListToAll(page)
+    await expect(page.getByTestId(`deployment-pick-${FAILED_DEPLOY_ID}`)).toBeVisible({
+      timeout: 15_000,
+    })
     const detailGet = page.waitForResponse(
       (r) => r.url().includes(FAILED_DEPLOY_ID) && r.request().method() === 'GET',
     )
@@ -259,16 +262,14 @@ test.describe('deployment rollback console', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
-    await page.getByTestId('deployment-view-all').click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slug)
+    await switchDeploymentListToAll(page)
     const rollbackBtn = page.getByTestId(`deployment-rollback-${GOOD_DEPLOY_ID}`)
     await expect(rollbackBtn).toBeVisible({ timeout: 15_000 })
 

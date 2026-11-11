@@ -1,0 +1,144 @@
+:root {
+  color: #1f2328;
+  background: #f6f7f9;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.25rem;
+  background: #fff;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.app-tagline {
+  margin: 0.25rem 0 0;
+  color: #57606a;
+  font-size: 0.9rem;
+  max-width: 36rem;
+}
+
+.app-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  font-size: 0.95rem;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-sidebar {
+  width: min(14rem, 30vw);
+  padding: 1rem;
+  border-right: 1px solid #d8dee4;
+  background: #fff;
+}
+
+.nav-group-label {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #57606a;
+}
+
+.app-main {
+  flex: 1;
+  padding: 1.25rem;
+  min-width: 0;
+}
+
+.app-alert {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  border-radius: 0.35rem;
+}
+
+.repo-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #d8dee4;
+}
+
+.repo-subnav-title {
+  margin-right: 0.5rem;
+}
+
+.repo-tab {
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.35rem;
+  text-decoration: none;
+  color: #1f2328;
+  font-size: 0.95rem;
+}
+
+.repo-tab-active {
+  background: #ddf4ff;
+  font-weight: 600;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  margin: 0.25rem 0.35rem 0.25rem 0;
+}
+
+@media (max-width: 720px) {
+  .app-body {
+    flex-direction: column;
+  }
+
+  .app-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #d8dee4;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .nav-group-label {
+    width: 100%;
+  }
+}

@@ -8,12 +8,19 @@ import {
   STALE_PLAN_PREFIX,
   STALE_TRACE_BODY,
 } from './fixtures/stale-deployment-view'
+import { goRepoDelivery } from './helpers/navigation'
+import {
+  createRepoViaUi,
+  ensureRepoListPage,
+  openRepoDelivery,
+  repoNavButtonForSlug,
+} from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 
 function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
+  return page.getByTestId('repo-list').getByRole('button')
 }
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
@@ -23,19 +30,15 @@ async function fillLoginForm(page: Page, handle: string, pass: string) {
 }
 
 async function loginAsAdmin(page: Page) {
-  await page.goto('/')
+  await page.goto('/login')
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
 }
 
 async function createEmptyRepo(page: Page) {
-  const before = await repoNavButtons(page).count()
-  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-  const entry = repoNavButtons(page).last()
-  const slug = (await entry.textContent())?.trim() ?? ''
-  await entry.click()
+  const { slug } = await createRepoViaUi(page)
+  await openRepoDelivery(page, slug)
   return slug
 }
 
@@ -113,6 +116,9 @@ test.describe('deployment view session/repo epoch', () => {
 
     await loginAsAdmin(page)
     const repoA = await createEmptyRepo(page)
+    const { slug: repoB } = await createRepoViaUi(page)
+    expect(repoB).not.toBe(repoA)
+    await openRepoDelivery(page, repoA)
     await page.getByTestId('deployment-lookup-id').fill(STALE_DEPLOYMENT_ID)
     const loadReq = page.waitForRequest(
       (req) => req.url().includes(STALE_DEPLOYMENT_ID) && req.method() === 'GET',
@@ -120,16 +126,12 @@ test.describe('deployment view session/repo epoch', () => {
     await page.getByTestId('load-deployment').click()
     await loadReq
 
-    const beforeB = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(beforeB + 1, { timeout: 15_000 })
-    const repoB = (await repoNavButtons(page).last().textContent())?.trim() ?? ''
-    await repoNavButtons(page).last().click()
-    expect(repoB).not.toBe(repoA)
-
     const staleResponse = page.waitForResponse(
       (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
     )
+    await ensureRepoListPage(page)
+    await repoNavButtonForSlug(page, repoB).click()
+    await goRepoDelivery(page)
     release()
     await staleResponse
 

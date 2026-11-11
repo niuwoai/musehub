@@ -10,6 +10,7 @@ import {
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  openRepoDelivery,
   repoNavButtonForSlug,
   repoNavButtons,
   waitForDemoRepoNavHydrated,
@@ -22,9 +23,9 @@ const HISTORY_DEPLOY_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ALL_TAB_ROW_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
-  const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
-  await loginForm.getByLabel(/password|密码/i).fill(pass)
+  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('login-handle-input').fill(handle)
+  await page.getByLabel(/password|密码/i).fill(pass)
 }
 
 function delayedGate() {
@@ -36,13 +37,13 @@ function delayedGate() {
 }
 
 async function loginAndCreateRepo(page: Page) {
-  await page.goto('/')
+  await page.goto('/login', { waitUntil: 'domcontentloaded' })
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
   await waitForDemoRepoNavHydrated(page)
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
+  const { slug } = await createRepoViaUi(page)
+  await openRepoDelivery(page, slug)
   return slug
 }
 
@@ -225,12 +226,12 @@ test.describe('deployment history console', () => {
     })
 
     repoASlug = await loginAndCreateRepo(page)
-    const { repoEntry: repoBEntry } = await createRepoViaUi(page)
-    await repoNavButtonForSlug(page, repoASlug).click()
+    const { slug: repoBSlug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, repoASlug)
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toBeVisible({
       timeout: 15_000,
     })
-    await repoBEntry.click()
+    await openRepoDelivery(page, repoBSlug)
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toHaveCount(0, {
       timeout: 10_000,
     })
@@ -281,6 +282,8 @@ test.describe('deployment history console', () => {
     })
 
     savedSlug = await loginAndCreateRepo(page)
+    const { slug: otherSlug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, savedSlug)
     await expect(page.getByTestId('deployment-list-empty')).toBeVisible({ timeout: 15_000 })
     const listReq = page.waitForRequest(
       (req) => req.url().includes('/deployments?') && req.method() === 'GET',
@@ -300,19 +303,14 @@ test.describe('deployment history console', () => {
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
 
-    const reselect = page.getByRole('button', { name: savedSlug, exact: true })
-    await expect(reselect).toBeVisible({ timeout: 15_000 })
     const remountList = page.waitForResponse(
       (r) =>
         r.url().includes('/deployments?') &&
         r.request().method() === 'GET' &&
         r.url().includes(savedSlug),
     )
-    const otherRepo = repoNavButtons(page).filter({ hasNotText: savedSlug }).first()
-    if ((await otherRepo.count()) > 0) {
-      await otherRepo.click()
-    }
-    await reselect.click()
+    await openRepoDelivery(page, otherSlug)
+    await openRepoDelivery(page, savedSlug)
     await remountList
     await expect(page.getByTestId('deployment-list-empty')).toBeVisible({ timeout: 15_000 })
 

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import type { Page } from '@playwright/test'
 
-import { createRepoViaUi, openRepoBySlug, waitForDemoRepoNavHydrated } from './helpers/repo'
+import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -160,13 +160,13 @@ test.describe('pipeline cancel console (route fixtures)', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /sign in|login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
-    await openRepoBySlug(page, slug)
+    await openRepoDelivery(page, slug)
 
     await expect(page.getByTestId('delivery-panel')).toContainText(/main @/, { timeout: 30_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()

@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  expectRepoSlugInSubnav,
   expectResponseOk,
   openRepoBySlug,
   waitForDemoRepoNavHydrated,
@@ -60,11 +61,9 @@ const runReferenceAgentButton = (page: import('@playwright/test').Page) =>
 
 async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page) {
   await waitForDemoRepoNavHydrated(page)
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
-  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
-    timeout: 15_000,
-  })
+  const { slug } = await createRepoViaUi(page)
+  await openRepoBySlug(page, slug)
+  await expectRepoSlugInSubnav(page, slug)
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   const planAccepted = page.waitForResponse(
     (r) =>
@@ -91,7 +90,7 @@ test.describe('agent run start session guard', () => {
 
     const paused = await installPausedPostAgentRunRoute(page)
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')

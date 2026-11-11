@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test'
 
+import { goAccountTokens, goAudit, goRunner, loginFromHome } from './helpers/navigation'
+import { expectLoggedInAs } from './helpers/session'
+
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 /** Full PATs are much longer than masked `token_prefix` shown in UI. */
@@ -9,16 +12,23 @@ test.describe('audit and runner status panels', () => {
   test.skip(!password, 'requires bootstrap password and API on :8080')
 
   test('audit and runner panels load without exposing PAT secrets', async ({ page }) => {
-    await page.goto('/')
-    await page.getByLabel(/password|密码/i).fill(password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
-    await expect(page.getByTestId('audit-panel')).toBeVisible({ timeout: 15_000 })
+    await loginFromHome(page, password!)
+    await expectLoggedInAs(page, 'admin')
+
+    await goAudit(page)
+    await expect(page.getByTestId('audit-panel')).toBeVisible()
+    await goRunner(page)
     await expect(page.getByTestId('runner-status-panel')).toBeVisible()
     await expect(page.getByTestId('runner-executors')).toBeVisible()
+    await goAccountTokens(page)
     await expect(page.getByTestId('pat-management')).toBeVisible()
+
     const bodyText = await page.locator('body').innerText()
     expect(bodyText).not.toMatch(fullPatLike)
+
     await page.reload()
+    await expectLoggedInAs(page, 'admin')
+    await goAudit(page)
     await expect(page.getByTestId('audit-panel')).toBeVisible()
     expect(await page.locator('body').innerText()).not.toMatch(fullPatLike)
   })

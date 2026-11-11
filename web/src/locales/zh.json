@@ -56,6 +56,64 @@
     "viewTrace": "查看部署追溯",
     "mergeShortcut": "批准、检查、合并（演示；真实门禁需 CI 汇报账号）",
     "noMergedPr": "尚无已合并 PR — 请先完成评审与检查合并。",
-    "traceGaps": "追溯缺口（不编造）"
+    "traceGaps": "追溯缺口（不编造）",
+    "logout": "退出登录",
+    "agentStarting": "正在启动 Agent 运行…"
+  },
+  "nav": {
+    "orgLabel": "组织：{{org}}",
+    "repos": "仓库",
+    "orgSettings": "组织设置",
+    "orgMembers": "组织成员",
+    "audit": "审计",
+    "runner": "Runner 状态",
+    "accountSecurity": "账号安全",
+    "accountTokens": "个人访问令牌",
+    "repoIssues": "Issue",
+    "repoPulls": "Pull Request",
+    "repoDelivery": "交付",
+    "repoSettings": "仓库设置"
+  },
+  "accountSecurity": {
+    "currentPassword": "当前密码",
+    "newPassword": "新密码",
+    "changePassword": "修改密码"
+  },
+  "audit": {
+    "empty": "暂无审计事件。"
+  },
+  "orgSettings": {
+    "displayName": "组织显示名称",
+    "save": "保存组织设置"
+  },
+  "orgMembers": {
+    "adminRequired": "成员管理需要组织 owner/admin。",
+    "disable": "禁用",
+    "addMember": "添加成员"
+  },
+  "pat": {
+    "mintedOnce": "请立即复制（仅显示一次）：",
+    "mintedHint": "创建的令牌仅在创建时显示一次。",
+    "revoke": "吊销",
+    "scopeMode": "范围模式",
+    "create": "创建 PAT"
+  },
+  "runner": {
+    "loadFailed": "无法加载 Runner 能力。",
+    "noTokens": "无 Runner 令牌（仅掩码列表）。"
+  },
+  "common": {
+    "loading": "加载中…",
+    "notFoundTitle": "页面不存在",
+    "notFoundBody": "该 URL 不在控制台导航范围内。请使用侧栏或返回仓库列表。"
+  },
+  "repo": {
+    "selectFirst": "请从列表中选择一个仓库。",
+    "empty": "尚无仓库，点击上方按钮创建。",
+    "noPulls": "暂无 Pull Request。"
+  },
+  "repoSettings": {
+    "grantsTitle": "仓库授权",
+    "grantReader": "授予 reader"
   }
 }

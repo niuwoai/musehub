@@ -3,7 +3,10 @@ import { expect, test } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  ensureRepoListPage,
+  expectRepoSlugInSubnav,
   openRepoBySlug,
+  repoNavButtonForSlug,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
 import {
@@ -58,12 +61,9 @@ const runReferenceAgentButton = (page: import('@playwright/test').Page) =>
   })
 
 async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page) {
-  await waitForDemoRepoNavHydrated(page)
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
-  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
-    timeout: 15_000,
-  })
+  const { slug } = await createRepoViaUi(page)
+  await openRepoBySlug(page, slug)
+  await expectRepoSlugInSubnav(page, slug)
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   const planAccepted = page.waitForResponse(
     (r) =>
@@ -88,7 +88,7 @@ test.describe('agent run start repo guard', () => {
 
     const paused = await installPausedPostAgentRunRoute(page)
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /sign in|login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
@@ -104,17 +104,16 @@ test.describe('agent run start repo guard', () => {
 
     const responseDone = page.waitForResponse(
       (r) =>
-        r.url().includes(`/repos/${staleSlug}/agent-runs`) &&
+        r.url().includes(`/api/v1/orgs/demo/repos/${staleSlug}/agent-runs`) &&
         r.request().method() === 'POST',
     )
 
     await runReferenceAgentButton(page).first().click()
     await paused.postSeen
 
-    await otherEntry.click()
-    await expect(page.getByRole('heading', { level: 2, name: otherSlug })).toBeVisible({
-      timeout: 15_000,
-    })
+    await ensureRepoListPage(page)
+    await repoNavButtonForSlug(page, otherSlug).click()
+    await expectRepoSlugInSubnav(page, otherSlug)
     await expect(page.getByTestId('last-agent-run')).toHaveCount(0)
 
     paused.release()
@@ -137,7 +136,7 @@ test.describe('agent run start repo guard', () => {
 
     const recoveryPost = page.waitForResponse(
       (r) =>
-        r.url().includes(`/repos/${staleSlug}/agent-runs`) &&
+        r.url().includes(`/api/v1/orgs/demo/repos/${staleSlug}/agent-runs`) &&
         r.request().method() === 'POST',
       { timeout: 180_000 },
     )
