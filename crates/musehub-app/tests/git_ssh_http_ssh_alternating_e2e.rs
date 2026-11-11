@@ -182,16 +182,8 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
     assert_ne!(oid_http_2, oid_ssh_1);
     assert_eq!(ref_oid(&bare, &format!("refs/heads/{feature}")), oid_http_2);
 
-    Command::new("git")
-        .current_dir(ssh_work.path())
-        .args(["fetch", "origin", feature])
-        .status()
-        .unwrap();
-    Command::new("git")
-        .current_dir(ssh_work.path())
-        .args(["merge", "--ff-only", &format!("origin/{feature}")])
-        .status()
-        .unwrap();
+    pat.fetch_branch(ssh_work.path(), feature);
+    pat.merge_ff_only(ssh_work.path(), feature);
     std::fs::write(ssh_work.path().join("alt.txt"), "ssh-1\nhttp-2\nssh-3\n").unwrap();
     Command::new("git")
         .current_dir(ssh_work.path())

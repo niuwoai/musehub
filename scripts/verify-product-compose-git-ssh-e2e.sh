@@ -34,11 +34,21 @@ else
   dc() { docker compose -p "$COMPOSE_PROJECT_NAME" "$@"; }
 fi
 
-cleanup() {
-  if [[ -n "${TOKEN_ID:-}" && -n "${COOKIE_JAR:-}" ]]; then
-    curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X DELETE \
-      "$BASE/api/v1/tokens/${TOKEN_ID}" >/dev/null 2>&1 || true
+revoke_compose_pat() {
+  if [[ -z "${TOKEN_ID:-}" || -z "${COOKIE_JAR:-}" ]]; then
+    return 0
   fi
+  if ! curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X DELETE \
+    "$BASE/api/v1/tokens/${TOKEN_ID}" >/dev/null; then
+    echo "compose git-ssh: token revoke failed (credentials sandbox destroyed)" >&2
+    return 1
+  fi
+  TOKEN_ID=""
+  return 0
+}
+
+cleanup() {
+  revoke_compose_pat || true
   git_http_auth_sandbox_end
   [[ -n "${KEY_DIR:-}" ]] && rm -rf "$KEY_DIR"
   [[ -n "${GIT_DIR:-}" ]] && rm -rf "$GIT_DIR" "${GIT_DIR}.bad" 2>/dev/null || true
@@ -177,9 +187,9 @@ OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
 [[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
-git -C "$GIT_DIR" fetch origin "$FEATURE_BRANCH"
-git -C "$GIT_DIR" checkout "$FEATURE_BRANCH"
-git -C "$GIT_DIR" merge --ff-only "origin/${FEATURE_BRANCH}"
+git_http_run "$GIT_DIR" fetch origin "$FEATURE_BRANCH"
+git_http_run "$GIT_DIR" checkout "$FEATURE_BRANCH"
+git_http_run "$GIT_DIR" merge --ff-only "origin/${FEATURE_BRANCH}"
 echo "ssh-3" >>"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
 git -C "$GIT_DIR" commit -m ssh-3 --no-gpg-sign

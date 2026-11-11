@@ -227,16 +227,22 @@ pub async fn reload_ssh_key_by_id(pool: &PgPool, key_id: Uuid) -> Result<SshKeyA
 pub fn format_authorized_keys_line(
     auth: &SshKeyAuth,
     gateway_bin: &str,
+    fingerprint: &str,
 ) -> Result<String, AppError> {
     let key_material = sanitize_stored_ssh_public_key(&auth.public_key)?;
     if key_material.contains('\n') || key_material.contains('\r') {
         return Err(AppError::Validation("invalid stored ssh public key".into()));
     }
+    let fp = fingerprint.trim();
+    if fp.is_empty() {
+        return Err(AppError::Validation("ssh fingerprint required".into()));
+    }
     let gateway_bin = gateway_bin.replace('"', "");
     let _gateway_bin = gateway_bin;
     Ok(format!(
-        "environment=\"MUSEHUB_SSH_KEY_ID={key_id}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding {key_material}",
+        r#"environment="MUSEHUB_SSH_KEY_ID={key_id}",environment="MUSEHUB_SSH_KEY_FP={fp}",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding {key_material}"#,
         key_id = auth.key_id,
+        fp = fp.replace('"', ""),
     ))
 }
 
@@ -341,7 +347,7 @@ ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid}
 {env_lines}PermitRootLogin no
-PermitUserEnvironment restrict
+PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP
 AllowUsers {login_user}
 AuthorizedKeysFile none
 AuthorizedKeysCommand {akc_cmd} %u %k %t %f
@@ -371,8 +377,12 @@ Subsystem sftp /bin/false
     )
 }
 
-pub fn write_authorized_keys_stdout(auth: &SshKeyAuth, gateway_bin: &str) -> io::Result<()> {
-    let line = format_authorized_keys_line(auth, gateway_bin)
+pub fn write_authorized_keys_stdout(
+    auth: &SshKeyAuth,
+    gateway_bin: &str,
+    fingerprint: &str,
+) -> io::Result<()> {
+    let line = format_authorized_keys_line(auth, gateway_bin, fingerprint)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut out = io::stdout().lock();
     out.write_all(line.as_bytes())?;
@@ -405,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn sshd_config_restricts_client_environment() {
+    fn sshd_config_allows_only_key_binding_env() {
         let body = render_sshd_config(
             2222,
             Path::new("/var/lib/musehub/git-ssh/ssh_host_ed25519_key"),
@@ -419,8 +429,9 @@ mod tests {
             "git",
             false,
         );
-        assert!(body.contains("PermitUserEnvironment restrict"));
-        assert!(!body.contains("PermitUserEnvironment yes\n"));
+        assert!(body.contains("PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP"));
+        assert!(!body.contains("PermitUserEnvironment yes"));
+        assert!(!body.contains("restrict"));
     }
 
     #[test]
@@ -431,8 +442,10 @@ mod tests {
             handle: "u".into(),
             public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXd1mIaYHo4ZxmswgaeWTij03jgeXse1S6HqIvQ1jrs test@musehub".into(),
         };
-        let line = format_authorized_keys_line(&auth, "/opt/bin/musehub-git-ssh").unwrap();
+        let line = format_authorized_keys_line(&auth, "/opt/bin/musehub-git-ssh", "SHA256:testfp")
+            .unwrap();
         assert!(line.contains(&format!("environment=\"MUSEHUB_SSH_KEY_ID={}", auth.key_id)));
+        assert!(line.contains("MUSEHUB_SSH_KEY_FP=SHA256:testfp"));
         assert!(!line.contains("MUSEHUB_SSH_PRINCIPAL_ID"));
         assert!(!line.contains("command="));
         assert_eq!(line.matches('\n').count(), 0);

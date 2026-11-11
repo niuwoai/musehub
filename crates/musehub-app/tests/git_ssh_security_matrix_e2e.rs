@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use common::git_ssh_fixture::git_ssh_fixture;
 use common::git_ssh_util::{
-    git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as, raw_ssh_with_sendenv,
+    git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as,
 };
 
 fn commit_file(work: &std::path::Path, branch: &str, file: &str, contents: &[u8]) {
@@ -119,14 +119,45 @@ async fn git_ssh_protected_main_push_force_delete_denied() {
 }
 
 #[tokio::test]
-async fn git_ssh_sshd_config_restricts_client_sendenv() {
+async fn git_ssh_authorized_keys_environment_binding_authenticates() {
     let f = git_ssh_fixture("sshdcfg").await;
     let config_path = f.sshd.run_dir.join("sshd_config");
-    let body = std::fs::read_to_string(&config_path).expect("sshd_config");
-    assert!(body.contains("PermitUserEnvironment restrict"));
+    let cfg = Command::new("sudo")
+        .arg("cat")
+        .arg(&config_path)
+        .output()
+        .expect("sudo cat sshd_config");
     assert!(
-        !body.contains("PermitUserEnvironment yes"),
-        "client env must not be wide open"
+        cfg.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cfg.stderr)
+    );
+    let body = String::from_utf8(cfg.stdout).expect("utf8");
+    assert!(body.contains("PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP"));
+    assert!(!body.contains("PermitUserEnvironment yes"));
+    let work_dir = tempfile::tempdir().expect("work");
+    let work = work_dir.path();
+    let clone = git_ssh_cmd(
+        &f.priv_key,
+        f.sshd.port,
+        &["clone", &f.clone_url, work.to_str().unwrap()],
+    );
+    assert!(
+        clone.status.success(),
+        "gateway must authenticate with AKC environment= key binding: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    commit_file(work, "feature/env", "env.txt", b"x\n");
+    let ok_push = git_ssh_cmd_in(
+        &f.priv_key,
+        f.sshd.port,
+        Some(work),
+        &["push", "origin", "HEAD:refs/heads/feature/env"],
+    );
+    assert!(
+        ok_push.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok_push.stderr)
     );
 }
 
@@ -148,22 +179,48 @@ async fn git_ssh_client_sendenv_cannot_replace_akc_key_id() {
         f.priv_key.display(),
         f.sshd.port
     );
-    let push = Command::new("git")
+    let spoof = Command::new("git")
         .current_dir(work)
         .env("MUSEHUB_SSH_KEY_ID", fake_key.to_string())
         .env("GIT_SSH_COMMAND", &ssh_cmd)
         .args(["push", "origin", "HEAD:refs/heads/feature/env"])
         .output()
         .unwrap();
+    let spoof_err = String::from_utf8_lossy(&spoof.stderr);
     assert!(
-        push.status.success(),
-        "AKC-bound key id must win over client SendEnv: {}",
-        String::from_utf8_lossy(&push.stderr)
+        spoof.status.success(),
+        "AKC environment= must bind MUSEHUB_SSH_KEY_ID; bogus SendEnv must not break git: {spoof_err}"
     );
-    let evil = raw_ssh_with_sendenv(&f.priv_key, f.sshd.port, "MUSEHUB_CLIENT_EVIL", "1", "");
+    assert!(
+        !spoof_err.contains("MUSEHUB_SSH_KEY_ID does not match"),
+        "gateway must not treat client SendEnv as authoritative key id"
+    );
+    let good = git_ssh_cmd_in(
+        &f.priv_key,
+        f.sshd.port,
+        Some(work),
+        &["push", "origin", "HEAD:refs/heads/feature/env"],
+    );
+    assert!(
+        good.status.success(),
+        "{}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+    let evil_ssh = format!(
+        "ssh -o SendEnv=MUSEHUB_CLIENT_EVIL -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {} -p {}",
+        f.priv_key.display(),
+        f.sshd.port
+    );
+    let evil = Command::new("git")
+        .env("GIT_SSH_COMMAND", &evil_ssh)
+        .env("MUSEHUB_CLIENT_EVIL", "1")
+        .args(["ls-remote", &f.clone_url])
+        .output()
+        .expect("git ls-remote");
+    let evil_err = String::from_utf8_lossy(&evil.stderr);
     assert!(
         evil.status.success(),
-        "benign session should stay up when client sends disallowed env vars"
+        "disallowed client env vars must not break git sessions: {evil_err}"
     );
 }
 

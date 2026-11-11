@@ -452,6 +452,125 @@ fn validate_run_dir_git_traverse(run_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub fn storage_sudo_fallback_enabled() -> bool {
+    std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
+        .ok()
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
+#[cfg(unix)]
+fn resolve_group_gid(group: &str) -> Result<u32, AppError> {
+    let out = Command::new("getent")
+        .args(["group", group])
+        .output()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !out.status.success() {
+        return Err(AppError::Other(format!("getent group {group} failed")));
+    }
+    let line = String::from_utf8_lossy(&out.stdout);
+    let gid = line
+        .trim()
+        .split(':')
+        .nth(2)
+        .ok_or_else(|| AppError::Other("gid field missing in getent".into()))?;
+    gid.parse()
+        .map_err(|e: std::num::ParseIntError| AppError::Other(e.to_string()))
+}
+
+#[cfg(unix)]
+fn run_storage_chmod(mode: &str, path: &str) -> Result<(), AppError> {
+    let ok = Command::new("chmod")
+        .args([mode, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        return Ok(());
+    }
+    if storage_sudo_fallback_enabled() {
+        return run_privileged("chmod", &[mode, path]);
+    }
+    Err(AppError::Other(format!("chmod {mode} on {path} failed")))
+}
+
+#[cfg(unix)]
+pub fn preflight_bare_repo_tree(bare: &Path) -> Result<(), AppError> {
+    reject_symlink_path(bare)?;
+    let mut stack = vec![bare.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let meta = fs::symlink_metadata(&dir).map_err(|e| AppError::Other(e.to_string()))?;
+        if meta.file_type().is_symlink() {
+            return Err(AppError::Validation(format!(
+                "symlink in bare repo tree: {}",
+                dir.display()
+            )));
+        }
+        if !meta.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).map_err(|e| AppError::Other(e.to_string()))? {
+            let entry = entry.map_err(|e| AppError::Other(e.to_string()))?;
+            let p = entry.path();
+            let em = fs::symlink_metadata(&p).map_err(|e| AppError::Other(e.to_string()))?;
+            if em.file_type().is_symlink() {
+                return Err(AppError::Validation(format!(
+                    "nested symlink under bare repo: {}",
+                    p.display()
+                )));
+            }
+            if em.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn collect_bare_repos_under_root(git_root: &Path) -> Result<Vec<PathBuf>, AppError> {
+    reject_symlink_path(git_root)?;
+    let root_meta = fs::symlink_metadata(git_root).map_err(|e| AppError::Other(e.to_string()))?;
+    if root_meta.file_type().is_symlink() {
+        return Err(AppError::Validation(
+            "git storage root must not be a symlink".into(),
+        ));
+    }
+    if !root_meta.is_dir() {
+        return Err(AppError::Validation(
+            "git storage root must be a directory".into(),
+        ));
+    }
+    let root_canon = fs::canonicalize(git_root).map_err(|e| AppError::Other(e.to_string()))?;
+    let mut bare_paths = Vec::new();
+    for entry in fs::read_dir(git_root).map_err(|e| AppError::Other(e.to_string()))? {
+        let entry = entry.map_err(|e| AppError::Other(e.to_string()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".git") {
+            continue;
+        }
+        let child = entry.path();
+        let meta = fs::symlink_metadata(&child).map_err(|e| AppError::Other(e.to_string()))?;
+        if meta.file_type().is_symlink() {
+            return Err(AppError::Validation(format!(
+                "bare repo entry must not be a symlink: {name}"
+            )));
+        }
+        if !meta.is_dir() {
+            continue;
+        }
+        let canon = fs::canonicalize(&child).map_err(|e| AppError::Other(e.to_string()))?;
+        if !canon.starts_with(&root_canon) {
+            return Err(AppError::Validation(
+                "bare repo path escapes git storage root".into(),
+            ));
+        }
+        preflight_bare_repo_tree(&canon)?;
+        bare_paths.push(canon);
+    }
+    Ok(bare_paths)
+}
+
 /// Idempotent shared-git volume layout for existing named volumes (fail-closed).
 #[cfg(unix)]
 pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
@@ -460,6 +579,8 @@ pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
         return Ok(());
     }
     let group = git_storage_group();
+    let expected_gid = resolve_group_gid(&group)?;
+    let bare_repos = collect_bare_repos_under_root(git_root)?;
     let path = git_root
         .to_str()
         .ok_or_else(|| AppError::Other("utf8 path".into()))?;
@@ -469,10 +590,7 @@ pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
         .map(|s| s.success())
         .unwrap_or(false);
     if !root_chgrp {
-        let allow_sudo = std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
-            .ok()
-            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
-        let sudo_ok = if allow_sudo {
+        let sudo_ok = if storage_sudo_fallback_enabled() {
             run_privileged("chgrp", &[&group, path]).is_ok()
         } else {
             false
@@ -483,31 +601,26 @@ pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
             )));
         }
     }
-    if !run_privileged("chmod", &["2775", path]).is_ok() {
-        return Err(AppError::Other(
-            "chmod 2775 on git storage root failed".into(),
-        ));
-    }
+    run_storage_chmod("2775", path)?;
     let meta = fs::metadata(git_root).map_err(|e| AppError::Other(e.to_string()))?;
-    if meta.gid() == 0 {
-        return Err(AppError::Validation(
-            "git storage root must be group-owned for transport (expected shared group)".into(),
-        ));
+    if meta.gid() != expected_gid {
+        return Err(AppError::Validation(format!(
+            "git storage root gid {0} != expected {expected_gid} ({group})",
+            meta.gid()
+        )));
     }
-    for entry in fs::read_dir(git_root).map_err(|e| AppError::Other(e.to_string()))? {
-        let entry = entry.map_err(|e| AppError::Other(e.to_string()))?;
-        let bare = entry.path();
-        if !bare.is_dir() {
-            continue;
+    let mut errors = Vec::new();
+    for bare in bare_repos {
+        if let Err(e) = crate::git_http::apply_bare_repo_group_acl(&bare) {
+            errors.push(format!("{}: {e}", bare.display()));
         }
-        let name = bare
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        if !name.ends_with(".git") {
-            continue;
-        }
-        crate::git_http::apply_bare_repo_group_acl(&bare)?;
+    }
+    if !errors.is_empty() {
+        return Err(AppError::Other(format!(
+            "bare repo migration failed for {} repo(s): {}",
+            errors.len(),
+            errors.join("; ")
+        )));
     }
     Ok(())
 }

@@ -48,6 +48,8 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
 /// Lets the dedicated `git` transport user mutate receive-pack state (group shared with API writer).
 #[cfg(unix)]
 pub fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
+    #[cfg(unix)]
+    crate::git_ssh_runtime::preflight_bare_repo_tree(bare)?;
     let group = crate::git_ssh_runtime::git_storage_group();
     let path = bare
         .to_str()
@@ -76,9 +78,7 @@ pub fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
             )));
         }
     }
-    let allow_sudo = std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
-        .ok()
-        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+    let allow_sudo = crate::git_ssh_runtime::storage_sudo_fallback_enabled();
     let mut chmod_ok = Command::new("chmod")
         .args(["-R", "g+rwX", path])
         .status()
@@ -102,16 +102,7 @@ pub fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
     if !setgid_ok && allow_sudo {
         setgid_ok = Command::new("sudo")
             .args([
-                "-n",
-                "find",
-                path,
-                "-type",
-                "d",
-                "-exec",
-                "chmod",
-                "g+s",
-                "{}",
-                ";",
+                "-n", "find", path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";",
             ])
             .status()
             .map(|s| s.success())

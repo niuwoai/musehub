@@ -69,7 +69,8 @@ async fn akc_line_never_contains_extra_authorized_keys_record() {
         handle: "u".into(),
         public_key: good,
     };
-    let line = format_authorized_keys_line(&auth, "/usr/local/bin/musehub-git-ssh").unwrap();
+    let line =
+        format_authorized_keys_line(&auth, "/usr/local/bin/musehub-git-ssh", "SHA256:aa").unwrap();
     assert!(!line.contains('\n'));
     assert!(!line.contains('\r'));
     assert_eq!(line.matches("ssh-ed25519 ").count(), 1);
@@ -85,5 +86,5 @@ async fn malformed_stored_key_fails_akc_format() {
         handle: "u".into(),
         public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI\nssh-ed25519 BOGUS".into(),
     };
-    assert!(format_authorized_keys_line(&auth, "/bin/musehub-git-ssh").is_err());
+    assert!(format_authorized_keys_line(&auth, "/bin/musehub-git-ssh", "SHA256:bb").is_err());
 }

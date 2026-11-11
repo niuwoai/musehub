@@ -16,6 +16,7 @@ use musehub_app::git_ssh_runtime::{
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::types::Uuid;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -213,18 +214,26 @@ async fn authorized_keys(args: &[String]) -> Result<(), Box<dyn std::error::Erro
             std::process::exit(1);
         }
     };
-    write_authorized_keys_stdout(&auth, &gateway_bin().display().to_string())?;
+    write_authorized_keys_stdout(&auth, &gateway_bin().display().to_string(), lookup_fp)?;
     Ok(())
 }
 
 async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Client-supplied env cannot choose gateway binary or database URL when unset in login shell.
     env::remove_var("MUSEHUB_GIT_SSH_GATEWAY_BIN");
-    let key_id = env::var("MUSEHUB_SSH_KEY_ID")
+    let key_id: Uuid = env::var("MUSEHUB_SSH_KEY_ID")
         .map_err(|_| "missing MUSEHUB_SSH_KEY_ID")?
-        .parse()?;
+        .parse()
+        .map_err(|_| "invalid MUSEHUB_SSH_KEY_ID")?;
+    let fp = env::var("MUSEHUB_SSH_KEY_FP").map_err(|_| "missing MUSEHUB_SSH_KEY_FP")?;
     let original = env::var("SSH_ORIGINAL_COMMAND").unwrap_or_default();
     let pool = pool().await?;
+    let auth = lookup_ssh_key_by_fingerprint(&pool, &fp)
+        .await
+        .map_err(|_| "unknown key")?;
+    if auth.key_id != key_id {
+        return Err("MUSEHUB_SSH_KEY_ID does not match authorized key fingerprint".into());
+    }
     let _ = reload_ssh_key_by_id(&pool, key_id).await?;
     match git_ssh::run_ssh_gateway(&pool, &require_git_root(), key_id, &original).await {
         Ok(code) => std::process::exit(code),

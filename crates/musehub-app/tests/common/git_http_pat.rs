@@ -3,6 +3,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
@@ -18,6 +19,7 @@ pub struct GitHttpPatSandbox {
     pub config_path: PathBuf,
     cookie: String,
     app: axum::Router,
+    revoked: AtomicBool,
 }
 
 impl GitHttpPatSandbox {
@@ -78,10 +80,51 @@ impl GitHttpPatSandbox {
             config_path,
             cookie: cookie.to_string(),
             app: app.clone(),
+            revoked: AtomicBool::new(false),
         }
     }
 
+    pub fn redact_output(output: &str, pat: &str) -> String {
+        let mut out = output.to_string();
+        if !pat.is_empty() {
+            out = out.replace(pat, "[REDACTED_PAT]");
+            let basic = base64::engine::general_purpose::STANDARD.encode(format!("admin:{pat}"));
+            out = out.replace(&basic, "[REDACTED_BASIC]");
+            let enc = urlencoding::encode(pat);
+            if !enc.is_empty() {
+                out = out.replace(enc.as_ref(), "[REDACTED_PAT]");
+            }
+        }
+        while let Some(start) = out.find("mhp_") {
+            let rest = &out[start + 4..];
+            let len = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .count();
+            let end = start + 4 + len;
+            if end > start + 4 {
+                out.replace_range(start..end, "[REDACTED_PAT]");
+            } else {
+                break;
+            }
+        }
+        out
+    }
+
+    fn assert_no_pat_leak(&self, blob: &str) {
+        assert!(
+            !blob.contains(&self.pat),
+            "leaked PAT: {}",
+            Self::redact_output(blob, &self.pat)
+        );
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", self.pat));
+        assert!(!blob.contains(&basic), "leaked basic auth");
+    }
+
     pub async fn revoke(&self) {
+        if self.revoked.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let resp = self
             .app
             .clone()
@@ -94,14 +137,8 @@ impl GitHttpPatSandbox {
                     .unwrap(),
             )
             .await
-            .unwrap();
+            .expect("revoke token request");
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
-
-    fn redact(output: &str) -> String {
-        let mut out = output.to_string();
-        out = out.replace("mhp_", "[REDACTED_PAT_PREFIX]");
-        out
     }
 
     pub fn run_git(&self, cwd: Option<&Path>, args: &[&str]) -> Output {
@@ -120,26 +157,17 @@ impl GitHttpPatSandbox {
 
     pub fn run_git_ok(&self, cwd: Option<&Path>, args: &[&str]) {
         let out = self.run_git(cwd, args);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             out.status.success(),
             "{}",
-            Self::redact(&format!(
-                "git {} failed: {} {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr),
-                String::from_utf8_lossy(&out.stdout)
-            ))
+            Self::redact_output(
+                &format!("git {} failed: {} {}", args.join(" "), stderr, stdout),
+                &self.pat
+            )
         );
-        let blob = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert!(
-            !blob.contains(&self.pat),
-            "git output leaked PAT: {}",
-            Self::redact(&blob)
-        );
+        self.assert_no_pat_leak(&format!("{stdout}{stderr}"));
     }
 
     pub fn credential_free_url(http_base: &str, org: &str, repo: &str) -> String {
@@ -150,10 +178,7 @@ impl GitHttpPatSandbox {
         self.run_git_ok(None, &["clone", url, dest.to_str().unwrap()]);
         let cfg = dest.join(".git/config");
         let body = std::fs::read_to_string(cfg).expect("git config");
-        assert!(
-            !body.contains(&self.pat),
-            "PAT must not appear in git config"
-        );
+        self.assert_no_pat_leak(&body);
         assert!(
             !body.contains("extraHeader"),
             "global auth must not leak into repo config"
@@ -185,10 +210,40 @@ impl GitHttpPatSandbox {
         assert!(out.status.success());
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
+
+    pub fn fetch_branch(&self, work: &Path, branch: &str) {
+        self.run_git_ok(Some(work), &["fetch", "origin", branch]);
+    }
+
+    pub fn merge_ff_only(&self, work: &Path, branch: &str) {
+        self.run_git_ok(
+            Some(work),
+            &["merge", "--ff-only", &format!("origin/{branch}")],
+        );
+    }
 }
 
 impl Drop for GitHttpPatSandbox {
     fn drop(&mut self) {
+        if !self.revoked.load(Ordering::SeqCst) {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let app = self.app.clone();
+                let cookie = self.cookie.clone();
+                let token_id = self.token_id;
+                handle.spawn(async move {
+                    let _ = app
+                        .oneshot(
+                            Request::builder()
+                                .method("DELETE")
+                                .uri(format!("/api/v1/tokens/{token_id}"))
+                                .header(header::COOKIE, cookie)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await;
+                });
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.config_dir);
     }
 }
