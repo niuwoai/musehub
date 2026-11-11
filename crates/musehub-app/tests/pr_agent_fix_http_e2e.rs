@@ -12,10 +12,7 @@ use tower::ServiceExt;
 
 const CI_PASS: &str = "Ci-Reporter-Fix-E2e-12!";
 
-async fn bootstrap_ci_fix_user(
-    app: &axum::Router,
-    admin_cookie: &str,
-) -> (String, String) {
+async fn bootstrap_ci_fix_user(app: &axum::Router, admin_cookie: &str) -> (String, String) {
     app.clone()
         .oneshot(
             Request::builder()
@@ -149,7 +146,12 @@ async fn storage_key_for_repo(pool: &PgPool, slug: &str) -> uuid::Uuid {
         .0
 }
 
-fn bare_repo_update_ref(git_root: &std::path::Path, storage_key: uuid::Uuid, branch: &str, oid: &str) {
+fn bare_repo_update_ref(
+    git_root: &std::path::Path,
+    storage_key: uuid::Uuid,
+    branch: &str,
+    oid: &str,
+) {
     let bare = git_root.join(format!("{storage_key}.git"));
     let status = std::process::Command::new("git")
         .current_dir(&bare)
@@ -159,12 +161,7 @@ fn bare_repo_update_ref(git_root: &std::path::Path, storage_key: uuid::Uuid, bra
     assert!(status.success());
 }
 
-async fn record_ci_failure(
-    app: &axum::Router,
-    ci_cookie: &str,
-    repo_slug: &str,
-    pr_number: i64,
-) {
+async fn record_ci_failure(app: &axum::Router, ci_cookie: &str, repo_slug: &str, pr_number: i64) {
     app.clone()
         .oneshot(
             Request::builder()
@@ -464,9 +461,7 @@ async fn pr_agent_fix_concurrent_post_cannot_double_insert() {
 
     record_ci_failure(&app, &ci_cookie, repo_slug, pr_number).await;
 
-    let uri = format!(
-        "/api/v1/orgs/demo/repos/{repo_slug}/pull-requests/{pr_number}/agent-fix"
-    );
+    let uri = format!("/api/v1/orgs/demo/repos/{repo_slug}/pull-requests/{pr_number}/agent-fix");
     let app_a = app.clone();
     let app_b = app.clone();
     let cookie_a = admin_cookie.clone();

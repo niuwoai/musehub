@@ -380,8 +380,14 @@ pub async fn start_pr_agent_fix(
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
 
     let pr = load_open_pr(&state.pool, repo_id, number).await?;
-    let ctx = build_pr_ci_failure_view(&state.pool, &state.git_root, storage_key, repo_id, pr.clone())
-        .await?;
+    let ctx = build_pr_ci_failure_view(
+        &state.pool,
+        &state.git_root,
+        storage_key,
+        repo_id,
+        pr.clone(),
+    )
+    .await?;
     if !ctx.agent_fix_allowed {
         return Err(AppError::Validation(
             ctx.agent_fix_denial_reason
@@ -411,12 +417,11 @@ pub async fn start_pr_agent_fix(
         .issue_id
         .ok_or_else(|| AppError::Validation("pull request has no linked issue".to_string()))?;
 
-    let next_round: (i32,) = sqlx::query_as(
-        "SELECT COALESCE(MAX(fix_round), 0) + 1 FROM agent_runs WHERE pr_id = $1",
-    )
-    .bind(pr.pr_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let next_round: (i32,) =
+        sqlx::query_as("SELECT COALESCE(MAX(fix_round), 0) + 1 FROM agent_runs WHERE pr_id = $1")
+            .bind(pr.pr_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let fix_round = next_round.0;
     if fix_round as i64 > agent_fix_max_rounds() {
         return Err(AppError::Validation(format!(
