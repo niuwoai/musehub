@@ -46,9 +46,12 @@ import {
   listRepos,
   login,
   me,
+  listPipelineJobs,
   mergePullRequest,
+  PipelineJob,
   PipelineRun,
   pollPipeline,
+  retryPipelineJob,
   publishRelease,
   PullRequest,
   Repository,
@@ -82,6 +85,9 @@ export default function App() {
   })
   const [passwordChangeBusy, setPasswordChangeBusy] = useState(false)
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
+  const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([])
+  const [pipelineRetryBusy, setPipelineRetryBusy] = useState(false)
+  const pipelineRetryFlightRef = useRef<{ jobId: string; attemptId: string } | null>(null)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [activeDeployment, setActiveDeployment] = useState<Deployment | null>(null)
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null)
@@ -158,6 +164,10 @@ export default function App() {
     setDeploymentApprovalBusy(false)
     setDeploymentRollbackBusy(false)
     deploymentRollbackFlightRef.current = null
+    setPipelineRun(null)
+    setPipelineJobs([])
+    setPipelineRetryBusy(false)
+    pipelineRetryFlightRef.current = null
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
     deploymentListModeRef.current = 'pending'
@@ -738,19 +748,79 @@ export default function App() {
     }
   }
 
+  async function loadPipelineJobsForRun(runId: string) {
+    if (!selectedRepo) return
+    const op = captureDeploymentOp()
+    const jobs = await listPipelineJobs(DEFAULT_ORG, selectedRepo, runId)
+    if (!deploymentOpActive(op)) return
+    setPipelineJobs(jobs)
+  }
+
   async function onRunDeliveryPipeline() {
     if (!selectedRepo || !mergedPr?.head_oid) return
+    const op = captureDeploymentOp()
     setError(null)
+    setPipelineJobs([])
     try {
       const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
+      if (!deploymentOpActive(op)) return
       setPipelineRun(run)
       const done = await pollPipeline(DEFAULT_ORG, selectedRepo, run.id)
+      if (!deploymentOpActive(op)) return
       setPipelineRun(done)
-      if (done.state !== 'succeeded') {
-        throw new Error(done.error_code ?? done.state)
+      if (done.state === 'succeeded') {
+        return
+      }
+      if (done.state === 'failed') {
+        await loadPipelineJobsForRun(done.id)
+        if (deploymentOpActive(op)) {
+          setError(done.error_code ?? 'pipeline failed')
+        }
+        return
+      }
+      throw new Error(done.error_code ?? done.state)
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'pipeline failed')
+      }
+    }
+  }
+
+  async function onRetryPipelineJob(jobId: string) {
+    if (!selectedRepo || !pipelineRun || pipelineRetryBusy) return
+    const inFlight = pipelineRetryFlightRef.current
+    if (inFlight?.jobId === jobId) return
+    const attemptId = crypto.randomUUID()
+    pipelineRetryFlightRef.current = { jobId, attemptId }
+    const op = captureDeploymentOp()
+    setPipelineRetryBusy(true)
+    setError(null)
+    try {
+      await retryPipelineJob(DEFAULT_ORG, selectedRepo, jobId, attemptId)
+      if (!deploymentOpActive(op)) return
+      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, pipelineRun.id)
+      if (!deploymentOpActive(op)) return
+      setPipelineRun(done)
+      setPipelineJobs([])
+      if (done.state === 'failed') {
+        await loadPipelineJobsForRun(done.id)
+        if (deploymentOpActive(op)) {
+          setError(done.error_code ?? 'pipeline failed')
+        }
+      } else if (done.state !== 'succeeded') {
+        setError(done.error_code ?? done.state)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'pipeline failed')
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'pipeline job retry failed')
+      }
+    } finally {
+      if (deploymentOpActive(op)) {
+        setPipelineRetryBusy(false)
+      }
+      if (pipelineRetryFlightRef.current?.attemptId === attemptId) {
+        pipelineRetryFlightRef.current = null
+      }
     }
   }
 
@@ -1510,6 +1580,32 @@ export default function App() {
                       <p data-testid="pipeline-state">
                         pipeline {pipelineRun.id.slice(0, 8)}… {pipelineRun.state}
                       </p>
+                    ) : null}
+                    {pipelineRun?.state === 'failed' ? (
+                      <div data-testid="pipeline-failure-panel">
+                        <p data-testid="pipeline-failure-code">
+                          {pipelineRun.error_code ?? 'failed'}
+                        </p>
+                        {pipelineJobs.length > 0 ? (
+                          <ul data-testid="pipeline-job-list">
+                            {pipelineJobs.map((job) => (
+                              <li key={job.id}>
+                                {job.job_key} ({job.state})
+                                {job.retry_allowed ? (
+                                  <button
+                                    type="button"
+                                    data-testid={`pipeline-retry-${job.job_key}`}
+                                    disabled={pipelineRetryBusy}
+                                    onClick={() => void onRetryPipelineJob(job.id)}
+                                  >
+                                    {t('app.pipelineRetryJob')}
+                                  </button>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
                     ) : null}
                     <button type="button" onClick={() => void onRunDeliveryPipeline()}>
                       {t('app.runPipelineOnMain')}

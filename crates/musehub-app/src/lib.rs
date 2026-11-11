@@ -220,6 +220,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(pipeline::cancel_pipeline_run),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}/jobs",
+            get(pipeline::list_pipeline_jobs),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-jobs/{job_id}/retry",
+            post(pipeline::retry_pipeline_job_http),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/releases",
             post(release::create_release),
         )

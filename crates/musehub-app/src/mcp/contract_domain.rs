@@ -792,82 +792,11 @@ pub async fn job_retry(
     access: &RepoAccess,
     job_id: Uuid,
 ) -> Result<Value, AppError> {
-    let row = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT pipeline_run_id, job_key, state FROM pipeline_jobs WHERE id = $1 AND repo_id = $2",
-    )
-    .bind(job_id)
-    .bind(access.repo_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((run_id, job_key, job_state)) = row else {
-        return Err(AppError::NotFound);
-    };
-    if job_key == "deploy" {
-        return Err(AppError::Validation(
-            "deploy job cannot use generic retry".to_string(),
-        ));
-    }
-    if job_state != "failed" {
-        return Err(AppError::Validation(
-            "only failed jobs may be retried".to_string(),
-        ));
-    }
-    sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-    )
-    .bind(job_id)
-    .execute(&state.pool)
-    .await?;
-    sqlx::query(
-        "UPDATE pipeline_runs SET state = 'queued', error_code = NULL, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1",
-    )
-    .bind(run_id)
-    .execute(&state.pool)
-    .await?;
-    if !crate::runner_api::pipeline_executor_remote() {
-        let storage = storage_for_repo(state, access.repo_id).await?;
-        let pool = state.pool.clone();
-        let git_root = state.git_root.clone();
-        let artifact_root = state.artifact_root.clone();
-        let pipeline_bin = state.pipeline_adapter_bin.clone();
-        let supervisor = state.pipeline_supervisor.clone();
-        let instance_id = state.instance_id;
-        let org_id = access.org_id;
-        let repo_id = access.repo_id;
-        let source: (String,) =
-            sqlx::query_as("SELECT source_oid FROM pipeline_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await?;
-        let run_kind: (String,) =
-            sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await?;
-        tokio::spawn(async move {
-            pipeline::execute_pipeline_job(
-                pool,
-                git_root,
-                artifact_root,
-                pipeline_bin,
-                supervisor,
-                instance_id,
-                storage,
-                run_id,
-                job_id,
-                org_id,
-                repo_id,
-                source.0,
-                run_kind.0,
-            )
-            .await;
-        });
-    }
+    let view = pipeline::retry_pipeline_job(state, access.repo_id, job_id).await?;
     Ok(json!({
-        "id": job_id.to_string(),
-        "state": "queued",
-        "pipeline_run_id": run_id.to_string(),
+        "id": view.id.to_string(),
+        "state": view.state,
+        "pipeline_run_id": view.pipeline_run_id.to_string(),
     }))
 }
 

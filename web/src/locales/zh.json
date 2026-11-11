@@ -19,6 +19,7 @@
     "deliveryMockNote": "部署仅使用 compose-mock（非真实 OCI/Docker）。",
     "deliveryModeNote": "部署遵循服务端策略：MUSEHUB_REQUIRE_PIPELINE_OCI=1 时为流水线构建 OCI + compose-runner；否则本地开发使用 compose-mock。",
     "runPipelineOnMain": "在已合并 main 提交上运行流水线",
+    "pipelineRetryJob": "重试失败 job",
     "releaseAndDeployMock": "发布 + mock 部署",
     "deployProductionProtected": "部署到 production（需审批）",
     "deploymentAwaitingApproval": "部署到 {{env}} 等待审批",
