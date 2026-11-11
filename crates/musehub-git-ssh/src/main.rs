@@ -16,7 +16,6 @@ use musehub_app::git_ssh_runtime::{
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::types::Uuid;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -221,21 +220,15 @@ async fn authorized_keys(args: &[String]) -> Result<(), Box<dyn std::error::Erro
 async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Client-supplied env cannot choose gateway binary or database URL when unset in login shell.
     env::remove_var("MUSEHUB_GIT_SSH_GATEWAY_BIN");
-    let key_id: Uuid = env::var("MUSEHUB_SSH_KEY_ID")
-        .map_err(|_| "missing MUSEHUB_SSH_KEY_ID")?
-        .parse()
-        .map_err(|_| "invalid MUSEHUB_SSH_KEY_ID")?;
-    let fp = env::var("MUSEHUB_SSH_KEY_FP").map_err(|_| "missing MUSEHUB_SSH_KEY_FP")?;
     let original = env::var("SSH_ORIGINAL_COMMAND").unwrap_or_default();
     let pool = pool().await?;
-    let auth = lookup_ssh_key_by_fingerprint(&pool, &fp)
+    let session_fp = git_ssh::session_authenticated_pubkey_fingerprint()
+        .map_err(|_| "missing session key fingerprint")?;
+    let auth = lookup_ssh_key_by_fingerprint(&pool, &session_fp)
         .await
         .map_err(|_| "unknown key")?;
-    if auth.key_id != key_id {
-        return Err("MUSEHUB_SSH_KEY_ID does not match authorized key fingerprint".into());
-    }
-    let _ = reload_ssh_key_by_id(&pool, key_id).await?;
-    match git_ssh::run_ssh_gateway(&pool, &require_git_root(), key_id, &original).await {
+    let _ = reload_ssh_key_by_id(&pool, auth.key_id).await?;
+    match git_ssh::run_ssh_gateway(&pool, &require_git_root(), auth.key_id, &original).await {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("{}", e);
@@ -254,6 +247,9 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
         })
         .unwrap_or(2222);
     let run_dir = default_git_ssh_run_dir();
+    musehub_app::git_ssh_runtime::ensure_git_ssh_login_home(git_ssh::GIT_SSH_LOGIN_USER)
+        .map_err(|e| e.to_string())?;
+    musehub_app::git_ssh_runtime::verify_git_ssh_login_home().map_err(|e| e.to_string())?;
     ensure_shared_git_storage_root(&require_git_root()).map_err(|e| e.to_string())?;
     prepare_git_ssh_run_dir(&run_dir).map_err(|e| e.to_string())?;
     let host_key = run_dir.join("ssh_host_ed25519_key");
@@ -322,7 +318,14 @@ exec /usr/local/bin/musehub-git-ssh authorized-keys "$@"
         musehub_app::git_ssh_runtime::chown_root_group(&akc_wrap, &git_ssh_runtime_group())
             .map_err(|e| e.to_string())?;
     }
-    let setenv: Vec<(&str, &str)> = vec![("MUSEHUB_GIT_SSH_RUNTIME_ENV", runtime_env_s.as_str())];
+    let login_home_s = musehub_app::git_ssh_runtime::git_ssh_login_home()
+        .to_str()
+        .ok_or("git login home path")?
+        .to_string();
+    let setenv: Vec<(&str, &str)> = vec![
+        ("MUSEHUB_GIT_SSH_RUNTIME_ENV", runtime_env_s.as_str()),
+        ("HOME", login_home_s.as_str()),
+    ];
     let use_wrap = std::env::var("MUSEHUB_GIT_SSH_AKC_WRAP").ok().as_deref() != Some("0");
     let system_bin = PathBuf::from("/usr/local/bin/musehub-git-ssh");
     let akc_bin: &Path = if !use_wrap && system_bin.exists() {

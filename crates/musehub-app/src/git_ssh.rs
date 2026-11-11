@@ -1,4 +1,10 @@
 //! Product Git-over-SSH gateway (OpenSSH AuthorizedKeysCommand + forced command).
+//!
+//! **Session identity:** Gateway authorization uses the OpenSSH-authenticated public-key
+//! fingerprint (`ExposeAuthInfo` → `SSH_USER_AUTH`, `pubkeys_fp=…`), not client/session env
+//! vars alone. `MUSEHUB_SSH_KEY_*` in `authorized_keys` / `~/.ssh/environment` / `SendEnv` are
+//! diagnostic at most; a writable git login home can override allowlisted vars after AKC, so
+//! `serve` pins `git` to a root-owned non-writable home with no `~/.ssh/environment`.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -22,6 +28,39 @@ pub fn assert_git_ssh_connection_user(ssh_user: &str) -> Result<(), AppError> {
     } else {
         Err(AppError::Unauthorized)
     }
+}
+
+/// Fingerprint of the public key OpenSSH accepted for this session.
+///
+/// Prefer `ExposeAuthInfo` (`SSH_USER_AUTH`). When absent, fall back to `MUSEHUB_SSH_KEY_FP`
+/// set from AuthorizedKeysCommand output (valid only with locked git `HOME`; see `serve`).
+pub fn session_authenticated_pubkey_fingerprint() -> Result<String, AppError> {
+    if let Ok(auth) = std::env::var("SSH_USER_AUTH") {
+        if let Some(fp) = parse_ssh_user_auth_pubkey_fp(&auth) {
+            return Ok(fp);
+        }
+    }
+    std::env::var("MUSEHUB_SSH_KEY_FP").map_err(|_| AppError::Unauthorized)
+}
+
+pub fn parse_ssh_user_auth_pubkey_fp(raw: &str) -> Option<String> {
+    for part in raw.split(',') {
+        let part = part.trim();
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_lowercase();
+        if matches!(
+            key.as_str(),
+            "pubkeys_fp" | "pubkeys-fp" | "pubkeys_fingerprint"
+        ) {
+            let fp = value.trim();
+            if !fp.is_empty() {
+                return Some(fp.to_string());
+            }
+        }
+    }
+    None
 }
 
 pub const ALLOWED_GIT_COMMANDS: [&str; 2] = ["git-upload-pack", "git-receive-pack"];
@@ -347,6 +386,7 @@ ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid}
 {env_lines}PermitRootLogin no
+ExposeAuthInfo yes
 PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP
 AllowUsers {login_user}
 AuthorizedKeysFile none
@@ -429,9 +469,19 @@ mod tests {
             "git",
             false,
         );
+        assert!(body.contains("ExposeAuthInfo yes"));
         assert!(body.contains("PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP"));
         assert!(!body.contains("PermitUserEnvironment yes"));
         assert!(!body.contains("restrict"));
+    }
+
+    #[test]
+    fn parse_ssh_user_auth_pubkey_fp_field() {
+        let auth = "pubkeys_fp=SHA256:abc123,other=x";
+        assert_eq!(
+            parse_ssh_user_auth_pubkey_fp(auth).as_deref(),
+            Some("SHA256:abc123")
+        );
     }
 
     #[test]

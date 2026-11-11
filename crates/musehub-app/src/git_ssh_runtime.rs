@@ -494,6 +494,290 @@ fn run_storage_chmod(mode: &str, path: &str) -> Result<(), AppError> {
     Err(AppError::Other(format!("chmod {mode} on {path} failed")))
 }
 
+/// Root-owned, non-writable home for `git` (no `~/.ssh/environment` overrides).
+pub const GIT_SSH_LOGIN_HOME: &str = "/var/lib/musehub/git-ssh/home";
+
+pub fn git_ssh_login_home() -> PathBuf {
+    std::env::var("MUSEHUB_GIT_SSH_LOGIN_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(GIT_SSH_LOGIN_HOME))
+}
+
+#[cfg(unix)]
+fn login_home_must_be_locked(meta: &fs::Metadata) -> Result<(), AppError> {
+    use std::os::unix::fs::MetadataExt;
+    if meta.uid() != 0 {
+        return Err(AppError::Validation(
+            "git ssh login home must be root-owned".into(),
+        ));
+    }
+    let mode = meta.mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(AppError::Validation(
+            "git ssh login home must not be group/world-writable".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
+    let home = git_ssh_login_home();
+    reject_symlink_path(&home)?;
+    if !home.is_dir() {
+        return Err(AppError::Validation(
+            "git ssh login home missing (run serve to provision)".into(),
+        ));
+    }
+    let meta = fs::metadata(&home).map_err(|e| AppError::Other(e.to_string()))?;
+    login_home_must_be_locked(&meta)?;
+    let env_file = home.join(".ssh").join("environment");
+    if env_file.exists() {
+        return Err(AppError::Validation(format!(
+            "git ssh refuses ~/.ssh/environment at {}",
+            env_file.display()
+        )));
+    }
+    if home.join(".ssh").exists() {
+        let ssh_dir = home.join(".ssh");
+        reject_symlink_path(&ssh_dir)?;
+        let sm = fs::metadata(&ssh_dir).map_err(|e| AppError::Other(e.to_string()))?;
+        use std::os::unix::fs::MetadataExt;
+        if sm.uid() != 0 || (sm.mode() & 0o022) != 0 {
+            return Err(AppError::Validation(
+                "git ssh home .ssh must be root-owned and not group/world-writable".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn passwd_home_dir(login_user: &str) -> Option<String> {
+    let out = Command::new("getent")
+        .args(["passwd", login_user])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout);
+    line.split(':').nth(5).map(|s| s.to_string())
+}
+
+/// Provision locked login home and repoint the `git` passwd entry (idempotent).
+#[cfg(unix)]
+pub fn ensure_git_ssh_login_home(login_user: &str) -> Result<(), AppError> {
+    let home = git_ssh_login_home();
+    let home_s = home
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 home path".into()))?;
+    if !home.exists() {
+        run_privileged(
+            "install",
+            &["-d", "-m", "0555", "-o", "root", "-g", "root", home_s],
+        )?;
+    } else {
+        reject_symlink_path(&home)?;
+        run_privileged("chown", &["root:root", home_s]).ok();
+        run_storage_chmod("0555", home_s)?;
+    }
+    let env_file = home.join(".ssh").join("environment");
+    if env_file.exists() {
+        return Err(AppError::Validation(format!(
+            "remove {} before starting git sshd",
+            env_file.display()
+        )));
+    }
+    let needs_usermod = passwd_home_dir(login_user).as_deref() != Some(home_s);
+    if needs_usermod && run_privileged("usermod", &["-d", home_s, login_user]).is_err() {
+        tracing::warn!(
+            login_user,
+            home = home_s,
+            "usermod home skipped (login user busy); sshd SetEnv HOME must pin session"
+        );
+    }
+    verify_git_ssh_login_home()
+}
+
+#[cfg(not(unix))]
+pub fn ensure_git_ssh_login_home(_login_user: &str) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+struct PathInode {
+    path: PathBuf,
+    dev: u64,
+    ino: u64,
+    is_dir: bool,
+}
+
+#[cfg(unix)]
+fn path_inode_record(p: &Path) -> Result<PathInode, AppError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(p).map_err(|e| AppError::Other(e.to_string()))?;
+    if meta.file_type().is_symlink() {
+        return Err(AppError::Validation(format!(
+            "symlink during migration: {}",
+            p.display()
+        )));
+    }
+    Ok(PathInode {
+        path: p.to_path_buf(),
+        dev: meta.dev(),
+        ino: meta.ino(),
+        is_dir: meta.is_dir(),
+    })
+}
+
+#[cfg(unix)]
+fn assert_path_inode_unchanged(pi: &PathInode) -> Result<(), AppError> {
+    let cur = path_inode_record(&pi.path)?;
+    if cur.dev != pi.dev || cur.ino != pi.ino {
+        return Err(AppError::Validation(format!(
+            "path identity changed during privileged migration: {}",
+            pi.path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn collect_physical_tree_paths(root: &Path) -> Result<Vec<PathBuf>, AppError> {
+    preflight_bare_repo_tree(root)?;
+    let mut paths = vec![root.to_path_buf()];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let meta = fs::symlink_metadata(&dir).map_err(|e| AppError::Other(e.to_string()))?;
+        if !meta.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).map_err(|e| AppError::Other(e.to_string()))? {
+            let entry = entry.map_err(|e| AppError::Other(e.to_string()))?;
+            let p = entry.path();
+            path_inode_record(&p)?;
+            paths.push(p.clone());
+            if fs::symlink_metadata(&p)
+                .map_err(|e| AppError::Other(e.to_string()))?
+                .is_dir()
+            {
+                stack.push(p);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+#[cfg(unix)]
+fn run_chgrp_file(group: &str, path: &str) -> Result<(), AppError> {
+    let ok = Command::new("chgrp")
+        .args(["-h", group, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        return Ok(());
+    }
+    if storage_sudo_fallback_enabled() {
+        return run_privileged("chgrp", &["-h", group, path]);
+    }
+    Err(AppError::Other(format!("chgrp {group} {path} failed")))
+}
+
+#[cfg(unix)]
+fn run_chmod_file(args: &[&str], path: &str) -> Result<(), AppError> {
+    let ok = Command::new("chmod")
+        .args(args)
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        return Ok(());
+    }
+    if storage_sudo_fallback_enabled() {
+        let mut sudo_args: Vec<&str> = vec!["chmod"];
+        sudo_args.extend_from_slice(args);
+        sudo_args.push(path);
+        return run_privileged("chmod", &sudo_args);
+    }
+    Err(AppError::Other(format!("chmod on {path} failed")))
+}
+
+/// Apply group ACL by physical walk (no `chgrp -R` / symlink follow). Not race-proof:
+/// concurrent writers on a group-writable root can still swap paths; preflight is static.
+#[cfg(unix)]
+pub fn apply_bare_repo_group_acl_physical(bare: &Path) -> Result<(), AppError> {
+    let group = git_storage_group();
+    let paths = collect_physical_tree_paths(bare)?;
+    let records: Vec<PathInode> = paths
+        .iter()
+        .map(|p| path_inode_record(p))
+        .collect::<Result<_, _>>()?;
+    for rec in &records {
+        assert_path_inode_unchanged(rec)?;
+        let ps = rec
+            .path
+            .to_str()
+            .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+        run_chgrp_file(&group, ps)?;
+        run_chmod_file(&["g+rwX"], ps)?;
+        if rec.is_dir {
+            run_chmod_file(&["g+s"], ps)?;
+        }
+    }
+    let path = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let mut shared_ok = Command::new("git")
+        .args([
+            "--git-dir",
+            path,
+            "config",
+            "core.sharedRepository",
+            "group",
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !shared_ok && storage_sudo_fallback_enabled() {
+        shared_ok = Command::new("sudo")
+            .args([
+                "-n",
+                "git",
+                "-c",
+                &format!("safe.directory={path}"),
+                "--git-dir",
+                path,
+                "config",
+                "core.sharedRepository",
+                "group",
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    if !shared_ok {
+        return Err(AppError::Other(
+            "git config core.sharedRepository failed".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn apply_bare_repo_group_acl_physical(_bare: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
 #[cfg(unix)]
 pub fn preflight_bare_repo_tree(bare: &Path) -> Result<(), AppError> {
     reject_symlink_path(bare)?;
@@ -638,4 +922,24 @@ pub fn write_secure_file(path: &Path, body: &[u8]) -> Result<(), io::Error> {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod migration_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn privileged_migration_detects_replaced_path_inode() {
+        let dir = tempfile::tempdir().expect("dir");
+        let f = dir.path().join("f");
+        fs::write(&f, b"a").unwrap();
+        let pi = path_inode_record(&f).unwrap();
+        let replacement = dir.path().join("replacement");
+        fs::write(&replacement, b"b").unwrap();
+        fs::remove_file(&f).unwrap();
+        fs::rename(&replacement, &f).unwrap();
+        let err = assert_path_inode_unchanged(&pi).unwrap_err();
+        assert!(err.to_string().contains("identity changed"));
+    }
 }

@@ -11,9 +11,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use common::git_ssh_fixture::git_ssh_fixture;
-use common::git_ssh_util::{
-    git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as,
-};
+use common::git_ssh_util::{git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as};
 
 fn commit_file(work: &std::path::Path, branch: &str, file: &str, contents: &[u8]) {
     Command::new("git")
@@ -133,6 +131,7 @@ async fn git_ssh_authorized_keys_environment_binding_authenticates() {
         String::from_utf8_lossy(&cfg.stderr)
     );
     let body = String::from_utf8(cfg.stdout).expect("utf8");
+    assert!(body.contains("ExposeAuthInfo yes"));
     assert!(body.contains("PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP"));
     assert!(!body.contains("PermitUserEnvironment yes"));
     let work_dir = tempfile::tempdir().expect("work");

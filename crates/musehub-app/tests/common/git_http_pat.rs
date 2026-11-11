@@ -226,13 +226,18 @@ impl GitHttpPatSandbox {
 impl Drop for GitHttpPatSandbox {
     fn drop(&mut self) {
         if !self.revoked.load(Ordering::SeqCst) {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let app = self.app.clone();
-                let cookie = self.cookie.clone();
-                let token_id = self.token_id;
-                handle.spawn(async move {
-                    let _ = app
-                        .oneshot(
+            let app = self.app.clone();
+            let cookie = self.cookie.clone();
+            let token_id = self.token_id;
+            // Best-effort revoke on panic/early exit. `revoke().await` in tests is required for
+            // a guaranteed cleanup before process exit; Drop may not finish if the runtime stops first.
+            let _ = std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    let _ = rt.block_on(async move {
+                        app.oneshot(
                             Request::builder()
                                 .method("DELETE")
                                 .uri(format!("/api/v1/tokens/{token_id}"))
@@ -240,9 +245,11 @@ impl Drop for GitHttpPatSandbox {
                                 .body(Body::empty())
                                 .unwrap(),
                         )
-                        .await;
-                });
-            }
+                        .await
+                    });
+                }
+            })
+            .join();
         }
         let _ = std::fs::remove_dir_all(&self.config_dir);
     }
