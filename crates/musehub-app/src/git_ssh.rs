@@ -416,6 +416,7 @@ mod tests {
         let line = format_authorized_keys_line(&auth, "/opt/bin/musehub-git-ssh").unwrap();
         assert!(line.contains(&format!("environment=\"MUSEHUB_SSH_KEY_ID={}", auth.key_id)));
         assert!(!line.contains("MUSEHUB_SSH_PRINCIPAL_ID"));
+        assert!(!line.contains("command="));
         assert_eq!(line.matches('\n').count(), 0);
     }
 }

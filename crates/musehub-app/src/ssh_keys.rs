@@ -36,20 +36,17 @@ const ALLOWED_KEY_TYPES: &[&str] = &[
 
 /// Rejects multiline / control-char payloads before parse, fingerprint, store, or AKC output.
 pub fn parse_and_canonicalize_ssh_public_key(key: &str) -> Result<String, AppError> {
-    if key.is_empty() {
+    let line = key.trim();
+    if line.is_empty() {
         return Err(AppError::Validation("empty ssh public key".into()));
     }
-    if key
+    if line
         .bytes()
         .any(|b| b == 0 || b == b'\n' || b == b'\r' || (b < 0x20 && b != b'\t'))
     {
         return Err(AppError::Validation(
             "ssh public key must be a single line without control characters".into(),
         ));
-    }
-    let line = key.trim();
-    if line.is_empty() {
-        return Err(AppError::Validation("empty ssh public key".into()));
     }
     if line.contains('\\') {
         return Err(AppError::Validation("invalid ssh public key".into()));
@@ -274,6 +271,28 @@ mod tests {
         let mut bad = sample_ed25519();
         bad.push('\0');
         assert!(parse_and_canonicalize_ssh_public_key(&bad).is_err());
+    }
+
+    #[test]
+    fn accepts_ssh_keygen_pub_trailing_newline() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let priv_path = dir.path().join("id_ed25519");
+        let status = Command::new("ssh-keygen")
+            .args([
+                "-t",
+                "ed25519",
+                "-f",
+                priv_path.to_str().unwrap(),
+                "-N",
+                "",
+                "-q",
+            ])
+            .status()
+            .expect("ssh-keygen");
+        assert!(status.success());
+        let raw = std::fs::read_to_string(priv_path.with_extension("pub")).expect("pub");
+        assert!(raw.ends_with('\n'));
+        assert!(parse_and_canonicalize_ssh_public_key(&raw).is_ok());
     }
 
     #[test]

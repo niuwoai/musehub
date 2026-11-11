@@ -334,7 +334,7 @@ async fn git_ssh_forbidden_shell_path_traversal_and_subshell() {
             "-L",
             "9999:127.0.0.1:22",
             "git@127.0.0.1",
-            "git-upload-pack demo/nonexistent.git",
+            &format!("git-upload-pack 'demo/{}.git'", f.repo),
         ])
         .output()
         .unwrap();

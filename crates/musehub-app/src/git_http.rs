@@ -40,6 +40,52 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
         return Err(AppError::Other("set bare HEAD symref failed".to_string()));
     }
     crate::hooks::install_pre_receive_hook(&path, "main")?;
+    #[cfg(unix)]
+    apply_bare_repo_group_acl(&path)?;
+    Ok(())
+}
+
+/// Lets the dedicated `git` transport user mutate receive-pack state (group shared with API writer).
+#[cfg(unix)]
+fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
+    let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "git".into());
+    let path = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let chgrp = |sudo: bool| -> bool {
+        let mut cmd = if sudo {
+            let mut c = Command::new("sudo");
+            c.arg("-n");
+            c.arg("chgrp");
+            c
+        } else {
+            Command::new("chgrp")
+        };
+        cmd.args(["-R", &group, path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !chgrp(true) {
+        let _ = chgrp(false);
+    }
+    let chmod = |extra: &[&str]| {
+        let mut cmd = Command::new("chmod");
+        cmd.args(extra).arg("-R").arg(path);
+        let _ = cmd.status();
+        let mut sudo = Command::new("sudo");
+        sudo.args(["-n", "chmod"]).args(extra).args(["-R", path]);
+        let _ = sudo.status();
+    };
+    chmod(&["g+rwX"]);
+    let _ = Command::new("find")
+        .args([path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";"])
+        .status();
+    let _ = Command::new("sudo")
+        .args([
+            "find", path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";",
+        ])
+        .status();
     Ok(())
 }
 

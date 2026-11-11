@@ -9,7 +9,8 @@ use musehub_app::git_ssh::{
     render_sshd_config, write_authorized_keys_stdout, GIT_SSH_LOGIN_USER,
 };
 use musehub_app::git_ssh_runtime::{
-    default_git_ssh_run_dir, ensure_host_ed25519_key, prepare_git_ssh_run_dir, write_secure_file,
+    default_git_ssh_run_dir, ensure_host_ed25519_key, prepare_git_ssh_run_dir,
+    write_git_ssh_runtime_env, write_secure_file,
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
@@ -64,18 +65,24 @@ fn git_ssh_akc_user() -> String {
 
 const GIT_LOGIN_SHELL: &str = "/usr/local/lib/musehub/musehub-git-login.sh";
 
-fn install_git_login_shell(
-    exe: &Path,
-    db_url: &str,
-    git_root: &str,
-    gateway: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+const DEFAULT_RUNTIME_ENV: &str = "/var/lib/musehub/git-ssh/runtime.env";
+
+fn install_git_login_shell() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let script = format!(
-        "#!/bin/sh\nif [ -z \"${{SSH_ORIGINAL_COMMAND:-}}\" ] && [ \"$#\" -ge 2 ]; then\n  export SSH_ORIGINAL_COMMAND=\"$1 '$2'\"\nfi\nexport DATABASE_URL={db}\nexport MUSEHUB_GIT_ROOT={git}\nexport MUSEHUB_GIT_SSH_GATEWAY_BIN={gw}\nexec {exe} shell\n",
-        db = shell_single_quote(db_url),
-        git = shell_single_quote(git_root),
-        gw = shell_single_quote(gateway),
-        exe = shell_single_quote(&exe.to_string_lossy()),
+        r#"#!/bin/sh
+RUNTIME_ENV="${{MUSEHUB_GIT_SSH_RUNTIME_ENV:-{default_env}}}"
+if [ -r "$RUNTIME_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+  set +a
+fi
+if [ -z "${{SSH_ORIGINAL_COMMAND:-}}" ] && [ "$#" -ge 2 ]; then
+  export SSH_ORIGINAL_COMMAND="$1 '$2'"
+fi
+exec "${{MUSEHUB_GIT_SSH_GATEWAY_BIN:-/usr/local/bin/musehub-git-ssh}}" shell
+"#,
+        default_env = DEFAULT_RUNTIME_ENV,
     );
     let install_dir = Path::new("/usr/local/lib/musehub");
     if !install_dir.exists() {
@@ -223,17 +230,33 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     let gateway = gateway_bin();
     let git_root_s = git_root.to_str().unwrap_or("/var/lib/musehub/git");
     let gateway_s = gateway.to_str().unwrap_or("musehub-git-ssh");
-    let exe_s = exe.to_str().unwrap_or("musehub-git-ssh");
     let akc_user = git_ssh_akc_user();
-    install_git_login_shell(&exe, &db_url, git_root_s, gateway_s)?;
+    install_git_login_shell()?;
+    let runtime_env_path = write_git_ssh_runtime_env(
+        &run_dir,
+        &[
+            ("DATABASE_URL", &db_url),
+            ("MUSEHUB_GIT_ROOT", git_root_s),
+            ("MUSEHUB_GIT_SSH_GATEWAY_BIN", gateway_s),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let runtime_env_s = runtime_env_path
+        .to_str()
+        .ok_or("runtime env path")?
+        .to_string();
     let akc_wrap = run_dir.join("akc-wrap.sh");
-    let akc_script = format!(
-        "#!/bin/sh\nexport DATABASE_URL={db}\nexport MUSEHUB_GIT_ROOT={git}\nexport MUSEHUB_GIT_SSH_GATEWAY_BIN={gw}\nexec {exe} authorized-keys \"$@\"\n",
-        db = shell_single_quote(&db_url),
-        git = shell_single_quote(git_root_s),
-        gw = shell_single_quote(gateway_s),
-        exe = shell_single_quote(exe_s),
-    );
+    let akc_script = r#"#!/bin/sh
+RUNTIME_ENV="${MUSEHUB_GIT_SSH_RUNTIME_ENV:-$(dirname "$0")/runtime.env}"
+if [ -r "$RUNTIME_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$RUNTIME_ENV"
+  set +a
+fi
+exec "${MUSEHUB_GIT_SSH_GATEWAY_BIN:-/usr/local/bin/musehub-git-ssh}" authorized-keys "$@"
+"#
+    .to_string();
     std::fs::write(&akc_wrap, akc_script)?;
     #[cfg(unix)]
     {
@@ -243,11 +266,7 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
         std::fs::set_permissions(&akc_wrap, std::fs::Permissions::from_mode(0o755))?;
         let _ = chown_root_if_possible(&akc_wrap);
     }
-    let setenv: Vec<(&str, &str)> = vec![
-        ("DATABASE_URL", &db_url),
-        ("MUSEHUB_GIT_ROOT", git_root_s),
-        ("MUSEHUB_GIT_SSH_GATEWAY_BIN", gateway_s),
-    ];
+    let setenv: Vec<(&str, &str)> = vec![("MUSEHUB_GIT_SSH_RUNTIME_ENV", runtime_env_s.as_str())];
     let use_wrap = std::env::var("MUSEHUB_GIT_SSH_AKC_WRAP").ok().as_deref() != Some("0");
     let system_bin = PathBuf::from("/usr/local/bin/musehub-git-ssh");
     let akc_bin: &Path = if !use_wrap && system_bin.exists() {

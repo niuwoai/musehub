@@ -37,9 +37,13 @@ FROM debian:${DEBIAN_VERSION} AS server-runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git tini wget \
   && rm -rf /var/lib/apt/lists/* \
+  && groupadd -r -g 998 musehub-git \
   && useradd -r -u 10001 -d /var/lib/musehub musehub \
+  && usermod -aG musehub-git musehub \
   && mkdir -p /opt/musehub/bin /var/lib/musehub/git /var/lib/musehub/artifacts /migrations \
-  && chown -R musehub:musehub /var/lib/musehub
+  && chown -R musehub:musehub-git /var/lib/musehub/git \
+  && chown musehub:musehub /var/lib/musehub/artifacts /var/lib/musehub \
+  && chmod 2775 /var/lib/musehub/git
 COPY --from=rust-builder /build/target/release/musehub-server /usr/local/bin/
 COPY --from=rust-builder /build/target/release/musehub-migrate /usr/local/bin/
 COPY --from=rust-builder /build/target/release/musehub-agent-reference /opt/musehub/bin/
@@ -55,6 +59,7 @@ USER musehub
 ENV MUSEHUB_PRODUCT_PROFILE=demo \
     MUSEHUB_BIND=0.0.0.0:8080 \
     MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
+    MUSEHUB_GIT_STORAGE_GROUP=musehub-git \
     MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts \
     MUSEHUB_REFERENCE_ADAPTER_BIN=/opt/musehub/bin/musehub-agent-reference \
     MUSEHUB_AGENT_CODEX_SIM_BIN=/opt/musehub/bin/musehub-agent-codex-sim \
@@ -102,12 +107,16 @@ FROM debian:${DEBIAN_VERSION} AS git-ssh-runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssh-server git ca-certificates tini \
   && rm -rf /var/lib/apt/lists/* \
+  && groupadd -r -g 998 musehub-git \
   && useradd -r -u 997 -M -s /bin/false git \
   && passwd -d git \
+  && usermod -aG musehub-git git \
   && useradd -r -u 10001 -d /var/lib/musehub musehub \
+  && usermod -aG musehub-git musehub \
   && mkdir -p /var/lib/musehub/git /var/lib/musehub/git-ssh /run/sshd \
-  && chown musehub:musehub /var/lib/musehub/git-ssh \
-  && chown -R musehub:musehub /var/lib/musehub/git \
+  && chown root:git /var/lib/musehub/git-ssh \
+  && chown -R musehub:musehub-git /var/lib/musehub/git \
+  && chmod 2775 /var/lib/musehub/git \
   && chmod 700 /var/lib/musehub/git-ssh
 COPY --from=rust-builder /build/target/release/musehub-git-ssh /usr/local/bin/
 ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \

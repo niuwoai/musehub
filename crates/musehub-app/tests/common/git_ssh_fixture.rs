@@ -73,13 +73,6 @@ pub async fn git_ssh_fixture(repo_prefix: &str) -> GitSshFixture {
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .expect("key id");
-    #[cfg(unix)]
-    {
-        // `git` (transport) and the test runner (API repo create) both need bare repo RW.
-        let _ = std::process::Command::new("sudo")
-            .args(["chmod", "-R", "a+rwX", git_root.to_str().expect("git root")])
-            .status();
-    }
     let sshd = TestGitSshd::start(&git_root, &database_url, &bin);
     let fp_row: (String,) = sqlx::query_as("SELECT fingerprint FROM ssh_keys WHERE id = $1")
         .bind(key_id)
