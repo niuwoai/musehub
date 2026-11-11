@@ -101,7 +101,16 @@ cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo run -p musehub-server
 
 yarn --cwd web install --frozen-lockfile
-yarn --cwd web dev   # 代理 /api 与 /git
+yarn --cwd web dev   # 代理 /api 与 /git → http://127.0.0.1:5173/login
+
+# Web 控制台（Phase 1 路由）
+# - 登录入口 `/login`；登录后默认 `/org/demo/repos`；仓库创建后进入 `/pulls`。
+# - 仓库子页：`/org/demo/repos/:slug/issues|pulls|delivery|settings`（裸 `/org/demo/repos/:slug` 重定向到 issues）。
+# - 组织与账户：`/org/demo/settings|members|audit|runner`，`/account/security|tokens`；**当前 API 仅支持 org `demo`**，其它 org 显示 404。
+# - 生产 Compose 网关（`:8080`）静态 UI 使用 `deploy/Caddyfile*` 的 `try_files {path} /index.html` SPA 回退（与 Vite dev 深链行为一致）。
+
+# 浏览器 E2E（需 Postgres + musehub-server + bootstrap 密码）
+# ./scripts/run-web-e2e.sh
 
 # 测试
 ./scripts/cargo-test-portable.sh

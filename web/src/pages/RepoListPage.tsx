@@ -15,6 +15,7 @@ export function RepoListPage() {
       <button type="button" onClick={() => void onCreateRepo()}>
         {t('app.createRepo')}
       </button>
+      {repos.length === 0 ? <p role="status">{t('repo.empty')}</p> : null}
       <ul data-testid="repo-list">
         {repos.map((repo) => (
           <li key={repo.id}>

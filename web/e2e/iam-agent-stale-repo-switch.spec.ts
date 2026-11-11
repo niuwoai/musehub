@@ -59,8 +59,8 @@ const runReferenceAgentButton = (page: import('@playwright/test').Page) =>
 
 async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page) {
   await waitForDemoRepoNavHydrated(page)
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
+  const { slug } = await createRepoViaUi(page)
+  await openRepoBySlug(page, slug)
   await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
     timeout: 15_000,
   })
@@ -88,7 +88,7 @@ test.describe('agent run start repo guard', () => {
 
     const paused = await installPausedPostAgentRunRoute(page)
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /sign in|login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')

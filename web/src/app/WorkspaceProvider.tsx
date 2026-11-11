@@ -7,7 +7,8 @@ import {
   useRef,
   useState,
 } from 'react'
-import { useMatch, useNavigate } from 'react-router-dom'
+import { useLocation, useMatch, useNavigate } from 'react-router-dom'
+import { resolveSafeRedirectPath } from './authRedirect'
 import { useTranslation } from 'react-i18next'
 import { DEFAULT_ORG, paths } from './paths'
 
@@ -80,10 +81,16 @@ export function useWorkspace() {
   return ctx as WorkspaceValue
 }
 
+export type SessionAuthState = 'pending' | 'authenticated' | 'anonymous'
+
 export type WorkspaceValue = {
   t: ReturnType<typeof useTranslation>['t']
   i18n: ReturnType<typeof useTranslation>['i18n']
+  sessionAuth: SessionAuthState
   session: string | null
+  activeOrg: string
+  /** @deprecated use activeOrg — kept for pages not yet migrated */
+  DEFAULT_ORG: string
   repos: Repository[]
   selectedRepo: string | null
   issues: Issue[]
@@ -144,7 +151,6 @@ export type WorkspaceValue = {
   runnerTokens: Awaited<ReturnType<typeof listRunnerTokens>>
   mintedPatFull: string | null
   mergedPr: PullRequest | undefined
-  DEFAULT_ORG: string
   onLogin: (event: FormEvent) => Promise<void>
   onLogout: () => Promise<void>
   onChangePassword: (event: FormEvent) => Promise<void>
@@ -203,10 +209,14 @@ export type WorkspaceValue = {
 
 function useWorkspaceState(): WorkspaceValue {
   const navigate = useNavigate()
+  const location = useLocation()
+  const orgRouteMatch = useMatch('/org/:org/*')
   const repoRouteMatch = useMatch('/org/:org/repos/:slug/*')
   const repoSlugFromUrl = repoRouteMatch?.params.slug
+  const activeOrg = orgRouteMatch?.params.org ?? DEFAULT_ORG
   const { t, i18n } = useTranslation()
 
+  const [sessionAuth, setSessionAuth] = useState<SessionAuthState>('pending')
   const [session, setSession] = useState<string | null>(null)
   const [repos, setRepos] = useState<Repository[]>([])
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
@@ -468,10 +478,59 @@ function useWorkspaceState(): WorkspaceValue {
     Awaited<ReturnType<typeof listRunnerTokens>>
   >([])
 
+  function clearWorkspaceState() {
+    setError(null)
+    setRepos([])
+    setIssues([])
+    setPulls([])
+    setPrCiFailure(null)
+    setSelectedPrNumber(null)
+    resetAgentRunUi()
+    invalidateDeploymentWork()
+    setSettings(null)
+    setOrgDisplayName('')
+    setGrants([])
+    setGrantHandle('')
+    setMemberHandle('')
+    setMemberPassword('')
+    setPatName('')
+    setPatScopeMode('all_accessible')
+    setPatRepoId('')
+    setLoginForm((prev) => ({ ...prev, password: '' }))
+    setPasswordChangeForm({ current: '', next: '' })
+    setPasswordChangeBusy(false)
+    setMintedPatFull(null)
+    selectedRepoRef.current = null
+    setSelectedRepo(null)
+    setAuditEvents([])
+    setRunnerCaps(null)
+    setRunnerTokens([])
+    setMyTokens([])
+    setOrgMembers([])
+    setMembersAdmin(false)
+    bumpOrgMembersRevision()
+  }
+
   useEffect(() => {
-    me()
-      .then((principal) => setSession((prev) => prev ?? principal.handle))
-      .catch(() => setSession((prev) => (prev === null ? null : prev)))
+    let cancelled = false
+    void me()
+      .then((principal) => {
+        if (cancelled) {
+          return
+        }
+        setSession(principal.handle)
+        setSessionAuth('authenticated')
+      })
+      .catch(() => {
+        if (cancelled) {
+          return
+        }
+        setSession(null)
+        setSessionAuth('anonymous')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   function bumpSessionEpoch() {
@@ -503,29 +562,19 @@ function useWorkspaceState(): WorkspaceValue {
   }
 
   useEffect(() => {
+    if (sessionAuth !== 'authenticated' || !session) {
+      return
+    }
     const prevHandle = sessionHandleRef.current
     sessionHandleRef.current = session
     const identityChanged =
       prevHandle !== null && session !== null && prevHandle !== session
-    if (session === null) {
-      resetAgentRunUi()
-    } else if (identityChanged) {
-      invalidateAgentRunWork()
+    if (identityChanged) {
+      clearWorkspaceState()
     }
     const epoch = bumpSessionEpoch()
     bumpIamPanelsGeneration()
     resetIamBusy()
-    if (!session) {
-      setAuditEvents([])
-      setRunnerCaps(null)
-      setRunnerTokens([])
-      setMyTokens([])
-      setOrgMembers([])
-      setMembersAdmin(false)
-      setMintedPatFull(null)
-      bumpOrgMembersRevision()
-      return
-    }
     const panelsGeneration = iamPanelsGenerationRef.current
     const membersRevisionBaseline = orgMembersRevisionRef.current
     void (async () => {
@@ -539,12 +588,12 @@ function useWorkspaceState(): WorkspaceValue {
         return
       }
       setRunnerCaps(caps)
-      const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => [] as AuditEvent[])
+      const audit = await listAuditEvents(activeOrg, 30).catch(() => [] as AuditEvent[])
       if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
         return
       }
       setAuditEvents(audit)
-      const runner = await listRunnerTokens(DEFAULT_ORG).catch(
+      const runner = await listRunnerTokens(activeOrg).catch(
         () => [] as Awaited<ReturnType<typeof listRunnerTokens>>,
       )
       if (!sessionEpochActive(epoch) || !iamPanelsGenerationActive(panelsGeneration)) {
@@ -552,7 +601,7 @@ function useWorkspaceState(): WorkspaceValue {
       }
       setRunnerTokens(runner)
       try {
-        const members = await listOrgMembers(DEFAULT_ORG)
+        const members = await listOrgMembers(activeOrg)
         if (
           !sessionEpochActive(epoch) ||
           !iamPanelsGenerationActive(panelsGeneration) ||
@@ -573,7 +622,15 @@ function useWorkspaceState(): WorkspaceValue {
     return () => {
       bumpIamPanelsGeneration()
     }
-  }, [session])
+  }, [session, sessionAuth])
+
+  useEffect(() => {
+    if (sessionAuth !== 'anonymous') {
+      return
+    }
+    sessionHandleRef.current = null
+    clearWorkspaceState()
+  }, [sessionAuth])
 
   async function refreshIamPanels() {
     const epoch = sessionEpochRef.current
@@ -590,11 +647,11 @@ function useWorkspaceState(): WorkspaceValue {
       }
       return
     }
-    const audit = await listAuditEvents(DEFAULT_ORG, 40).catch(() => null)
+    const audit = await listAuditEvents(activeOrg, 40).catch(() => null)
     if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && audit) {
       setAuditEvents(audit)
     }
-    const members = await listOrgMembers(DEFAULT_ORG).catch(() => null)
+    const members = await listOrgMembers(activeOrg).catch(() => null)
     if (sessionEpochActive(epoch) && iamPanelsGenerationActive(panelsGeneration) && members) {
       bumpOrgMembersRevision()
       setOrgMembers(members)
@@ -603,33 +660,26 @@ function useWorkspaceState(): WorkspaceValue {
   }
 
   async function onLogout() {
-    setError(null)
-    resetIamBusy()
-    setPasswordChangeBusy(false)
-    setPasswordChangeForm({ current: '', next: '' })
-    invalidateAgentRunWork()
-    invalidateDeploymentWork()
     bumpSessionEpoch()
     bumpIamPanelsGeneration()
-    setMintedPatFull(null)
-    selectedRepoRef.current = null
-    setSelectedRepo(null)
     try {
       await logout()
     } catch {
       /* cookie may already be cleared */
     }
+    clearWorkspaceState()
+    resetIamBusy()
     setSession(null)
-    navigate(paths.login())
+    setSessionAuth('anonymous')
+    navigate(paths.login(), { replace: true })
   }
 
   const selectRepo = useCallback(
     (slug: string) => {
-      navigate(paths.repoIssues(DEFAULT_ORG, slug))
+      navigate(paths.repoIssues(activeOrg, slug))
       void loadIssues(slug)
     },
-    // loadIssues is stable enough for navigation; eslint wants deps
-    [navigate],
+    [navigate, activeOrg],
   )
 
   useEffect(() => {
@@ -642,24 +692,28 @@ function useWorkspaceState(): WorkspaceValue {
   }, [session, repoSlugFromUrl])
 
   async function refreshRepos() {
-    const data = await listRepos(DEFAULT_ORG)
+    const data = await listRepos(activeOrg)
     setRepos(data)
   }
 
   async function onLogin(event: FormEvent) {
     event.preventDefault()
     setError(null)
+    const passwordUsed = loginForm.password
     try {
-      await login(loginForm.handle, loginForm.password)
+      await login(loginForm.handle, passwordUsed)
       const principal = await me()
+      clearWorkspaceState()
       resetIamBusy()
-      invalidateDeploymentWork()
       bumpSessionEpoch()
       bumpIamPanelsGeneration()
-      setMintedPatFull(null)
       setSession(principal.handle)
+      setSessionAuth('authenticated')
+      setLoginForm((prev) => ({ ...prev, password: '' }))
       await Promise.all([refreshRepos(), refreshIamPanels()])
-      navigate(paths.repos(DEFAULT_ORG))
+      const from = (location.state as { from?: { pathname: string; search: string; hash: string } } | null)
+        ?.from
+      navigate(resolveSafeRedirectPath(from ?? null), { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'login failed')
     }
@@ -676,7 +730,7 @@ function useWorkspaceState(): WorkspaceValue {
         return
       }
       setPasswordChangeForm({ current: '', next: '' })
-      const audit = await listAuditEvents(DEFAULT_ORG, 30).catch(() => null)
+      const audit = await listAuditEvents(activeOrg, 30).catch(() => null)
       if (sessionEpochActive(opEpoch) && audit) {
         setAuditEvents(audit)
       }
@@ -693,8 +747,10 @@ function useWorkspaceState(): WorkspaceValue {
 
   async function onCreateRepo() {
     const slug = `repo-${Date.now().toString(36)}`
-    await createRepo(DEFAULT_ORG, slug)
+    await createRepo(activeOrg, slug)
     await refreshRepos()
+    navigate(paths.repoPulls(activeOrg, slug))
+    await loadIssues(slug)
   }
 
   async function loadIssues(slug: string, preservePrNumber?: number) {
@@ -711,10 +767,10 @@ function useWorkspaceState(): WorkspaceValue {
     const op = captureDeploymentOp(slug)
     setError(null)
     try {
-      const prs = await listPullRequests(DEFAULT_ORG, slug)
-      const data = await listIssues(DEFAULT_ORG, slug)
-      const s = await getOrgSettings(DEFAULT_ORG)
-      const g = await listRepoGrants(DEFAULT_ORG, slug)
+      const prs = await listPullRequests(activeOrg, slug)
+      const data = await listIssues(activeOrg, slug)
+      const s = await getOrgSettings(activeOrg)
+      const g = await listRepoGrants(activeOrg, slug)
       if (!deploymentOpActive(op)) {
         return
       }
@@ -811,7 +867,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentListError(null)
     }
     try {
-      const list = await listDeployments(DEFAULT_ORG, ctx.repo, {
+      const list = await listDeployments(activeOrg, ctx.repo, {
         limit: DEPLOYMENT_LIST_PAGE,
         offset: listOffset,
         ...(mode === 'pending' ? { state: 'awaiting_approval' } : {}),
@@ -892,14 +948,14 @@ function useWorkspaceState(): WorkspaceValue {
     setDeploymentLookupId(id)
     setError(null)
     try {
-      const dep = await getDeployment(DEFAULT_ORG, selectedRepo, id)
+      const dep = await getDeployment(activeOrg, selectedRepo, id)
       if (!deploymentOpActive(op)) {
         return
       }
       setActiveDeployment(dep)
       setDeploymentId(dep.id)
       if (dep.state !== 'awaiting_approval') {
-        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
         if (!deploymentOpActive(op)) {
           return
         }
@@ -916,14 +972,14 @@ function useWorkspaceState(): WorkspaceValue {
 
   async function onCreateIssue() {
     if (!selectedRepo) return
-    await createIssue(DEFAULT_ORG, selectedRepo, 'Slice issue')
+    await createIssue(activeOrg, selectedRepo, 'Slice issue')
     await loadIssues(selectedRepo)
   }
 
   async function onAcceptPlan(issue: Issue) {
     if (!selectedRepo) return
-    await createPlan(DEFAULT_ORG, selectedRepo, issue.number, 'UI plan draft')
-    await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
+    await createPlan(activeOrg, selectedRepo, issue.number, 'UI plan draft')
+    await acceptPlan(activeOrg, selectedRepo, issue.number)
   }
 
   async function pollRun(runId: string, op: AgentOpContext) {
@@ -958,7 +1014,7 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     try {
       const run = await startAgentRun(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         issue.id,
         `Implement: ${issue.title}`,
@@ -1017,7 +1073,7 @@ function useWorkspaceState(): WorkspaceValue {
     setSelectedPrNumber(pr.number)
     setError(null)
     try {
-      const ctx = await getPrCiFailure(DEFAULT_ORG, selectedRepo, pr.number)
+      const ctx = await getPrCiFailure(activeOrg, selectedRepo, pr.number)
       setPrCiFailure(ctx)
     } catch (err) {
       setPrCiFailure(null)
@@ -1035,7 +1091,7 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     const prNumber = prCiFailure.pr_number
     try {
-      const run = await startPrAgentFix(DEFAULT_ORG, selectedRepo, prNumber)
+      const run = await startPrAgentFix(activeOrg, selectedRepo, prNumber)
       if (!agentOpActive(op)) {
         return
       }
@@ -1052,7 +1108,7 @@ function useWorkspaceState(): WorkspaceValue {
         return
       }
       applyAgentRun(finished)
-      const ctx = await getPrCiFailure(DEFAULT_ORG, selectedRepo, prNumber)
+      const ctx = await getPrCiFailure(activeOrg, selectedRepo, prNumber)
       if (agentOpActive(op)) {
         setPrCiFailure(ctx)
       }
@@ -1069,13 +1125,9 @@ function useWorkspaceState(): WorkspaceValue {
   async function onCreatePrFromRun() {
     if (!selectedRepo || !lastRun?.result_commit_oid) return
     const branch = `agent/${lastRun.id}`
-    await createPullRequest(
-      DEFAULT_ORG,
-      selectedRepo,
-      `PR for ${branch}`,
-      branch,
-    )
+    await createPullRequest(activeOrg, selectedRepo, `PR for ${branch}`, branch)
     await loadIssues(selectedRepo)
+    navigate(paths.repoPulls(activeOrg, selectedRepo))
   }
 
   const mergedPr = pulls.find((p) => p.state === 'merged' && p.head_oid)
@@ -1084,17 +1136,17 @@ function useWorkspaceState(): WorkspaceValue {
     if (!selectedRepo) return
     setError(null)
     try {
-      await submitReview(DEFAULT_ORG, selectedRepo, pr.number, 'approve')
+      await submitReview(activeOrg, selectedRepo, pr.number, 'approve')
       const attempt = crypto.randomUUID()
       await setPullRequestCheck(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         pr.number,
         'product-ci',
         'success',
         attempt,
       )
-      await mergePullRequest(DEFAULT_ORG, selectedRepo, pr.number)
+      await mergePullRequest(activeOrg, selectedRepo, pr.number)
       await loadIssues(selectedRepo)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'merge failed')
@@ -1104,7 +1156,7 @@ function useWorkspaceState(): WorkspaceValue {
   async function loadPipelineJobsForRun(runId: string) {
     if (!selectedRepo) return
     const op = capturePipelineOp(runId)
-    const jobs = await listPipelineJobs(DEFAULT_ORG, selectedRepo, runId)
+    const jobs = await listPipelineJobs(activeOrg, selectedRepo, runId)
     if (!pipelineOpActive(op)) return
     setPipelineJobs(jobs)
   }
@@ -1118,7 +1170,7 @@ function useWorkspaceState(): WorkspaceValue {
       if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
         return null
       }
-      const run = await getPipeline(DEFAULT_ORG, repo, runId)
+      const run = await getPipeline(activeOrg, repo, runId)
       if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
         return null
       }
@@ -1139,7 +1191,7 @@ function useWorkspaceState(): WorkspaceValue {
     bumpPipelinePollEpoch()
     const pollEpoch = pipelinePollEpochRef.current
     try {
-      const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
+      const run = await startPipeline(activeOrg, selectedRepo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
       applyPipelineRun(run)
       const pollOp = capturePipelineOp(run.id)
@@ -1177,7 +1229,7 @@ function useWorkspaceState(): WorkspaceValue {
     const pollEpoch = pipelinePollEpochRef.current
     const runId = pipelineRun.id
     try {
-      const requested = await cancelPipelineRun(DEFAULT_ORG, selectedRepo, runId)
+      const requested = await cancelPipelineRun(activeOrg, selectedRepo, runId)
       if (!pipelineOpActive(op)) return
       applyPipelineRun(requested)
       const done = await pollPipelineRun(runId, pollEpoch, op)
@@ -1206,7 +1258,7 @@ function useWorkspaceState(): WorkspaceValue {
     setPipelineRetryBusy(true)
     setError(null)
     try {
-      await retryPipelineJob(DEFAULT_ORG, selectedRepo, jobId, attemptId)
+      await retryPipelineJob(activeOrg, selectedRepo, jobId, attemptId)
       if (!pipelineOpActive(op)) return
       bumpPipelinePollEpoch()
       const pollEpoch = pipelinePollEpochRef.current
@@ -1244,25 +1296,25 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     try {
       const version = `0.0.${Date.now().toString(36)}`
-      const rel = await createRelease(DEFAULT_ORG, selectedRepo, {
+      const rel = await createRelease(activeOrg, selectedRepo, {
         version,
         tag_name: `v${version}`,
         commit_oid: mergedPr.head_oid,
         pipeline_run_id: pipelineRun.id,
         pr_id: mergedPr.id,
       })
-      await publishRelease(DEFAULT_ORG, selectedRepo, rel.id)
+      await publishRelease(activeOrg, selectedRepo, rel.id)
       if (!deploymentOpActive(op)) {
         return
       }
       setPublishedReleaseId(rel.id)
-      const dep = await startDeployment(DEFAULT_ORG, selectedRepo, rel.id)
+      const dep = await startDeployment(activeOrg, selectedRepo, rel.id)
       if (!deploymentOpActive(op)) {
         return
       }
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
-      const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+      const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
       if (!deploymentOpActive(op)) {
         return
       }
@@ -1280,7 +1332,7 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     try {
       const dep = await startDeployment(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         publishedReleaseId,
         undefined,
@@ -1292,7 +1344,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
       if (dep.state !== 'awaiting_approval') {
-        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
         if (!deploymentOpActive(op)) {
           return
         }
@@ -1323,7 +1375,7 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     try {
       const dep = await rollbackDeployment(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         targetDeploymentId,
         'console rollback',
@@ -1336,7 +1388,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentLookupId(dep.id)
       setActiveDeployment(dep)
       if (dep.state !== 'awaiting_approval') {
-        const tv = await getDeploymentTrace(DEFAULT_ORG, selectedRepo, dep.id)
+        const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
         if (!deploymentOpActive(op)) {
           return
         }
@@ -1368,7 +1420,7 @@ function useWorkspaceState(): WorkspaceValue {
     setError(null)
     try {
       await approveDeployment(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         deploymentIdLocked,
         planHashLocked,
@@ -1379,7 +1431,7 @@ function useWorkspaceState(): WorkspaceValue {
         return
       }
       const refreshed = await getDeployment(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         deploymentIdLocked,
       )
@@ -1390,7 +1442,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentId(refreshed.id)
       if (refreshed.state !== 'awaiting_approval') {
         const tv = await getDeploymentTrace(
-          DEFAULT_ORG,
+          activeOrg,
           selectedRepo,
           refreshed.id,
         )
@@ -1421,7 +1473,7 @@ function useWorkspaceState(): WorkspaceValue {
     const traceDeploymentId = deploymentId
     try {
       const tv = await getDeploymentTrace(
-        DEFAULT_ORG,
+        activeOrg,
         selectedRepo,
         traceDeploymentId,
       )
@@ -1441,7 +1493,7 @@ function useWorkspaceState(): WorkspaceValue {
     const lookupId = deploymentLookupId.trim()
     setError(null)
     try {
-      const dep = await getDeployment(DEFAULT_ORG, selectedRepo, lookupId)
+      const dep = await getDeployment(activeOrg, selectedRepo, lookupId)
       if (!deploymentOpActive(op)) {
         return
       }
@@ -1449,7 +1501,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentId(dep.id)
       if (dep.state !== 'awaiting_approval') {
         const tv = await getDeploymentTrace(
-          DEFAULT_ORG,
+          activeOrg,
           selectedRepo,
           dep.id,
         )
@@ -1474,7 +1526,9 @@ function useWorkspaceState(): WorkspaceValue {
   return {
     t,
     i18n,
+    sessionAuth,
     session,
+    activeOrg,
     repos,
     selectedRepo,
     issues,
@@ -1533,7 +1587,7 @@ function useWorkspaceState(): WorkspaceValue {
     runnerTokens,
     mintedPatFull,
     mergedPr,
-    DEFAULT_ORG,
+    DEFAULT_ORG: activeOrg,
     onLogin,
     onLogout,
     onChangePassword,

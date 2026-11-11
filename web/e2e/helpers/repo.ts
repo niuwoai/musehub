@@ -99,16 +99,27 @@ export async function createRepoViaUi(page: Page): Promise<{
   const { slug } = (await createResp.json()) as { slug: string }
   expect(slug.length).toBeGreaterThan(0)
 
+  await expect(page).toHaveURL(new RegExp(`/org/demo/repos/${slug}/pulls`), { timeout: 15_000 })
+  await page.getByTestId('nav-repos').click()
   const repoEntry = repoNavButtonForSlug(page, slug)
   await expect(repoEntry).toHaveCount(1, { timeout: 15_000 })
   return { slug, repoEntry }
+}
+
+export async function openRepoDelivery(page: Page, slug: string): Promise<void> {
+  const deliveryLoaded = page.waitForResponse(
+    (r) => r.url().includes(`/repos/${slug}/`) && r.request().method() === 'GET',
+  )
+  await page.goto(`/org/demo/repos/${slug}/delivery`)
+  await deliveryLoaded.catch(() => null)
+  await expect(page.getByTestId('delivery-panel')).toBeVisible({ timeout: 30_000 })
 }
 
 export async function openRepoBySlug(page: Page, slug: string): Promise<void> {
   const issuesLoaded = page.waitForResponse(
     (r) => r.url().includes(`/repos/${slug}/issues`) && r.request().method() === 'GET',
   )
-  await repoNavButtonForSlug(page, slug).click()
+  await page.goto(`/org/demo/repos/${slug}/issues`)
   const issuesResp = await issuesLoaded
   await expectResponseOk(issuesResp, `load issues for repo ${slug}`)
   await expect(page.getByTestId('nav-repo-issues')).toBeVisible({

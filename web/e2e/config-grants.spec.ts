@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { goOrgSettings } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -31,14 +32,12 @@ test.describe('org config and grants UI', () => {
   })
 
   test('persist org display name without echoing secrets', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
     await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    const repo = page.getByTestId('repo-list').getByRole('button').last()
-    await repo.click()
-    await expect(page.getByTestId('org-settings')).toBeVisible({ timeout: 15_000 })
+    await goOrgSettings(page)
   const tokenLike = /mhp_[a-zA-Z0-9]+/
     await expect(page.getByTestId('org-settings')).not.toContainText(tokenLike)
     const name = `Demo Org ${Date.now()}`

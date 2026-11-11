@@ -10,6 +10,7 @@ import {
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  openRepoDelivery,
   repoNavButtonForSlug,
   repoNavButtons,
   waitForDemoRepoNavHydrated,
@@ -36,13 +37,13 @@ function delayedGate() {
 }
 
 async function loginAndCreateRepo(page: Page) {
-  await page.goto('/')
+  await page.goto('/login')
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
   await waitForDemoRepoNavHydrated(page)
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
+  const { slug } = await createRepoViaUi(page)
+  await openRepoDelivery(page, slug)
   return slug
 }
 

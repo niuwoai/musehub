@@ -7,6 +7,7 @@ import {
   STALE_DEPLOYMENT_ID,
   STALE_PLAN_PREFIX,
 } from './fixtures/stale-deployment-view'
+import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -75,15 +76,13 @@ test.describe('deployment list discovery', () => {
       await route.continue()
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slug)
 
     await expect(page.getByTestId('deployment-list')).toBeVisible({ timeout: 15_000 })
     await page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
@@ -135,15 +134,13 @@ test.describe('deployment list discovery', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug: slugA } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slugA)
     await expect(page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`)).toBeVisible({
       timeout: 15_000,
     })
@@ -154,10 +151,10 @@ test.describe('deployment list discovery', () => {
     void page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
     await detailReq
 
-    const beforeB = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(beforeB + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
+    await page.getByTestId('nav-repos').click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug: slugB } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slugB)
 
     const detailDone = page.waitForResponse(
       (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',

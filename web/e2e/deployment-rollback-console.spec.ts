@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import type { Page } from '@playwright/test'
 
+import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -154,15 +155,13 @@ test.describe('deployment rollback console', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slug)
 
     await page.getByTestId('deployment-view-all').click()
     const detailGet = page.waitForResponse(
@@ -259,15 +258,13 @@ test.describe('deployment rollback console', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const before = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-    await repoNavButtons(page).last().click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, slug)
     await page.getByTestId('deployment-view-all').click()
     const rollbackBtn = page.getByTestId(`deployment-rollback-${GOOD_DEPLOY_ID}`)
     await expect(rollbackBtn).toBeVisible({ timeout: 15_000 })

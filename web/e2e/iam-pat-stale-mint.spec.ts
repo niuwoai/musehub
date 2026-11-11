@@ -44,7 +44,7 @@ test.describe('PAT mint session epoch guard', () => {
   }) => {
     const paused = await installPausedPostPatRoute(page)
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')

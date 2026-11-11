@@ -1,10 +1,14 @@
 import type { ReactNode } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import type { Location } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { resolveSafeRedirectPath } from './authRedirect'
 import { appVersion, useWorkspace } from './WorkspaceProvider'
 import { DEFAULT_ORG, paths } from './paths'
+import { OrgScopeGuard } from '../components/OrgScopeGuard'
 import { AppShell } from '../layout/AppShell'
 import { LoginPage } from '../pages/LoginPage'
+import { NotFoundPage } from '../pages/NotFoundPage'
 import { RepoListPage } from '../pages/RepoListPage'
 import { OrgSettingsPage } from '../pages/OrgSettingsPage'
 import { OrgMembersPage } from '../pages/OrgMembersPage'
@@ -16,10 +20,14 @@ import { RepoIssuesPage } from '../pages/RepoIssuesPage'
 import { RepoPullsPage } from '../pages/RepoPullsPage'
 import { RepoDeliveryPage } from '../pages/RepoDeliveryPage'
 import { RepoSettingsPage } from '../pages/RepoSettingsPage'
+import { SessionBootScreen } from '../pages/SessionBootScreen'
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { session } = useWorkspace()
+  const { sessionAuth, session } = useWorkspace()
   const location = useLocation()
+  if (sessionAuth === 'pending') {
+    return <SessionBootScreen />
+  }
   if (!session) {
     return <Navigate to={paths.login()} replace state={{ from: location }} />
   }
@@ -27,10 +35,17 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 }
 
 function LoginRoute() {
-  const { session } = useWorkspace()
+  const { sessionAuth, session } = useWorkspace()
+  const location = useLocation()
   const { t } = useTranslation()
+  if (sessionAuth === 'pending') {
+    return <SessionBootScreen />
+  }
   if (session) {
-    return <Navigate to={paths.repos(DEFAULT_ORG)} replace />
+    const target = resolveSafeRedirectPath(
+      (location.state as { from?: Location } | null)?.from ?? null,
+    )
+    return <Navigate to={target} replace />
   }
   return (
     <main
@@ -39,7 +54,7 @@ function LoginRoute() {
         margin: 0,
         padding: '2rem',
         fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Roboto, sans-serif',
+          "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, sans-serif",
         color: '#1f2328',
         background: '#f6f7f9',
       }}
@@ -54,15 +69,22 @@ function LoginRoute() {
 }
 
 function RootRedirect() {
-  const { session } = useWorkspace()
+  const { sessionAuth, session } = useWorkspace()
+  if (sessionAuth === 'pending') {
+    return <SessionBootScreen />
+  }
   if (session) {
     return <Navigate to={paths.repos(DEFAULT_ORG)} replace />
   }
   return <Navigate to={paths.login()} replace />
 }
 
-function UnknownProtectedRedirect() {
-  return <Navigate to={paths.repos(DEFAULT_ORG)} replace />
+function RepoTabRedirect() {
+  const { org, slug } = useParams()
+  if (!org || !slug) {
+    return <NotFoundPage />
+  }
+  return <Navigate to={paths.repoIssues(org, slug)} replace />
 }
 
 export function AppRouter() {
@@ -77,18 +99,89 @@ export function AppRouter() {
           </ProtectedRoute>
         }
       >
-        <Route path="/org/:org/repos" element={<RepoListPage />} />
-        <Route path="/org/:org/settings" element={<OrgSettingsPage />} />
-        <Route path="/org/:org/members" element={<OrgMembersPage />} />
-        <Route path="/org/:org/audit" element={<AuditPage />} />
-        <Route path="/org/:org/runner" element={<RunnerPage />} />
+        <Route
+          path="/org/:org/repos"
+          element={
+            <OrgScopeGuard>
+              <RepoListPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/settings"
+          element={
+            <OrgScopeGuard>
+              <OrgSettingsPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/members"
+          element={
+            <OrgScopeGuard>
+              <OrgMembersPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/audit"
+          element={
+            <OrgScopeGuard>
+              <AuditPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/runner"
+          element={
+            <OrgScopeGuard>
+              <RunnerPage />
+            </OrgScopeGuard>
+          }
+        />
         <Route path="/account/security" element={<AccountSecurityPage />} />
         <Route path="/account/tokens" element={<AccountTokensPage />} />
-        <Route path="/org/:org/repos/:slug/issues" element={<RepoIssuesPage />} />
-        <Route path="/org/:org/repos/:slug/pulls" element={<RepoPullsPage />} />
-        <Route path="/org/:org/repos/:slug/delivery" element={<RepoDeliveryPage />} />
-        <Route path="/org/:org/repos/:slug/settings" element={<RepoSettingsPage />} />
-        <Route path="*" element={<UnknownProtectedRedirect />} />
+        <Route
+          path="/org/:org/repos/:slug"
+          element={
+            <OrgScopeGuard>
+              <RepoTabRedirect />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/issues"
+          element={
+            <OrgScopeGuard>
+              <RepoIssuesPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/pulls"
+          element={
+            <OrgScopeGuard>
+              <RepoPullsPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/delivery"
+          element={
+            <OrgScopeGuard>
+              <RepoDeliveryPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/repos/:slug/settings"
+          element={
+            <OrgScopeGuard>
+              <RepoSettingsPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   )

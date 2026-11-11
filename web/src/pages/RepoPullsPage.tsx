@@ -19,7 +19,7 @@ export function RepoPullsPage() {
   }
 
   return (
-    <Panel>
+    <Panel data-testid="repo-pulls-page">
       <h2>{t('nav.repoPulls')}</h2>
       {pulls.length > 0 ? (
         <ul data-testid="pull-request-list">
@@ -40,7 +40,7 @@ export function RepoPullsPage() {
           ))}
         </ul>
       ) : (
-        <p>{t('repo.noPullRequests')}</p>
+        <p>{t('repo.noPulls')}</p>
       )}
       {prCiFailure && selectedPrNumber != null ? (
         <div data-testid="pr-ci-failure-panel">

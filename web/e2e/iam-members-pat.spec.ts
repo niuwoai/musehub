@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { goAccountTokens, goAudit, goOrgMembers } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -13,11 +14,11 @@ test.describe('org members and PAT console', () => {
     const handle = `iam-ui-${Date.now()}`
     const memberPass = 'Iam-Ui-Console-E2E-12!'
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
-    await expect(page.getByTestId('org-members')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByTestId('pat-management')).toBeVisible()
+    await expectLoggedInAs(page, 'admin')
+    await goOrgMembers(page)
 
     await page.getByTestId('member-handle').fill(handle)
     await page.getByTestId('member-password').fill(memberPass)
@@ -25,6 +26,7 @@ test.describe('org members and PAT console', () => {
     await expect(page.getByTestId('org-members-list')).toContainText(handle, { timeout: 15_000 })
 
     const patName = `ui-pat-${Date.now()}`
+    await goAccountTokens(page)
     await page.getByTestId('pat-name').fill(patName)
     await page.getByTestId('create-pat').click()
     const minted = page.getByTestId('pat-minted-once')
@@ -62,6 +64,7 @@ test.describe('org members and PAT console', () => {
     expect(actions).toContain('token.revoke')
     expect(JSON.stringify(events)).not.toMatch(fullPatLike)
 
+    await goAudit(page)
     await expect(page.getByTestId('audit-panel')).toBeVisible()
     const auditBody = await page.getByTestId('audit-panel').innerText()
     expect(auditBody).not.toMatch(fullPatLike)

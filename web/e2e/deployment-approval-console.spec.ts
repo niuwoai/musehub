@@ -4,8 +4,10 @@ import { randomUUID } from 'crypto'
 import type { Page } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
+import { goRepoDelivery, goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
+  openRepoBySlug,
   repoNavButtonForSlug,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
@@ -29,8 +31,8 @@ async function loginCookie(handle: string, pass: string) {
 }
 
 async function deliveryThroughRelease(page: Page, adminCookie: string) {
-  const { slug, repoEntry } = await createRepoViaUi(page)
-  await repoEntry.click()
+  const { slug } = await createRepoViaUi(page)
+  await openRepoBySlug(page, slug)
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
   await page.getByRole('button', { name: /run agent|运行/i }).first().click()
@@ -38,7 +40,7 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
     timeout: 180_000,
   })
   await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
-  await expect(page.getByTestId('pull-request-list')).toBeVisible({ timeout: 30_000 })
+  await goRepoPulls(page)
   const prs = await page.request.get(`${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
     headers: { Cookie: adminCookie },
   })
@@ -92,6 +94,7 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
     { headers: { Cookie: revCookie } },
   )
   expect(merge.ok()).toBeTruthy()
+  await goRepoDelivery(page)
   await page.getByTestId('refresh-repo').click()
   await expect(page.getByTestId('delivery-panel')).toContainText(/main @/, { timeout: 30_000 })
   await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
@@ -155,7 +158,7 @@ test.describe('protected deployment approval console', () => {
       })
     })
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
@@ -194,7 +197,7 @@ test.describe('protected deployment approval console', () => {
     const requesterPass = 'Dep-Requester-22!'
     const deniedPass = 'Dep-Denied-Mbr-22!'
 
-    await page.goto('/')
+    await page.goto('/login')
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')

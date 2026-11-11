@@ -1,5 +1,6 @@
 import { expect, request as playwrightRequest, test } from '@playwright/test'
 
+import { goAccountSecurity } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 
 const adminPassword = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -28,12 +29,12 @@ test.describe('self-service password change', () => {
     })
     expect(staleLogin.ok()).toBeTruthy()
 
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(initialPass)
     await page.getByTestId('login-handle-input').fill(handle)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, handle)
-    await expect(page.getByTestId('account-security')).toBeVisible()
+    await goAccountSecurity(page)
 
     await page.getByTestId('password-current').fill(initialPass)
     await page.getByTestId('password-new').fill(rotatedPass)

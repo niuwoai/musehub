@@ -8,6 +8,7 @@ import {
   STALE_PLAN_PREFIX,
   STALE_TRACE_BODY,
 } from './fixtures/stale-deployment-view'
+import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -23,19 +24,16 @@ async function fillLoginForm(page: Page, handle: string, pass: string) {
 }
 
 async function loginAsAdmin(page: Page) {
-  await page.goto('/')
+  await page.goto('/login')
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
 }
 
 async function createEmptyRepo(page: Page) {
-  const before = await repoNavButtons(page).count()
-  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  await expect(repoNavButtons(page)).toHaveCount(before + 1, { timeout: 15_000 })
-  const entry = repoNavButtons(page).last()
-  const slug = (await entry.textContent())?.trim() ?? ''
-  await entry.click()
+  await waitForDemoRepoNavHydrated(page)
+  const { slug } = await createRepoViaUi(page)
+  await openRepoDelivery(page, slug)
   return slug
 }
 

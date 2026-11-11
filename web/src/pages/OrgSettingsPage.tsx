@@ -3,18 +3,17 @@ import { getOrgSettings, patchOrgSettings } from '../api'
 import { useWorkspace } from '../app/WorkspaceProvider'
 
 export function OrgSettingsPage() {
-  const { t, settings, orgDisplayName, setOrgDisplayName, setSettings, DEFAULT_ORG } =
-    useWorkspace()
+  const { t, settings, orgDisplayName, setOrgDisplayName, setSettings, activeOrg } = useWorkspace()
 
   useEffect(() => {
-    void getOrgSettings(DEFAULT_ORG).then((s) => {
+    void getOrgSettings(activeOrg).then((s) => {
       setSettings(s)
       setOrgDisplayName(s.display_name)
     })
-  }, [DEFAULT_ORG, setOrgDisplayName, setSettings])
+  }, [activeOrg, setOrgDisplayName, setSettings])
 
   if (!settings) {
-    return <p role="status">Loading…</p>
+    return <p role="status">{t('common.loading')}</p>
   }
 
   return (
@@ -33,7 +32,7 @@ export function OrgSettingsPage() {
           type="button"
           data-testid="save-org-settings"
           onClick={async () => {
-            const next = await patchOrgSettings(DEFAULT_ORG, {
+            const next = await patchOrgSettings(activeOrg, {
               display_name: orgDisplayName,
               preferences: {
                 default_collaborator_role:

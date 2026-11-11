@@ -104,7 +104,13 @@
   },
   "repo": {
     "selectFirst": "Select a repository from the list.",
+    "empty": "No repositories yet — use the button above to create one.",
     "noPulls": "No pull requests yet."
+  },
+  "common": {
+    "loading": "Loading…",
+    "notFoundTitle": "Page not found",
+    "notFoundBody": "This URL is not part of the console. Use the sidebar or go back to repositories."
   },
   "repoSettings": {
     "grantsTitle": "Repo grants",

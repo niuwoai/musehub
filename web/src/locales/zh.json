@@ -102,8 +102,14 @@
     "loadFailed": "无法加载 Runner 能力。",
     "noTokens": "无 Runner 令牌（仅掩码列表）。"
   },
+  "common": {
+    "loading": "加载中…",
+    "notFoundTitle": "页面不存在",
+    "notFoundBody": "该 URL 不在控制台导航范围内。请使用侧栏或返回仓库列表。"
+  },
   "repo": {
     "selectFirst": "请从列表中选择一个仓库。",
+    "empty": "尚无仓库，点击上方按钮创建。",
     "noPulls": "暂无 Pull Request。"
   },
   "repoSettings": {
