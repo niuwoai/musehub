@@ -127,12 +127,19 @@ export default function App() {
   const selectedRepoRef = useRef<string | null>(null)
   /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
   const agentRunPollEpochRef = useRef(0)
+  const agentRunIdRef = useRef<string | null>(null)
+  const agentStartOpRef = useRef<AgentOpContext | null>(null)
   const pipelineRunIdRef = useRef<string | null>(null)
 
   type DeploymentOpContext = {
     sessionEpoch: number
     repoGeneration: number
     repo: string
+  }
+
+  type AgentOpContext = DeploymentOpContext & {
+    issueId: string
+    pollEpoch: number
   }
 
   type PipelineOpContext = DeploymentOpContext & {
@@ -235,7 +242,39 @@ export default function App() {
     return agentRunPollEpochRef.current === epoch
   }
 
+  function captureAgentOp(issueId: string, repoSlug?: string): AgentOpContext {
+    return {
+      ...captureDeploymentOp(repoSlug),
+      issueId,
+      pollEpoch: agentRunPollEpochRef.current,
+    }
+  }
+
+  function agentOpActive(ctx: AgentOpContext): boolean {
+    return (
+      deploymentOpActive(ctx) &&
+      agentRunPollEpochActive(ctx.pollEpoch)
+    )
+  }
+
+  function agentOpMatches(a: AgentOpContext, b: AgentOpContext): boolean {
+    return (
+      a.sessionEpoch === b.sessionEpoch &&
+      a.repoGeneration === b.repoGeneration &&
+      a.repo === b.repo &&
+      a.issueId === b.issueId &&
+      a.pollEpoch === b.pollEpoch
+    )
+  }
+
+  function applyAgentRun(run: AgentRun | null) {
+    agentRunIdRef.current = run?.id ?? null
+    setLastRun(run)
+  }
+
   function resetAgentRunUi() {
+    agentRunIdRef.current = null
+    agentStartOpRef.current = null
     setLastRun(null)
     setAgentRunStarting(false)
   }
@@ -482,6 +521,9 @@ export default function App() {
   }
 
   async function loadIssues(slug: string) {
+    if (selectedRepoRef.current !== slug) {
+      invalidateAgentRunWork()
+    }
     invalidateDeploymentWork()
     selectedRepoRef.current = slug
     setSelectedRepo(slug)
@@ -703,18 +745,21 @@ export default function App() {
     await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
   }
 
-  async function pollRun(runId: string, pollEpoch: number) {
+  async function pollRun(runId: string, op: AgentOpContext) {
     const remoteAgent = runnerCaps?.agent_executor === 'remote'
     const maxIter = remoteAgent ? 600 : 360
     for (let i = 0; i < maxIter; i++) {
-      if (!agentRunPollEpochActive(pollEpoch)) {
+      if (!agentOpActive(op)) {
         return null
       }
       const run = await getAgentRun(runId)
-      if (!agentRunPollEpochActive(pollEpoch)) {
+      if (!agentOpActive(op)) {
         return null
       }
-      setLastRun(run)
+      if (agentRunIdRef.current !== null && agentRunIdRef.current !== run.id) {
+        return null
+      }
+      applyAgentRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
         return run
       }
@@ -724,9 +769,12 @@ export default function App() {
   }
 
   async function onRunAgent(issue: Issue) {
-    if (!selectedRepo) return
-    const pollEpoch = agentRunPollEpochRef.current
+    if (!selectedRepo || agentRunStarting) return
+    bumpAgentRunPollEpoch()
+    const op = captureAgentOp(issue.id)
+    agentStartOpRef.current = op
     setAgentRunStarting(true)
+    setError(null)
     try {
       const run = await startAgentRun(
         DEFAULT_ORG,
@@ -734,27 +782,49 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
-      if (!agentRunPollEpochActive(pollEpoch)) {
+      if (!agentOpActive(op)) {
         return
       }
-      setLastRun(run)
-      const finished = await pollRun(run.id, pollEpoch)
-      if (!finished || !agentRunPollEpochActive(pollEpoch)) {
+      applyAgentRun(run)
+      const finished = await pollRun(run.id, op)
+      if (!finished || !agentOpActive(op)) {
         return
       }
+      applyAgentRun(finished)
       await loadIssues(selectedRepo)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'agent run failed')
+      if (agentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'agent run failed')
+      }
     } finally {
-      setAgentRunStarting(false)
+      if (agentStartOpRef.current && agentOpMatches(agentStartOpRef.current, op)) {
+        agentStartOpRef.current = null
+        if (agentOpActive(op)) {
+          setAgentRunStarting(false)
+        }
+      }
     }
   }
 
   async function onCancelRun() {
-    if (!lastRun) return
-    const pollEpoch = agentRunPollEpochRef.current
-    await cancelAgentRun(lastRun.id)
-    await pollRun(lastRun.id, pollEpoch)
+    if (!selectedRepo || !lastRun) return
+    bumpAgentRunPollEpoch()
+    const op = captureAgentOp(lastRun.id)
+    setError(null)
+    try {
+      await cancelAgentRun(lastRun.id)
+      if (!agentOpActive(op)) {
+        return
+      }
+      const finished = await pollRun(lastRun.id, op)
+      if (finished && agentOpActive(op)) {
+        applyAgentRun(finished)
+      }
+    } catch (err) {
+      if (agentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'agent cancel failed')
+      }
+    }
   }
 
   async function onCreatePrFromRun() {

@@ -1,17 +1,15 @@
 import { expect, request as playwrightRequest, test } from '@playwright/test'
 import { randomUUID } from 'crypto'
 
-import type { Page } from '@playwright/test'
-
+import {
+  createRepoViaUi,
+  openRepoBySlug,
+  waitForDemoRepoNavHydrated,
+} from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
-
-/** Repo picker in the sidebar — not issue/PR action buttons nested under the detail panel. */
-function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
-}
 
 test.describe('delivery chain browser flow', () => {
   test.skip(
@@ -51,18 +49,14 @@ test.describe('delivery chain browser flow', () => {
     await invite('e2e-reviewer', reviewerPass, 'member')
     await invite('e2e-ci', ciPass, 'admin')
 
-    const repoCountBefore = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
-    const repoEntry = repoNavButtons(page).last()
-    await expect(repoEntry).toBeVisible({ timeout: 10_000 })
-    const slug = (await repoEntry.textContent())?.trim() ?? ''
-    await repoEntry.click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoBySlug(page, slug)
     await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
     await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
     const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
     await expect(runAgent).toBeVisible({ timeout: 15_000 })
-    const agentStartWaitMs = productOci ? 180_000 : 120_000
+    const agentStartWaitMs = 120_000
     const agentFinishWaitMs = productOci ? 300_000 : 180_000
     const agentStart = page.waitForResponse(
       (r) => r.url().includes(`/repos/${slug}/agent-runs`) && r.request().method() === 'POST',
