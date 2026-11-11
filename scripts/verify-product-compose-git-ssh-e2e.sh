@@ -40,10 +40,10 @@ dc exec -T musehub-git-ssh sh -c '
   test -f "$d/runtime.env"
   stat -c "%a %U:%G" "$d" | grep -qE "^(2750|0750) root:git$"
   stat -c "%a %U:%G" "$d/runtime.env" | grep -qE "^640 root:git$"
-  sudo -u git test -x "$d"
-  sudo -u git test -r "$d/runtime.env"
-  ! sudo -u git test -w "$d"
-  ! sudo -u git sh -c "echo x >> \"$d/runtime.env\"" 2>/dev/null
+  su -s /bin/sh git -c "test -x \"$d\""
+  su -s /bin/sh git -c "test -r \"$d/runtime.env\""
+  ! su -s /bin/sh git -c "test -w \"$d\""
+  ! su -s /bin/sh git -c "echo x >> \"$d/runtime.env\"" 2>/dev/null
 '
 
 COOKIE_JAR=$(mktemp)

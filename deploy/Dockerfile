@@ -105,7 +105,7 @@ CMD ["/usr/local/bin/musehub-runnerd"]
 
 FROM debian:${DEBIAN_VERSION} AS git-ssh-runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssh-server git ca-certificates tini \
+  && apt-get install -y --no-install-recommends openssh-server git ca-certificates tini iproute2 \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -r -g 998 musehub-git \
   && useradd -r -u 997 -M -s /bin/false git \
