@@ -98,7 +98,7 @@ echo "=== compose up ==="
 dc up -d
 sleep 5
 
-BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
+export BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
 echo "gateway base=$BASE postgres_port=$MUSEHUB_CI_POSTGRES_PORT api_host_port=$MUSEHUB_CI_API_HOST_PORT"
 DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub"
 
