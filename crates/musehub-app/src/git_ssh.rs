@@ -341,7 +341,7 @@ ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid}
 {env_lines}PermitRootLogin no
-PermitUserEnvironment yes
+PermitUserEnvironment restrict
 AllowUsers {login_user}
 AuthorizedKeysFile none
 AuthorizedKeysCommand {akc_cmd} %u %k %t %f
@@ -402,6 +402,25 @@ mod tests {
     fn parse_rejects_shell() {
         assert!(parse_ssh_original_command("sh").is_err());
         assert!(parse_ssh_original_command("git-upload-pack '../etc/passwd'").is_err());
+    }
+
+    #[test]
+    fn sshd_config_restricts_client_environment() {
+        let body = render_sshd_config(
+            2222,
+            Path::new("/var/lib/musehub/git-ssh/ssh_host_ed25519_key"),
+            Path::new("/var/lib/musehub/git-ssh/sshd.pid"),
+            Path::new("/usr/local/bin/musehub-git-ssh"),
+            &[(
+                "MUSEHUB_GIT_SSH_RUNTIME_ENV",
+                "/var/lib/musehub/git-ssh/runtime.env",
+            )],
+            GIT_SSH_LOGIN_USER,
+            "git",
+            false,
+        );
+        assert!(body.contains("PermitUserEnvironment restrict"));
+        assert!(!body.contains("PermitUserEnvironment yes\n"));
     }
 
     #[test]

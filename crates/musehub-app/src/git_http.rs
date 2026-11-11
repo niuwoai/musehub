@@ -47,7 +47,7 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
 
 /// Lets the dedicated `git` transport user mutate receive-pack state (group shared with API writer).
 #[cfg(unix)]
-fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
+pub fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
     let group = crate::git_ssh_runtime::git_storage_group();
     let path = bare
         .to_str()
@@ -76,21 +76,51 @@ fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
             )));
         }
     }
-    let chmod = Command::new("chmod")
+    let allow_sudo = std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
+        .ok()
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+    let mut chmod_ok = Command::new("chmod")
         .args(["-R", "g+rwX", path])
         .status()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if !chmod.success() {
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !chmod_ok && allow_sudo {
+        chmod_ok = Command::new("sudo")
+            .args(["-n", "chmod", "-R", "g+rwX", path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    if !chmod_ok {
         return Err(AppError::Other("chmod g+rwX on bare repo failed".into()));
     }
-    let setgid = Command::new("find")
+    let mut setgid_ok = Command::new("find")
         .args([path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";"])
         .status()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if !setgid.success() {
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !setgid_ok && allow_sudo {
+        setgid_ok = Command::new("sudo")
+            .args([
+                "-n",
+                "find",
+                path,
+                "-type",
+                "d",
+                "-exec",
+                "chmod",
+                "g+s",
+                "{}",
+                ";",
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    if !setgid_ok {
         return Err(AppError::Other("chmod g+s on bare repo dirs failed".into()));
     }
-    let shared = Command::new("git")
+    let mut shared_ok = Command::new("git")
         .args([
             "--git-dir",
             path,
@@ -99,8 +129,26 @@ fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
             "group",
         ])
         .status()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if !shared.success() {
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !shared_ok && allow_sudo {
+        shared_ok = Command::new("sudo")
+            .args([
+                "-n",
+                "git",
+                "-c",
+                &format!("safe.directory={path}"),
+                "--git-dir",
+                path,
+                "config",
+                "core.sharedRepository",
+                "group",
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    if !shared_ok {
         return Err(AppError::Other(
             "git config core.sharedRepository=group failed".into(),
         ));

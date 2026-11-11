@@ -267,11 +267,20 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     let akc_user = git_ssh_akc_user();
     install_git_login_shell()?;
     let packaging_marker = env::var("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER").ok();
+    let packaging_synthetic = env::var("MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET").ok();
     let mut runtime_vars: Vec<(&str, &str)> =
         vec![("DATABASE_URL", &db_url), ("MUSEHUB_GIT_ROOT", git_root_s)];
     if let Some(ref marker) = packaging_marker {
         if !marker.is_empty() {
             runtime_vars.push(("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER", marker.as_str()));
+        }
+    }
+    if let Some(ref secret) = packaging_synthetic {
+        if !secret.is_empty() {
+            runtime_vars.push((
+                "MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET",
+                secret.as_str(),
+            ));
         }
     }
     let runtime_env_path =

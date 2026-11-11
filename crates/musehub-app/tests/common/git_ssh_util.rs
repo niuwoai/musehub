@@ -92,6 +92,24 @@ pub fn raw_ssh(priv_key: &Path, port: u16, remote_cmd: &str, allocate_tty: bool)
     raw_ssh_as("git", priv_key, port, remote_cmd, allocate_tty)
 }
 
+pub fn raw_ssh_with_sendenv(
+    priv_key: &Path,
+    port: u16,
+    var: &str,
+    value: &str,
+    remote_cmd: &str,
+) -> Output {
+    let mut cmd = Command::new("ssh");
+    cmd.args(ssh_base_args(priv_key, port));
+    cmd.arg("-o").arg(format!("SendEnv={var}"));
+    cmd.env(var, value);
+    cmd.arg("git@127.0.0.1");
+    if !remote_cmd.is_empty() {
+        cmd.arg(remote_cmd);
+    }
+    cmd.output().expect("ssh sendenv")
+}
+
 pub fn raw_ssh_as(
     login: &str,
     priv_key: &Path,

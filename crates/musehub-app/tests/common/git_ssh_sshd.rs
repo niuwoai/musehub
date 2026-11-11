@@ -44,6 +44,13 @@ impl TestGitSshd {
                 sudo.arg(format!("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER={marker}"));
             }
         }
+        if let Ok(secret) = std::env::var("MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET") {
+            if !secret.is_empty() {
+                sudo.arg(format!(
+                    "MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET={secret}"
+                ));
+            }
+        }
         sudo.arg(&bin_path);
         sudo.args(["serve", &port.to_string()]);
         let mut child = sudo
@@ -141,7 +148,7 @@ pub fn ensure_git_storage_group() {
     std::env::set_var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK", "1");
 }
 
-fn ensure_git_os_user() {
+pub fn ensure_git_os_user() {
     ensure_git_storage_group();
     let exists = Command::new("id")
         .arg("git")

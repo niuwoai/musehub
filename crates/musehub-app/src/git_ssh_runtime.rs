@@ -452,9 +452,10 @@ fn validate_run_dir_git_traverse(run_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Idempotent shared-git volume layout (setgid root) for existing named volumes.
+/// Idempotent shared-git volume layout for existing named volumes (fail-closed).
 #[cfg(unix)]
 pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
+    use std::os::unix::fs::MetadataExt;
     if !git_root.exists() {
         return Ok(());
     }
@@ -462,8 +463,52 @@ pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
     let path = git_root
         .to_str()
         .ok_or_else(|| AppError::Other("utf8 path".into()))?;
-    let _ = Command::new("chgrp").args([&group, path]).status();
-    let _ = Command::new("chmod").args(["2775", path]).status();
+    let root_chgrp = Command::new("chgrp")
+        .args([&group, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !root_chgrp {
+        let allow_sudo = std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
+            .ok()
+            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+        let sudo_ok = if allow_sudo {
+            run_privileged("chgrp", &[&group, path]).is_ok()
+        } else {
+            false
+        };
+        if !sudo_ok {
+            return Err(AppError::Other(format!(
+                "chgrp {group} on git storage root failed — join {group} or set MUSEHUB_GIT_STORAGE_SUDO_FALLBACK=1 for host CI only"
+            )));
+        }
+    }
+    if !run_privileged("chmod", &["2775", path]).is_ok() {
+        return Err(AppError::Other(
+            "chmod 2775 on git storage root failed".into(),
+        ));
+    }
+    let meta = fs::metadata(git_root).map_err(|e| AppError::Other(e.to_string()))?;
+    if meta.gid() == 0 {
+        return Err(AppError::Validation(
+            "git storage root must be group-owned for transport (expected shared group)".into(),
+        ));
+    }
+    for entry in fs::read_dir(git_root).map_err(|e| AppError::Other(e.to_string()))? {
+        let entry = entry.map_err(|e| AppError::Other(e.to_string()))?;
+        let bare = entry.path();
+        if !bare.is_dir() {
+            continue;
+        }
+        let name = bare
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if !name.ends_with(".git") {
+            continue;
+        }
+        crate::git_http::apply_bare_repo_group_acl(&bare)?;
+    }
     Ok(())
 }
 

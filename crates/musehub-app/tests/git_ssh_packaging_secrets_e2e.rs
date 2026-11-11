@@ -14,7 +14,12 @@ use common::git_ssh_util::require_git_ssh_transport_prereqs;
 async fn git_ssh_public_scripts_contain_no_database_credentials() {
     require_git_ssh_transport_prereqs();
     let marker = format!("mh-pack-test-{}", uuid::Uuid::new_v4().simple());
+    let synthetic_short_secret = "ci7probe";
     std::env::set_var("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER", &marker);
+    std::env::set_var(
+        "MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET",
+        synthetic_short_secret,
+    );
     let f = git_ssh_fixture("sshpack").await;
     let login = Path::new("/usr/local/lib/musehub/musehub-git-login.sh");
     assert!(
@@ -60,6 +65,18 @@ async fn git_ssh_public_scripts_contain_no_database_credentials() {
     assert!(
         runtime_body.contains(&marker),
         "marker must live only in protected runtime.env"
+    );
+    assert!(
+        runtime_body.contains(synthetic_short_secret),
+        "synthetic secret must be present in runtime.env for this test"
+    );
+    assert!(
+        !login_body.contains(synthetic_short_secret),
+        "short synthetic secret must not appear in login shell"
+    );
+    assert!(
+        !wrap_body.contains(synthetic_short_secret),
+        "short synthetic secret must not appear in akc wrap"
     );
     assert!(
         runtime_body.contains("DATABASE_URL="),

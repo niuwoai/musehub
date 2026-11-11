@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=lib/git-http-auth-sandbox.sh
+source "$ROOT/scripts/lib/git-http-auth-sandbox.sh"
 
 command -v docker >/dev/null || { echo "docker required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
@@ -13,7 +15,17 @@ command -v git >/dev/null || { echo "git required" >&2; exit 1; }
 : "${COMPOSE_PROJECT_NAME:?}"
 : "${BASE:?}"
 : "${BOOTSTRAP_PW:?}"
+: "${MUSEHUB_GATEWAY_HTTP_PORT:?}"
 : "${MUSEHUB_GIT_SSH_PORT:=2222}"
+
+FEATURE_BRANCH="feature/compose-roundtrip"
+STORAGE_KEY=""
+TOKEN_ID=""
+COOKIE_JAR=""
+KEY_DIR=""
+GIT_DIR=""
+HTTP_DIR=""
+BAD_DIR=""
 
 if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
   # shellcheck disable=SC2128
@@ -21,6 +33,25 @@ if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
 else
   dc() { docker compose -p "$COMPOSE_PROJECT_NAME" "$@"; }
 fi
+
+cleanup() {
+  if [[ -n "${TOKEN_ID:-}" && -n "${COOKIE_JAR:-}" ]]; then
+    curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X DELETE \
+      "$BASE/api/v1/tokens/${TOKEN_ID}" >/dev/null 2>&1 || true
+  fi
+  git_http_auth_sandbox_end
+  [[ -n "${KEY_DIR:-}" ]] && rm -rf "$KEY_DIR"
+  [[ -n "${GIT_DIR:-}" ]] && rm -rf "$GIT_DIR" "${GIT_DIR}.bad" 2>/dev/null || true
+  [[ -n "${HTTP_DIR:-}" ]] && rm -rf "$HTTP_DIR"
+  [[ -n "${BAD_DIR:-}" ]] && rm -rf "$BAD_DIR"
+  [[ -n "${COOKIE_JAR:-}" ]] && rm -f "$COOKIE_JAR"
+}
+trap cleanup EXIT
+
+remote_ref_oid() {
+  local ref="$1"
+  dc exec -T musehub-server git --git-dir="/var/lib/musehub/git/${STORAGE_KEY}.git" rev-parse "$ref"
+}
 
 echo "=== compose git-ssh: wait published port ${MUSEHUB_GIT_SSH_PORT} ==="
 wait_published_port() {
@@ -54,15 +85,12 @@ dc exec -T musehub-git-ssh sh -c '
 '
 
 COOKIE_JAR=$(mktemp)
-cleanup() { rm -f "$COOKIE_JAR"; }
-trap cleanup EXIT
-
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
   "$BASE/api/v1/auth/login" | jq -e '.ok == true' >/dev/null
 
 KEY_DIR=$(mktemp -d)
-trap 'rm -rf "$KEY_DIR" "$COOKIE_JAR"' EXIT
+chmod 0700 "$KEY_DIR"
 ssh-keygen -t ed25519 -f "$KEY_DIR/id_ed25519" -N "" -q
 PUB=$(cat "$KEY_DIR/id_ed25519.pub")
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
@@ -70,45 +98,95 @@ curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' 
   "$BASE/api/v1/ssh-keys" | jq -e '.id' >/dev/null
 
 REPO_SLUG="compose-ssh-$(date +%s)"
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+REPO_JSON=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg s "$REPO_SLUG" '{slug:$s}')" \
-  "$BASE/api/v1/orgs/demo/repos" | jq -e '.slug' >/dev/null
+  "$BASE/api/v1/orgs/demo/repos")
+STORAGE_KEY=$(echo "$REPO_JSON" | jq -r .storage_key)
+REPO_ID=$(echo "$REPO_JSON" | jq -r .id)
+[[ -n "$STORAGE_KEY" && "$STORAGE_KEY" != null ]]
+[[ -n "$REPO_ID" && "$REPO_ID" != null ]]
 
 PAT_JSON=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d '{"name":"compose-git","scopes":["repo:read","repo:write"]}' \
+  -d "$(jq -n --arg id "$REPO_ID" '{name:"compose-git",org:"demo",scope_mode:"selected",scopes:["repo:read","repo:write"],repo_ids:[$id]}')" \
   "$BASE/api/v1/tokens")
 PAT=$(echo "$PAT_JSON" | jq -r .token)
+TOKEN_ID=$(echo "$PAT_JSON" | jq -r .id)
 [[ ${#PAT} -gt 10 ]]
 
+git_http_auth_sandbox_begin "$PAT"
+
 SSH_URL="ssh://git@127.0.0.1:${MUSEHUB_GIT_SSH_PORT}/demo/${REPO_SLUG}.git"
-HTTP_URL="${BASE}/git/demo/${REPO_SLUG}.git"
-ENC_PAT=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$PAT")
-HTTP_AUTH="http://admin:${ENC_PAT}@127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}/git/demo/${REPO_SLUG}.git"
+HTTP_URL="$(git_http_credential_free_url "http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}" demo "$REPO_SLUG")"
+
+export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
 
 GIT_DIR=$(mktemp -d)
-export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
-git clone "$SSH_URL" "$GIT_DIR"
+git_http_run "" clone "$SSH_URL" "$GIT_DIR"
 git -C "$GIT_DIR" config user.email ci@musehub.test
 git -C "$GIT_DIR" config user.name ci
-echo ssh-first >"$GIT_DIR/roundtrip.txt"
+
+MAIN_BEFORE=$(remote_ref_oid refs/heads/main)
+
+echo "=== compose git-ssh: protected main (direct / force / delete) ==="
+git -C "$GIT_DIR" checkout -B "$FEATURE_BRANCH"
+echo probe >"$GIT_DIR/probe.txt"
+git -C "$GIT_DIR" add probe.txt
+git -C "$GIT_DIR" commit -m probe-main-denial-test --no-gpg-sign
+
+if git -C "$GIT_DIR" push origin "HEAD:refs/heads/main" 2>/tmp/git-ssh-main-push.err; then
+  echo "direct main push must be rejected" >&2
+  exit 1
+fi
+grep -q "protected branch" "$(redact_git_output "$(cat /tmp/git-ssh-main-push.err)")" || true
+rm -f /tmp/git-ssh-main-push.err
+[[ "$(remote_ref_oid refs/heads/main)" == "$MAIN_BEFORE" ]]
+
+if git -C "$GIT_DIR" push --force origin "HEAD:refs/heads/main" 2>/tmp/git-ssh-force.err; then
+  echo "force main push must be rejected" >&2
+  exit 1
+fi
+rm -f /tmp/git-ssh-force.err
+[[ "$(remote_ref_oid refs/heads/main)" == "$MAIN_BEFORE" ]]
+
+if git -C "$GIT_DIR" push origin ":refs/heads/main" 2>/tmp/git-ssh-del.err; then
+  echo "delete main must be rejected" >&2
+  exit 1
+fi
+rm -f /tmp/git-ssh-del.err
+[[ "$(remote_ref_oid refs/heads/main)" == "$MAIN_BEFORE" ]]
+
+echo "=== compose git-ssh: SSH / HTTP alternation on ${FEATURE_BRANCH} ==="
+git -C "$GIT_DIR" checkout -B "$FEATURE_BRANCH"
+echo "ssh-1" >"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
-git -C "$GIT_DIR" commit -m ssh-first
-git -C "$GIT_DIR" push -u origin main
+git -C "$GIT_DIR" commit -m ssh-1 --no-gpg-sign
+git_http_run "$GIT_DIR" push -u origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+OID_SSH_1=$(git -C "$GIT_DIR" rev-parse HEAD)
+[[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_1" ]]
 
 HTTP_DIR=$(mktemp -d)
-git clone "$HTTP_AUTH" "$HTTP_DIR"
+git_http_run "" clone "$HTTP_URL" "$HTTP_DIR"
 git -C "$HTTP_DIR" config user.email ci@musehub.test
 git -C "$HTTP_DIR" config user.name ci
-echo http-second >>"$HTTP_DIR/roundtrip.txt"
+git -C "$HTTP_DIR" checkout "$FEATURE_BRANCH"
+echo "http-2" >>"$HTTP_DIR/roundtrip.txt"
 git -C "$HTTP_DIR" add roundtrip.txt
-git -C "$HTTP_DIR" commit -m http-second
-git -C "$HTTP_DIR" push
+git -C "$HTTP_DIR" commit -m http-2 --no-gpg-sign
+git_http_run "$HTTP_DIR" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
+[[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
+[[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
-git -C "$GIT_DIR" pull --rebase
-echo ssh-third >>"$GIT_DIR/roundtrip.txt"
+git -C "$GIT_DIR" fetch origin "$FEATURE_BRANCH"
+git -C "$GIT_DIR" checkout "$FEATURE_BRANCH"
+git -C "$GIT_DIR" merge --ff-only "origin/${FEATURE_BRANCH}"
+echo "ssh-3" >>"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
-git -C "$GIT_DIR" commit -m ssh-third
-git -C "$GIT_DIR" push
+git -C "$GIT_DIR" commit -m ssh-3 --no-gpg-sign
+git_http_run "$GIT_DIR" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+OID_SSH_3=$(git -C "$GIT_DIR" rev-parse HEAD)
+[[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_3" ]]
+[[ "$OID_SSH_3" != "$OID_HTTP_2" ]]
 
 dc exec -T musehub-git-ssh sh -c '
   ! grep -q "DATABASE_URL=" /usr/local/lib/musehub/musehub-git-login.sh

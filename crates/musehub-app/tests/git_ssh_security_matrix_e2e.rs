@@ -11,7 +11,9 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use common::git_ssh_fixture::git_ssh_fixture;
-use common::git_ssh_util::{git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as};
+use common::git_ssh_util::{
+    git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as, raw_ssh_with_sendenv,
+};
 
 fn commit_file(work: &std::path::Path, branch: &str, file: &str, contents: &[u8]) {
     Command::new("git")
@@ -114,6 +116,55 @@ async fn git_ssh_protected_main_push_force_delete_denied() {
         &["push", "origin", ":refs/heads/main"],
     );
     assert!(!del_main.status.success());
+}
+
+#[tokio::test]
+async fn git_ssh_sshd_config_restricts_client_sendenv() {
+    let f = git_ssh_fixture("sshdcfg").await;
+    let config_path = f.sshd.run_dir.join("sshd_config");
+    let body = std::fs::read_to_string(&config_path).expect("sshd_config");
+    assert!(body.contains("PermitUserEnvironment restrict"));
+    assert!(
+        !body.contains("PermitUserEnvironment yes"),
+        "client env must not be wide open"
+    );
+}
+
+#[tokio::test]
+async fn git_ssh_client_sendenv_cannot_replace_akc_key_id() {
+    let f = git_ssh_fixture("sshenv").await;
+    let work_dir = tempfile::tempdir().expect("work");
+    let work = work_dir.path();
+    let clone = git_ssh_cmd(
+        &f.priv_key,
+        f.sshd.port,
+        &["clone", &f.clone_url, work.to_str().unwrap()],
+    );
+    assert!(clone.status.success());
+    commit_file(work, "feature/env", "env.txt", b"x\n");
+    let fake_key = Uuid::new_v4();
+    let ssh_cmd = format!(
+        "ssh -o SendEnv=MUSEHUB_SSH_KEY_ID -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {} -p {}",
+        f.priv_key.display(),
+        f.sshd.port
+    );
+    let push = Command::new("git")
+        .current_dir(work)
+        .env("MUSEHUB_SSH_KEY_ID", fake_key.to_string())
+        .env("GIT_SSH_COMMAND", &ssh_cmd)
+        .args(["push", "origin", "HEAD:refs/heads/feature/env"])
+        .output()
+        .unwrap();
+    assert!(
+        push.status.success(),
+        "AKC-bound key id must win over client SendEnv: {}",
+        String::from_utf8_lossy(&push.stderr)
+    );
+    let evil = raw_ssh_with_sendenv(&f.priv_key, f.sshd.port, "MUSEHUB_CLIENT_EVIL", "1", "");
+    assert!(
+        evil.status.success(),
+        "benign session should stay up when client sends disallowed env vars"
+    );
 }
 
 #[tokio::test]
