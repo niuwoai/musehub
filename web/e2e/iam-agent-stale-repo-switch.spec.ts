@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  expectRepoSlugInSubnav,
   openRepoBySlug,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
@@ -58,12 +59,9 @@ const runReferenceAgentButton = (page: import('@playwright/test').Page) =>
   })
 
 async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page) {
-  await waitForDemoRepoNavHydrated(page)
   const { slug } = await createRepoViaUi(page)
   await openRepoBySlug(page, slug)
-  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
-    timeout: 15_000,
-  })
+  await expectRepoSlugInSubnav(page, slug)
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   const planAccepted = page.waitForResponse(
     (r) =>
@@ -111,10 +109,8 @@ test.describe('agent run start repo guard', () => {
     await runReferenceAgentButton(page).first().click()
     await paused.postSeen
 
-    await otherEntry.click()
-    await expect(page.getByRole('heading', { level: 2, name: otherSlug })).toBeVisible({
-      timeout: 15_000,
-    })
+    await openRepoBySlug(page, otherSlug)
+    await expectRepoSlugInSubnav(page, otherSlug)
     await expect(page.getByTestId('last-agent-run')).toHaveCount(0)
 
     paused.release()

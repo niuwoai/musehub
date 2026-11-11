@@ -8,7 +8,7 @@ import {
   STALE_PLAN_PREFIX,
   STALE_TRACE_BODY,
 } from './fixtures/stale-deployment-view'
-import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
+import { createRepoViaUi, openRepoDelivery } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -118,11 +118,8 @@ test.describe('deployment view session/repo epoch', () => {
     await page.getByTestId('load-deployment').click()
     await loadReq
 
-    const beforeB = await repoNavButtons(page).count()
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(repoNavButtons(page)).toHaveCount(beforeB + 1, { timeout: 15_000 })
-    const repoB = (await repoNavButtons(page).last().textContent())?.trim() ?? ''
-    await repoNavButtons(page).last().click()
+    const { slug: repoB } = await createRepoViaUi(page)
+    await openRepoDelivery(page, repoB)
     expect(repoB).not.toBe(repoA)
 
     const staleResponse = page.waitForResponse(

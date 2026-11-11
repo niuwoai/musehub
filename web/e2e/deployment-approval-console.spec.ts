@@ -4,7 +4,8 @@ import { randomUUID } from 'crypto'
 import type { Page } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
-import { goRepoDelivery, goRepoPulls } from './helpers/navigation'
+import { refreshRepoAndOpenDelivery } from './helpers/delivery'
+import { goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
   openRepoBySlug,
@@ -41,6 +42,9 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
   })
   await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
   await goRepoPulls(page)
+  await expect(page.getByTestId('pull-request-list')).toContainText(/open|PR for/i, {
+    timeout: 30_000,
+  })
   const prs = await page.request.get(`${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
     headers: { Cookie: adminCookie },
   })
@@ -94,8 +98,7 @@ async function deliveryThroughRelease(page: Page, adminCookie: string) {
     { headers: { Cookie: revCookie } },
   )
   expect(merge.ok()).toBeTruthy()
-  await goRepoDelivery(page)
-  await page.getByTestId('refresh-repo').click()
+  await refreshRepoAndOpenDelivery(page)
   await expect(page.getByTestId('delivery-panel')).toContainText(/main @/, { timeout: 30_000 })
   await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
   await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {

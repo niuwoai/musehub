@@ -226,12 +226,12 @@ test.describe('deployment history console', () => {
     })
 
     repoASlug = await loginAndCreateRepo(page)
-    const { repoEntry: repoBEntry } = await createRepoViaUi(page)
-    await repoNavButtonForSlug(page, repoASlug).click()
+    const { slug: repoBSlug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, repoASlug)
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toBeVisible({
       timeout: 15_000,
     })
-    await repoBEntry.click()
+    await openRepoDelivery(page, repoBSlug)
     await expect(page.getByTestId(`deployment-pick-${repoAOnlyId}`)).toHaveCount(0, {
       timeout: 10_000,
     })

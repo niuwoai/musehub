@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  expectRepoSlugInSubnav,
   expectResponseOk,
   openRepoBySlug,
   waitForDemoRepoNavHydrated,
@@ -62,9 +63,7 @@ async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page
   await waitForDemoRepoNavHydrated(page)
   const { slug } = await createRepoViaUi(page)
   await openRepoBySlug(page, slug)
-  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
-    timeout: 15_000,
-  })
+  await expectRepoSlugInSubnav(page, slug)
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   const planAccepted = page.waitForResponse(
     (r) =>

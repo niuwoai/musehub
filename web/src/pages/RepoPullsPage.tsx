@@ -21,27 +21,24 @@ export function RepoPullsPage() {
   return (
     <Panel data-testid="repo-pulls-page">
       <h2>{t('nav.repoPulls')}</h2>
-      {pulls.length > 0 ? (
-        <ul data-testid="pull-request-list">
-          {pulls.map((pr) => (
-            <li key={pr.id}>
-              #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} → {pr.target_branch}
-              {pr.state === 'open' ? (
-                <>
-                  <button type="button" onClick={() => void onInspectPrCi(pr)}>
-                    {t('app.prCiInspect')}
-                  </button>
-                  <button type="button" onClick={() => void onApproveAndMerge(pr)}>
-                    {t('app.mergeShortcut')}
-                  </button>
-                </>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>{t('repo.noPulls')}</p>
-      )}
+      <ul data-testid="pull-request-list">
+        {pulls.map((pr) => (
+          <li key={pr.id}>
+            #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} → {pr.target_branch}
+            {pr.state === 'open' ? (
+              <>
+                <button type="button" onClick={() => void onInspectPrCi(pr)}>
+                  {t('app.prCiInspect')}
+                </button>
+                <button type="button" onClick={() => void onApproveAndMerge(pr)}>
+                  {t('app.mergeShortcut')}
+                </button>
+              </>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {pulls.length === 0 ? <p>{t('repo.noPulls')}</p> : null}
       {prCiFailure && selectedPrNumber != null ? (
         <div data-testid="pr-ci-failure-panel">
           <h3>{t('app.prCiFailureTitle', { number: selectedPrNumber })}</h3>

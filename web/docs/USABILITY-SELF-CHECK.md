@@ -8,7 +8,7 @@
 |------|-------------------|------------------------|-------------|----------------------|
 | 安装 / migration / 启动 | `deploy/RUNBOOK.md`、`product-stack` CI | `/login` 深链；`session-boot` 恢复中不误踢回登录 | 需本地 Postgres + migrate 手工步骤 | Mac 上 README 一键脚本与 Compose 卷路径一致性（文档级） |
 | 登录 / 会话 | `session-routing.spec.ts`、`00-product-flow` | 未登录深链 → 登录后 `from` 回跳；刷新深链保留 | bootstrap 密码仅首次 | 浏览器后退栈未单独测（可用手动点验） |
-| 建仓库 | Playwright `createRepoViaUi` | 创建后进入 `/pulls` | 仍为 demo org | — |
+| 建仓库 | Playwright `createRepoViaUi` | 创建后进入 `/issues`（与列表点选一致） | 仍为 demo org | — |
 | Issue → 计划 → Agent | `00-product-flow` | `/issues` | reference agent | 多 Issue 时滚动（Phase 2） |
 | PR / CI / Agent 修复 | `delivery-flow`、`pr_agent_fix_*` | `/pulls`（创建 PR 后自动导航） | 依赖后端 job 状态 | PR# 深链未做 |
 | 流水线 / 部署 | `delivery-flow`、deployment/pipeline console specs | `/delivery` | compose-mock 文案 | 设计系统延后 Phase 2 |

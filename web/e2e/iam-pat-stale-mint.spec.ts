@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { goAccountTokens } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 import { STALE_MINT_FIXTURE_BODY, STALE_MINT_FIXTURE_TOKEN } from './fixtures/stale-mint-pat'
 
@@ -48,6 +49,7 @@ test.describe('PAT mint session epoch guard', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await goAccountTokens(page)
 
     const responseDone = page.waitForResponse(
       (r) => r.url().includes('/api/v1/tokens') && r.request().method() === 'POST',
@@ -75,6 +77,7 @@ test.describe('PAT mint session epoch guard', () => {
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await goAccountTokens(page)
     await expect(page.getByTestId('create-pat')).toBeEnabled()
 
     const patName = `after-stale-busy-${Date.now()}`

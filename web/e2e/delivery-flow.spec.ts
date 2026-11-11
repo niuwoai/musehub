@@ -1,7 +1,8 @@
 import { expect, request as playwrightRequest, test } from '@playwright/test'
 import { randomUUID } from 'crypto'
 
-import { goRepoDelivery, goRepoPulls } from './helpers/navigation'
+import { expectMergedPullOnPullsPage, refreshRepoAndOpenDelivery } from './helpers/delivery'
+import { goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
   openRepoBySlug,
@@ -72,6 +73,7 @@ test.describe('delivery chain browser flow', () => {
     await expect(lastRun).toContainText(/succeeded/i, { timeout: agentFinishWaitMs })
     await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
     await goRepoPulls(page)
+    await expect(page.getByTestId('pull-request-list')).toContainText(/open/i, { timeout: 30_000 })
 
     const loginApiCookie = async (handle: string, pass: string) => {
       const ctx = await playwrightRequest.newContext({ baseURL: apiBase })
@@ -143,12 +145,8 @@ test.describe('delivery chain browser flow', () => {
       )
       .toBe('merged')
 
-    await goRepoPulls(page)
-    await expect(page.getByTestId('pull-request-list')).toContainText(/merged/i, {
-      timeout: 30_000,
-    })
-    await goRepoDelivery(page)
-    await page.getByTestId('refresh-repo').click()
+    await expectMergedPullOnPullsPage(page)
+    await refreshRepoAndOpenDelivery(page)
     const deliveryPanel = page.getByTestId('delivery-panel')
     await expect(deliveryPanel).toContainText(/main @/, { timeout: 15_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()

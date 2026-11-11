@@ -27,6 +27,7 @@ test.describe('org members and PAT console', () => {
 
     const patName = `ui-pat-${Date.now()}`
     await goAccountTokens(page)
+    expect(await page.locator('body').innerText()).not.toMatch(/mhp_[a-zA-Z0-9]{24,}/)
     await page.getByTestId('pat-name').fill(patName)
     await page.getByTestId('create-pat').click()
     const minted = page.getByTestId('pat-minted-once')
@@ -52,6 +53,7 @@ test.describe('org members and PAT console', () => {
     const tokens = (await list.json()) as { id: string; name: string }[]
     const row = tokens.find((t) => t.name === patName)
     expect(row?.id).toBeTruthy()
+    await goAccountTokens(page)
     await page.getByTestId(`revoke-pat-${row!.id}`).click()
     await expect(page.getByTestId('pat-masked-list')).not.toContainText(patName)
 

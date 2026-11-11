@@ -749,7 +749,7 @@ function useWorkspaceState(): WorkspaceValue {
     const slug = `repo-${Date.now().toString(36)}`
     await createRepo(activeOrg, slug)
     await refreshRepos()
-    navigate(paths.repoPulls(activeOrg, slug))
+    navigate(paths.repoIssues(activeOrg, slug))
     await loadIssues(slug)
   }
 
