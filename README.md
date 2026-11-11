@@ -93,7 +93,7 @@ musehub/
 
 1. **PostgreSQL**（任选其一，需先可达）  
    - macOS Homebrew：`brew install postgresql@17 && brew services start postgresql@17` 后自建库/用户。  
-   - Docker（示例）：`docker run -d --name musehub-pg -e POSTGRES_USER=musehub -e POSTGRES_PASSWORD=musehub -e POSTGRES_DB=musehub_dev -p 5432:5432 postgres:17`
+   - Docker（示例）：`docker run -d --name musehub-pg -e POSTGRES_USER=musehub -e POSTGRES_PASSWORD=musehub -e POSTGRES_DB=musehub_dev -p 5432:5432 postgres:17`（`dev-local-stack.sh init` 在未设置 `DATABASE_URL` 时默认 `postgres://musehub:musehub@127.0.0.1:5432/musehub_dev`；CI 通过环境变量覆盖为 `musehub`。）
 
 2. **一键流程**（状态写在 `.local/dev-stack/`，**不**覆盖已有 `env`，**不**清库）：
 

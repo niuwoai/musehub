@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Negative cases: foreign pidfile must not be killed; start rejects foreign pid (needs DATABASE_URL).
+# Negative cases: foreign pidfile, forged epoch, start/stop via real script, vite-fail cleanup.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/dev-local-pid.sh
@@ -13,11 +13,24 @@ mkdir -p "$STATE/pids"
 SERVER_PID="$STATE/pids/server.pid"
 SERVER_MARKER="$STATE/pids/server.marker"
 
+port_free() {
+  local port=$1
+  if command -v ss >/dev/null 2>&1; then
+    ! ss -ltn 2>/dev/null | grep -q ":${port} "
+    return
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  return 1
+}
+
 SLEEP_PID=
 cleanup_neg() {
   kill "${SLEEP_PID:-}" 2>/dev/null || true
   if [[ -n "${MUSEHUB_DEV_STATE_DIR:-}" ]]; then
-    "$ROOT/scripts/dev-local-stack.sh" stop 2>/dev/null || true
+    MUSEHUB_DEV_STACK_FORCE_VITE_FAIL=0 "$ROOT/scripts/dev-local-stack.sh" stop 2>/dev/null || true
   fi
   rm -rf "$STATE"
 }
@@ -30,9 +43,15 @@ printf '%s\n' "$SLEEP_PID" >"$SERVER_PID"
 printf 'pid=%s\npattern=wrong\n' "$SLEEP_PID" >"$SERVER_MARKER"
 
 if dev_local_slot_stop "$SERVER_PID" "$SERVER_MARKER" "musehub-server" server 2>/dev/null; then
-  echo "verify_negative=fail expected stop refusal" >&2
+  echo "verify_negative=fail expected helper stop refusal" >&2
   exit 1
 fi
+set +e
+MUSEHUB_DEV_STATE_DIR="$STATE" "$ROOT/scripts/dev-local-stack.sh" stop 2>"$STATE/stop1.err"
+stop_code=$?
+set -e
+[[ "$stop_code" -ne 0 ]] || { echo "verify_negative=fail script stop should refuse foreign slot" >&2; exit 1; }
+grep -q 'pidfile_identity_mismatch' "$STATE/stop1.err"
 kill -0 "$SLEEP_PID" 2>/dev/null || { echo "verify_negative=fail sleep killed" >&2; exit 1; }
 [[ -f "$SERVER_PID" ]] || { echo "verify_negative=fail pidfile removed" >&2; exit 1; }
 
@@ -42,7 +61,7 @@ SLEEP_PID=
 sleep 300 &
 SLEEP_PID=$!
 printf '%s\n' "$SLEEP_PID" >"$SERVER_PID"
-printf 'pid=%s\npattern=musehub-server\n' "$SLEEP_PID" >"$SERVER_MARKER"
+printf 'pid=%s\npattern=musehub-server\nstarted_epoch=1\n' "$SLEEP_PID" >"$SERVER_MARKER"
 
 export MUSEHUB_DEV_STATE_DIR="$STATE"
 export DATABASE_URL
@@ -59,6 +78,42 @@ grep -qE 'pidfile_foreign_process|pidfile_identity_mismatch' "$STATE/start.err"
 kill "${SLEEP_PID:-}" 2>/dev/null || true
 SLEEP_PID=
 rm -f "$SERVER_PID" "$SERVER_MARKER"
-"$ROOT/scripts/dev-local-stack.sh" stop 2>/dev/null || true
+
+"$ROOT/scripts/dev-local-stack.sh" init >/dev/null
+"$ROOT/scripts/dev-local-stack.sh" start >/dev/null
+server_pid=$(tr -d '[:space:]' <"$SERVER_PID")
+kill -0 "$server_pid"
+cp "$SERVER_MARKER" "$STATE/marker.bak"
+grep -v '^started_epoch=' "$SERVER_MARKER" >"$STATE/marker.corrupt"
+printf 'started_epoch=1\n' >>"$STATE/marker.corrupt"
+mv "$STATE/marker.corrupt" "$SERVER_MARKER"
+set +e
+"$ROOT/scripts/dev-local-stack.sh" stop 2>"$STATE/stop2.err"
+stop_code=$?
+set -e
+[[ "$stop_code" -ne 0 ]] || { echo "verify_negative=fail forged epoch stop must fail" >&2; exit 1; }
+grep -q 'pidfile_identity_mismatch' "$STATE/stop2.err"
+kill -0 "$server_pid" || { echo "verify_negative=fail server died on forged stop" >&2; exit 1; }
+mv "$STATE/marker.bak" "$SERVER_MARKER"
+"$ROOT/scripts/dev-local-stack.sh" stop >/dev/null
+sleep 1
+port_free 8080 || { echo "verify_negative=fail port 8080 still busy" >&2; exit 1; }
+
+export MUSEHUB_DEV_STACK_FORCE_VITE_FAIL=1
+"$ROOT/scripts/dev-local-stack.sh" init >/dev/null 2>&1 || true
+set +e
+"$ROOT/scripts/dev-local-stack.sh" start 2>"$STATE/vitefail.err"
+vf_code=$?
+set -e
+[[ "$vf_code" -ne 0 ]] || { echo "verify_negative=fail forced vite fail hook" >&2; exit 1; }
+grep -q 'vite_start_forced_fail' "$STATE/vitefail.err"
+sleep 1
+port_free 8080 || { echo "verify_negative=fail server left on 8080 after vite fail" >&2; exit 1; }
+[[ ! -f "$SERVER_PID" ]] || ! kill -0 "$(tr -d '[:space:]' <"$SERVER_PID")" 2>/dev/null || {
+  echo "verify_negative=fail server pid still alive after vite fail" >&2
+  exit 1
+}
+
+unset MUSEHUB_DEV_STACK_FORCE_VITE_FAIL
 
 echo "verify_dev_local_stack_negative=ok"

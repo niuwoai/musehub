@@ -72,5 +72,25 @@ curl -sf http://127.0.0.1:5173/login | grep -q 'id="root"'
 sleep 1
 assert_stack_down
 
+STATE_ALT="/tmp/musehub-dev-stack-verify-alt-$$"
+export MUSEHUB_DEV_STATE_DIR="$STATE_ALT"
+export MUSEHUB_BIND="127.0.0.1:18080"
+export MUSEHUB_DEV_API_URL="http://127.0.0.1:18080"
+"$ROOT/scripts/dev-local-stack.sh" init
+set -a
+# shellcheck disable=SC1090
+source "$STATE_ALT/env"
+set +a
+[[ "${MUSEHUB_DEV_API_URL:-}" == "http://127.0.0.1:18080" ]]
+"$ROOT/scripts/dev-local-stack.sh" start
+curl -sf http://127.0.0.1:18080/readyz | jq -e '.ready == true' >/dev/null
+"$ROOT/scripts/dev-local-stack.sh" stop
+sleep 1
+port_free 18080 || { rm -rf "$STATE_ALT"; exit 1; }
+rm -rf "$STATE_ALT"
+
+export MUSEHUB_DEV_STATE_DIR="$STATE"
+unset MUSEHUB_BIND MUSEHUB_DEV_API_URL
+
 echo "verify_dev_local_stack=ok platform=$(uname -s) state_dir=$STATE"
 echo "verify_note=macOS_not_verified_on_this_runner"

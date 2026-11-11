@@ -24,8 +24,24 @@ VITE_MARKER="$PID_DIR/vite.marker"
 SERVER_LOG="$LOG_DIR/server.log"
 VITE_LOG="$LOG_DIR/vite.log"
 
-API_URL="${MUSEHUB_DEV_API_URL:-http://127.0.0.1:8080}"
 VITE_URL="${MUSEHUB_DEV_WEB_URL:-http://127.0.0.1:5173}"
+API_URL="${MUSEHUB_DEV_API_URL:-}"
+
+sync_urls_from_env() {
+  local bind=${MUSEHUB_BIND:-127.0.0.1:8080}
+  local host port
+  read -r host port < <(api_host_port "$bind")
+  if [[ -z "${MUSEHUB_DEV_API_URL:-}" ]]; then
+    API_URL="http://${host}:${port}"
+  else
+    API_URL="$MUSEHUB_DEV_API_URL"
+  fi
+  if [[ -z "${MUSEHUB_DEV_WEB_URL:-}" ]]; then
+    VITE_URL="http://127.0.0.1:5173"
+  else
+    VITE_URL="$MUSEHUB_DEV_WEB_URL"
+  fi
+}
 
 SERVER_CMD_PATTERN="musehub-server"
 VITE_CMD_PATTERN="vite"
@@ -116,6 +132,7 @@ load_env() {
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   set +a
+  sync_urls_from_env
 }
 
 write_env_if_missing() {
@@ -125,19 +142,25 @@ write_env_if_missing() {
     return 0
   fi
   local db_url session bootstrap_pw
-  db_url="${DATABASE_URL:-postgres://musehub:musehub@127.0.0.1:5432/musehub}"
+  db_url="${DATABASE_URL:-postgres://musehub:musehub@127.0.0.1:5432/musehub_dev}"
+  local bind="${MUSEHUB_BIND:-127.0.0.1:8080}"
+  local web_url="${MUSEHUB_DEV_WEB_URL:-http://127.0.0.1:5173}"
+  local api_host api_port
+  read -r api_host api_port < <(api_host_port "$bind")
+  local api_url="${MUSEHUB_DEV_API_URL:-http://${api_host}:${api_port}}"
   session="$(openssl rand -hex 32)"
   bootstrap_pw="$(openssl rand -base64 21 | tr -d '\n')"
 
   {
     echo '# MuseHub local dev stack (generated). chmod 600 — do not commit.'
     printf '%s=%q\n' DATABASE_URL "$db_url"
-    printf '%s=%q\n' MUSEHUB_BIND "127.0.0.1:8080"
+    printf '%s=%q\n' MUSEHUB_BIND "$bind"
+    printf '%s=%q\n' MUSEHUB_DEV_API_URL "$api_url"
     printf '%s=%q\n' MUSEHUB_GIT_ROOT "$GIT_DIR"
     printf '%s=%q\n' MUSEHUB_ARTIFACT_ROOT "$ARTIFACT_DIR"
     printf '%s=%q\n' MUSEHUB_SESSION_SECRET "$session"
     printf '%s=%q\n' MUSEHUB_DEV_BOOTSTRAP_PASSWORD_FILE "$SECRETS_DIR/bootstrap-admin.password"
-    printf '%s=%q\n' MUSEHUB_DEV_WEB_URL "$VITE_URL"
+    printf '%s=%q\n' MUSEHUB_DEV_WEB_URL "$web_url"
   } >"$ENV_FILE"
   chmod 600 "$ENV_FILE"
 
@@ -227,13 +250,14 @@ assert_slot_free_or_fail() {
     exit 1
   fi
   if [[ -f "$pidfile" ]]; then
-    local pid cmd
+    local pid
     pid=$(tr -d '[:space:]' <"$pidfile")
-    cmd=$(dev_local_process_cmdline "$pid" 2>/dev/null) || true
-    if kill -0 "$pid" 2>/dev/null && [[ "$cmd" != *"$pattern"* ]]; then
-      echo "dev_error=pidfile_foreign_process label=$label pid=$pid" >&2
-      echo "dev_hint=not_killing; remove $pidfile after verifying process" >&2
-      exit 1
+    if kill -0 "$pid" 2>/dev/null; then
+      if ! dev_local_slot_identity_ok "$pid" "$marker" "$pattern"; then
+        echo "dev_error=pidfile_foreign_process label=$label pid=$pid" >&2
+        echo "dev_hint=not_killing; remove $pidfile after verifying process" >&2
+        exit 1
+      fi
     fi
   fi
 }
@@ -248,14 +272,17 @@ cmd_init() {
   echo "dev_init=next ./scripts/dev-local-stack.sh start"
 }
 
+_dev_stack_start_on_exit() {
+  cleanup_start_partial
+}
+
 cmd_start() {
   require_tools
   load_env
   ensure_layout
   STARTED_SERVER=0
   STARTED_VITE=0
-  local start_ok=0
-  trap 'if [[ $start_ok -eq 0 ]]; then cleanup_start_partial; fi' EXIT
+  trap '_dev_stack_start_on_exit' EXIT
 
   local vite_host vite_port api_port _api_host
   read -r vite_host vite_port < <(vite_host_port "${MUSEHUB_DEV_WEB_URL:-$VITE_URL}")
@@ -289,11 +316,16 @@ cmd_start() {
     cd "$ROOT" && exec "$ROOT/target/debug/musehub-server" >>"$SERVER_LOG" 2>&1
   ) &
   server_pid=$!
-  dev_local_slot_claim "$SERVER_PID" "$SERVER_MARKER" "$server_pid" "$SERVER_CMD_PATTERN"
+  dev_local_slot_claim "$SERVER_PID" "$SERVER_MARKER" "$server_pid" "$SERVER_CMD_PATTERN" \
+    "$ROOT/target/debug/musehub-server"
   STARTED_SERVER=1
 
   if ! wait_readyz; then
-    cleanup_start_partial
+    exit 1
+  fi
+
+  if [[ "${MUSEHUB_DEV_STACK_FORCE_VITE_FAIL:-}" == "1" ]]; then
+    echo "dev_error=vite_start_forced_fail test_hook=1" >&2
     exit 1
   fi
 
@@ -307,11 +339,10 @@ cmd_start() {
       cd "$ROOT/web" && exec ./node_modules/.bin/vite --host "$vite_host" --port "$vite_port" >>"$VITE_LOG" 2>&1
     ) &
     vite_pid=$!
-    dev_local_slot_claim "$VITE_PID" "$VITE_MARKER" "$vite_pid" "$VITE_CMD_PATTERN"
+    dev_local_slot_claim "$VITE_PID" "$VITE_MARKER" "$vite_pid" "$VITE_CMD_PATTERN" "vite"
     STARTED_VITE=1
 
     if ! wait_vite_login "${MUSEHUB_DEV_WEB_URL:-$VITE_URL}"; then
-      cleanup_start_partial
       exit 1
     fi
   fi
@@ -319,7 +350,6 @@ cmd_start() {
   echo "dev_start=ui ${MUSEHUB_DEV_WEB_URL:-$VITE_URL}/login"
   echo "dev_start=api $API_URL/readyz"
   echo "dev_profile=demo mock_executors in_process (not production remote worker)"
-  start_ok=1
   trap - EXIT
 }
 
