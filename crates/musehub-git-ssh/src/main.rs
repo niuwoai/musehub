@@ -10,8 +10,9 @@ use musehub_app::git_ssh::{
 };
 use musehub_app::git_ssh_runtime::{
     default_git_ssh_run_dir, ensure_host_ed25519_key, ensure_shared_git_storage_root,
-    finalize_git_ssh_run_dir, git_ssh_runtime_group, prepare_git_ssh_run_dir,
-    validate_git_ssh_runtime_readable, write_git_ssh_runtime_env, write_secure_file,
+    finalize_git_ssh_run_dir, git_ssh_runtime_group, is_root_euid, prepare_git_ssh_run_dir,
+    run_privileged, validate_git_ssh_runtime_readable, write_git_ssh_runtime_env,
+    write_secure_file,
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
@@ -103,10 +104,20 @@ exec /usr/local/bin/musehub-git-ssh shell
     );
     let install_dir = Path::new("/usr/local/lib/musehub");
     if !install_dir.exists() {
-        let _ = Command::new("sudo")
-            .args(["install", "-d", "-m", "0755", "-o", "root", "-g", "root"])
-            .arg(install_dir)
-            .status();
+        if is_root_euid() {
+            std::fs::create_dir_all(install_dir).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(install_dir, std::fs::Permissions::from_mode(0o755))?;
+            }
+        } else {
+            run_privileged(
+                "install",
+                &["-d", "-m", "0755", "-o", "root", "-g", "root", install_dir.to_str().expect("dir")],
+            )
+            .map_err(|e| e.to_string())?;
+        }
     }
     let tmp = env::temp_dir().join("musehub-git-login.sh");
     std::fs::write(&tmp, script)?;
@@ -115,40 +126,47 @@ exec /usr/local/bin/musehub-git-ssh shell
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
     }
-    let status = Command::new("sudo")
-        .args([
+    if is_root_euid() {
+        if let Some(parent) = Path::new(GIT_LOGIN_SHELL).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(&tmp, GIT_LOGIN_SHELL).map_err(|e| e.to_string())?;
+    } else {
+        run_privileged(
             "install",
-            "-m",
-            "0755",
-            "-o",
-            "root",
-            "-g",
-            "root",
-            tmp.to_str().expect("tmp"),
-            GIT_LOGIN_SHELL,
-        ])
-        .status()?;
-    if !status.success() {
-        return Err("install git login shell".into());
+            &[
+                "-m",
+                "0755",
+                "-o",
+                "root",
+                "-g",
+                "root",
+                tmp.to_str().expect("tmp"),
+                GIT_LOGIN_SHELL,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
     }
-    let usermod = Command::new("sudo")
-        .args(["usermod", "-s", GIT_LOGIN_SHELL, GIT_SSH_LOGIN_USER])
-        .status()?;
-    if !usermod.success() {
-        return Err("usermod git login shell failed".into());
-    }
-    let shells = Command::new("sudo")
-        .args([
-            "bash",
-            "-c",
-            &format!(
-                "grep -qxF {shell} /etc/shells 2>/dev/null || echo {shell} >> /etc/shells",
-                shell = shell_single_quote(GIT_LOGIN_SHELL)
-            ),
-        ])
-        .status()?;
-    if !shells.success() {
-        return Err("append git login shell to /etc/shells failed".into());
+    run_privileged("usermod", &["-s", GIT_LOGIN_SHELL, GIT_SSH_LOGIN_USER])
+        .map_err(|e| e.to_string())?;
+    let shells_cmd = format!(
+        "grep -qxF {shell} /etc/shells 2>/dev/null || echo {shell} >> /etc/shells",
+        shell = shell_single_quote(GIT_LOGIN_SHELL)
+    );
+    if is_root_euid() {
+        if !std::fs::read_to_string("/etc/shells")
+            .map(|s| s.lines().any(|l| l == GIT_LOGIN_SHELL))
+            .unwrap_or(false)
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open("/etc/shells")
+                .map_err(|e| e.to_string())?;
+            writeln!(f, "{GIT_LOGIN_SHELL}").map_err(|e| e.to_string())?;
+        }
+    } else {
+        run_privileged("bash", &["-c", &shells_cmd]).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

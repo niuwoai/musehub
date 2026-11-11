@@ -259,6 +259,67 @@ fn restrict_file_mode(_path: &Path, _mode: u32) -> Result<(), AppError> {
 }
 
 #[cfg(unix)]
+pub fn is_root_euid() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn is_root_euid() -> bool {
+    false
+}
+
+/// Run a host command as root (direct when euid 0, else passwordless sudo).
+#[cfg(unix)]
+pub fn run_privileged(command: &str, args: &[&str]) -> Result<(), AppError> {
+    let run = |prog: &str, a: &[&str]| {
+        Command::new(prog)
+            .args(a)
+            .status()
+            .map_err(|e| AppError::Other(e.to_string()))
+    };
+    if run(command, args)?.success() {
+        return Ok(());
+    }
+    if is_root_euid() {
+        return Err(AppError::Other(format!("{command} failed")));
+    }
+    let status = Command::new("sudo")
+        .arg("-n")
+        .arg(command)
+        .args(args)
+        .status()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !status.success() {
+        return Err(AppError::Other(format!("sudo {command} failed")));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn run_privileged(_command: &str, _args: &[&str]) -> Result<(), AppError> {
+    Ok(())
+}
+
+/// Run `sh -c` as an unprivileged login user (su when root, else sudo -u).
+#[cfg(unix)]
+fn run_sh_as_user(user: &str, shell_cmd: &str) -> Result<bool, AppError> {
+    let ok = if is_root_euid() {
+        Command::new("runuser")
+            .args(["-u", user, "--", "sh", "-c", shell_cmd])
+            .status()
+            .map_err(|e| AppError::Other(e.to_string()))?
+            .success()
+    } else {
+        Command::new("sudo")
+            .args(["-u", user, "sh", "-c", shell_cmd])
+            .status()
+            .map_err(|e| AppError::Other(e.to_string()))?
+            .success()
+    };
+    Ok(ok)
+}
+
+#[cfg(unix)]
 pub fn chown_root_group(path: &Path, group: &str) -> Result<(), AppError> {
     let p = path
         .to_str()
@@ -354,31 +415,21 @@ pub fn validate_git_ssh_runtime_readable(run_dir: &Path) -> Result<(), AppError>
     let p = runtime
         .to_str()
         .ok_or_else(|| AppError::Other("utf8 path".into()))?;
-    let traverse = Command::new("sudo")
-        .args(["-u", "git", "test", "-x", run_dir.to_str().unwrap_or("")])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let git_user = git_ssh_runtime_group();
+    let run_dir_s = run_dir.to_str().unwrap_or("");
+    let traverse = run_sh_as_user(&git_user, &format!("test -x {run_dir_s}"))?;
     if !traverse {
         return Err(AppError::Validation(
             "git user must traverse git ssh run dir".into(),
         ));
     }
-    let readable = Command::new("sudo")
-        .args(["-u", "git", "test", "-r", p])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let readable = run_sh_as_user(&git_user, &format!("test -r {p}"))?;
     if !readable {
         return Err(AppError::Validation(
             "git user must read runtime.env under production run dir modes".into(),
         ));
     }
-    let writable = Command::new("sudo")
-        .args(["-u", "git", "test", "-w", p])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let writable = run_sh_as_user(&git_user, &format!("test -w {p}"))?;
     if writable {
         return Err(AppError::Validation(
             "git user must not write runtime.env".into(),
