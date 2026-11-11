@@ -484,6 +484,21 @@ pub async fn retry_pipeline_job(
             "only failed jobs may be retried".to_string(),
         ));
     }
+    let run_row = sqlx::query_as::<_, (String,)>(
+        "SELECT state FROM pipeline_runs WHERE id = $1 AND repo_id = $2 FOR UPDATE",
+    )
+    .bind(run_id)
+    .bind(repo_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((run_state,)) = run_row else {
+        return Err(AppError::NotFound);
+    };
+    if run_state != "failed" {
+        return Err(AppError::Conflict(
+            "pipeline run must be failed to retry a failed job".to_string(),
+        ));
+    }
     let job_up = sqlx::query(
         "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND repo_id = $2 AND job_key <> 'deploy' AND state = 'failed'",
@@ -497,7 +512,7 @@ pub async fn retry_pipeline_job(
             "only failed jobs may be retried".to_string(),
         ));
     }
-    sqlx::query(
+    let run_up = sqlx::query(
         "UPDATE pipeline_runs SET state = 'queued', error_code = NULL, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND repo_id = $2 AND state = 'failed'",
     )
@@ -505,6 +520,11 @@ pub async fn retry_pipeline_job(
     .bind(repo_id)
     .execute(&mut *tx)
     .await?;
+    if run_up.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "pipeline run state changed; job retry aborted".to_string(),
+        ));
+    }
     let spawn = if !crate::runner_api::pipeline_executor_remote() {
         let (storage_key, org_id): (Uuid, Uuid) =
             sqlx::query_as("SELECT storage_key, org_id FROM repositories WHERE id = $1")

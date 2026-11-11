@@ -135,7 +135,7 @@ test.describe('pipeline job retry console (route fixtures)', () => {
 
     await page.goto('/')
     await fillLoginForm(page, 'admin', password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
+    await page.getByRole('button', { name: /sign in|login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)

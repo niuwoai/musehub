@@ -176,6 +176,67 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
         .unwrap();
     assert_eq!(deploy_retry.status(), StatusCode::BAD_REQUEST);
 
+    let mismatch_run = Uuid::new_v4();
+    let mismatch_job = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
+         requested_by, run_attempt_id, run_kind, error_code, cancel_requested)
+         VALUES ($1,$2,$3,$4,'product-ci','cancel_requested',$5,$6,'release_build','build_failed',TRUE)",
+    )
+    .bind(mismatch_run)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(&oid)
+    .bind(admin_id)
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pipeline_jobs (id, org_id, repo_id, pipeline_run_id, job_key, state)
+         VALUES ($1,$2,$3,$4,'build','failed')",
+    )
+    .bind(mismatch_job)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(mismatch_run)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mismatch_retry = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/pipe-retry-http/pipeline-jobs/{mismatch_job}/retry"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(
+                    serde_json::json!({ "attempt_id": Uuid::new_v4().to_string() }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch_retry.status(), StatusCode::CONFLICT);
+    let mismatch_job_state: (String,) =
+        sqlx::query_as("SELECT state FROM pipeline_jobs WHERE id = $1")
+            .bind(mismatch_job)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(mismatch_job_state.0, "failed");
+    let mismatch_run_row: (String, Option<String>) =
+        sqlx::query_as("SELECT state, error_code FROM pipeline_runs WHERE id = $1")
+            .bind(mismatch_run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(mismatch_run_row.0, "cancel_requested");
+    assert_eq!(mismatch_run_row.1.as_deref(), Some("build_failed"));
+
     app.clone()
         .oneshot(
             Request::builder()
@@ -227,9 +288,7 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
 
     let attempt_a = Uuid::new_v4();
     let attempt_b = Uuid::new_v4();
-    let uri = format!(
-        "/api/v1/orgs/demo/repos/pipe-retry-race/pipeline-jobs/{race_job_id}/retry"
-    );
+    let uri = format!("/api/v1/orgs/demo/repos/pipe-retry-race/pipeline-jobs/{race_job_id}/retry");
     let body_a = serde_json::json!({ "attempt_id": attempt_a.to_string() }).to_string();
     let body_b = serde_json::json!({ "attempt_id": attempt_b.to_string() }).to_string();
 
