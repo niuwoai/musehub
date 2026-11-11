@@ -1,7 +1,10 @@
+import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
+import { DEFAULT_ORG, paths } from '../app/paths'
 
 export function RepoIssuesPage() {
+  const { org = DEFAULT_ORG } = useParams<{ org: string }>()
   const {
     t,
     selectedRepo,
@@ -31,8 +34,13 @@ export function RepoIssuesPage() {
       </button>
       <ul>
         {issues.map((issue) => (
-          <li key={issue.id}>
-            #{issue.number} {issue.title}{' '}
+          <li key={issue.id} data-testid={`issue-row-${issue.number}`}>
+            <Link
+              to={paths.repoIssue(org, selectedRepo, issue.number)}
+              data-testid={`issue-link-${issue.number}`}
+            >
+              #{issue.number} {issue.title}
+            </Link>{' '}
             <button type="button" onClick={() => void onAcceptPlan(issue)}>
               {t('app.acceptPlan')}
             </button>

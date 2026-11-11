@@ -37,9 +37,14 @@ pub use pipeline::{
     execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
 };
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
+mod discussion;
+mod git_browse;
+mod issues;
+mod list_cursor;
 mod pr;
 mod release;
 mod security;
+mod ssh_keys;
 mod trace;
 
 use std::path::PathBuf;
@@ -110,6 +115,11 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/tokens/{token_id}", delete(revoke_pat_handler))
         .route(
+            "/api/v1/ssh-keys",
+            get(ssh_keys::list_ssh_keys).post(ssh_keys::create_ssh_key),
+        )
+        .route("/api/v1/ssh-keys/{key_id}", delete(ssh_keys::revoke_ssh_key))
+        .route(
             "/api/v1/orgs/{org}/members",
             get(members::list_org_members).post(members::invite_member),
         )
@@ -172,7 +182,15 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues",
-            get(list_issues).post(create_issue),
+            get(issues::list_issues_page).post(create_issue),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}",
+            get(issues::get_issue).patch(issues::patch_issue),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/comments",
+            get(discussion::list_issue_comments).post(discussion::post_issue_comment),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/plans",
@@ -189,8 +207,36 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             get(pr::list_pull_requests).post(pr::create_pull_request),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}",
+            get(pr::get_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/diff",
+            get(pr::get_pull_request_diff),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/comments",
+            get(discussion::list_pr_comments).post(discussion::post_pr_comment),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/reviews",
             post(pr::review_pull_request),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/git/commits",
+            get(git_browse::list_commits),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/git/tree",
+            get(git_browse::list_tree),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/git/blob",
+            get(git_browse::read_blob),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/git/diff",
+            get(git_browse::compare_commits),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/merge",
@@ -554,31 +600,6 @@ struct IssueView {
     number: i64,
     title: String,
     state: String,
-}
-
-async fn list_issues(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path((org, repo)): Path<(String, String)>,
-) -> Result<Json<Vec<IssueView>>, AppError> {
-    let principal_id = require_session(&state.pool, &headers).await?;
-    let repo_id = repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let rows = sqlx::query_as::<_, (Uuid, i64, String, String)>(
-        "SELECT id, number, title, state FROM issues WHERE repo_id = $1 ORDER BY number",
-    )
-    .bind(repo_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|(id, number, title, issue_state)| IssueView {
-                id,
-                number,
-                title,
-                state: issue_state,
-            })
-            .collect(),
-    ))
 }
 
 #[derive(Deserialize)]

@@ -1,7 +1,10 @@
+import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
+import { DEFAULT_ORG, paths } from '../app/paths'
 
 export function RepoPullsPage() {
+  const { org = DEFAULT_ORG } = useParams<{ org: string }>()
   const {
     t,
     selectedRepo,
@@ -23,8 +26,11 @@ export function RepoPullsPage() {
       <h2>{t('nav.repoPulls')}</h2>
       <ul data-testid="pull-request-list">
         {pulls.map((pr) => (
-          <li key={pr.id}>
-            #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} → {pr.target_branch}
+          <li key={pr.id} data-testid={`pull-row-${pr.number}`}>
+            <Link to={paths.repoPull(org, selectedRepo, pr.number)} data-testid={`pull-link-${pr.number}`}>
+              #{pr.number} {pr.title}
+            </Link>{' '}
+            ({pr.state}) {pr.source_branch} → {pr.target_branch}
             {pr.state === 'open' ? (
               <>
                 <button type="button" onClick={() => void onInspectPrCi(pr)}>

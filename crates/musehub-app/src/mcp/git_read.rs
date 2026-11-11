@@ -288,3 +288,85 @@ pub fn git_pr_file_diff(
     let (items, _, has_more) = git_commit_compare(bare, base_oid, head_oid, path, limit)?;
     Ok((items, has_more))
 }
+
+pub fn git_log_commits(bare: &Path, ref_oid: &str, limit: i64) -> Result<(Vec<Value>, bool), AppError> {
+    validate_git_oid(ref_oid).map_err(AppError::Validation)?;
+    let output = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str()
+                .ok_or_else(|| AppError::Other("git path".into()))?,
+            "log",
+            ref_oid,
+            "--format=%H%x09%an%x09%s%x09%ct",
+            "-n",
+            &limit.to_string(),
+        ])
+        .output()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !output.status.success() {
+        return Err(AppError::NotFound);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
+    let has_more = lines.len() as i64 > limit;
+    let take = lines.len().min(limit as usize);
+    let mut items = Vec::new();
+    for line in lines.iter().take(take) {
+        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        items.push(json!({
+            "oid": parts[0],
+            "author": parts[1],
+            "summary": parts[2],
+            "committed_at_epoch": parts[3].parse::<i64>().unwrap_or(0),
+        }));
+    }
+    Ok((items, has_more))
+}
+
+pub fn git_unified_diff(
+    bare: &Path,
+    base_oid: &str,
+    head_oid: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Value, AppError> {
+    validate_git_oid(base_oid).map_err(AppError::Validation)?;
+    validate_git_oid(head_oid).map_err(AppError::Validation)?;
+    validate_repo_path(path)?;
+    let output = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str()
+                .ok_or_else(|| AppError::Other("git path".into()))?,
+            "diff",
+            &format!("{base_oid}..{head_oid}"),
+            "--",
+            path,
+        ])
+        .output()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !output.status.success() {
+        return Err(AppError::NotFound);
+    }
+    let bytes = &output.stdout;
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated {
+        &bytes[..max_bytes]
+    } else {
+        bytes
+    };
+    let text = String::from_utf8_lossy(slice);
+    let is_binary = bytes.iter().take(8192).any(|&b| b == 0);
+    Ok(json!({
+        "path": path,
+        "base_oid": base_oid,
+        "head_oid": head_oid,
+        "binary": is_binary,
+        "unified": if is_binary { Value::Null } else { json!(text) },
+        "truncated": truncated,
+    }))
+}

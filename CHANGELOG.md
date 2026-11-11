@@ -11,6 +11,8 @@
 
 ### Added
 
+- **S1 协作切片（Web + REST）**：仓库 **Code** 浏览（提交/树/文本 blob @ commit）；Issue **详情**、标签/负责人、讨论与游标分页列表；PR **`/pulls/:number` 深链**、diff 文件列表、审查/讨论（`pr_revision_id` 锚点，sync 后标记 **outdated**）；账户 **SSH 公钥**增删（**不含**产品级 Git-over-SSH 守护进程）。
+- `s1_collaboration_http_e2e`、`web/e2e/s1-collaboration.spec.ts`。
 - 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
 - `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。
 - GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。

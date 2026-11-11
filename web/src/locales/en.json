@@ -70,6 +70,7 @@
     "accountSecurity": "Account security",
     "accountTokens": "Personal access tokens",
     "repoIssues": "Issues",
+    "repoCode": "Code",
     "repoPulls": "Pull requests",
     "repoDelivery": "Delivery",
     "repoSettings": "Repository settings"

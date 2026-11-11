@@ -70,6 +70,7 @@
     "accountSecurity": "账号安全",
     "accountTokens": "个人访问令牌",
     "repoIssues": "Issue",
+    "repoCode": "代码",
     "repoPulls": "Pull Request",
     "repoDelivery": "交付",
     "repoSettings": "仓库设置"

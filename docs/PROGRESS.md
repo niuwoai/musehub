@@ -30,6 +30,17 @@
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
 | IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
 
+## S1 协作（本轮 `cursor/v1-collab-git-pr-issues-5f97`）
+
+| ID | 状态 | 说明 |
+|----|------|------|
+| GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff` + 控制台 **Code** 页；**非** MCP 替身；大文件/二进制限渲染 |
+| ISS-01 | `[~]` | REST 游标列表/筛选、PATCH 标签/负责人/关闭原因、Issue 讨论；控制台详情路由 |
+| PR-01 | `[~]` | `GET` PR/diff、深链、`/comments` + sync 后 outdated；作者 UI 不可自批（API 仍拒绝） |
+| IAM-02 SSH | `[~]` | `/api/v1/ssh-keys` + 账户安全页；**GIT-02 SSH transport 未接线**（探针≠产品） |
+
+> CI 绿 **≠** `01-product-requirements.md` §8 生产验收。
+
 ## 首版缺口（源码 + 实测核查，诚实列表）
 
 以下项在 README/01 首版叙事中常被提及，但当前仓库**未**达到可给真实租户用的完备度；按阻碍真实使用者排序。

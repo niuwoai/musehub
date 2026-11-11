@@ -546,14 +546,16 @@ pub async fn sync_pull_request(
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let head_oid = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     let base_oid = git_rev_parse(&bare, &format!("refs/heads/{target_branch}"))?;
-    sqlx::query(
-        "UPDATE pull_requests SET head_oid = $2, base_oid = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    let new_row: (i64,) = sqlx::query_as(
+        "UPDATE pull_requests SET head_oid = $2, base_oid = $3, row_version = row_version + 1,
+         updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING row_version",
     )
     .bind(pr_id)
     .bind(&head_oid)
     .bind(&base_oid)
-    .execute(&state.pool)
+    .fetch_one(&state.pool)
     .await?;
+    crate::discussion::mark_pr_comments_outdated(&state.pool, pr_id, new_row.0).await;
     insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
     let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT title, issue_id FROM pull_requests WHERE id = $1",
@@ -1159,4 +1161,126 @@ fn merge_with_cas(
         }
     }
     Ok(new_tip)
+}
+
+#[derive(Serialize)]
+pub struct PullRequestDetail {
+    #[serde(flatten)]
+    pub view: PullRequestView,
+    pub row_version: i64,
+    pub author_handle: String,
+    pub base_oid: String,
+    pub head_oid: String,
+}
+
+pub async fn get_pull_request(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, number)): AxumPath<(String, String, i64)>,
+) -> Result<Json<PullRequestDetail>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<Uuid>,
+            i64,
+            Uuid,
+        ),
+    >(
+        "SELECT pr.id, pr.number, pr.title, pr.source_branch, pr.target_branch, pr.state,
+                pr.head_oid, pr.base_oid, pr.issue_id, pr.row_version, pr.author_id
+         FROM pull_requests pr WHERE pr.repo_id = $1 AND pr.number = $2",
+    )
+    .bind(repo_id)
+    .bind(number)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((
+        id,
+        num,
+        title,
+        source_branch,
+        target_branch,
+        pr_state,
+        head_oid,
+        base_oid,
+        issue_id,
+        row_version,
+        author_id,
+    )) = row
+    else {
+        return Err(AppError::NotFound);
+    };
+    let author: (String,) =
+        sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
+            .bind(author_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let head = head_oid.unwrap_or_default();
+    let base = base_oid.unwrap_or_default();
+    Ok(Json(PullRequestDetail {
+        view: PullRequestView {
+            id,
+            number: num,
+            title,
+            source_branch,
+            target_branch,
+            state: pr_state,
+            head_oid: Some(head.clone()),
+            base_oid: Some(base.clone()),
+            issue_id,
+        },
+        row_version,
+        author_handle: author.0,
+        base_oid: base,
+        head_oid: head,
+    }))
+}
+
+pub async fn get_pull_request_diff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, number)): AxumPath<(String, String, i64)>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, _, storage_key) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT base_oid, head_oid FROM pull_requests WHERE repo_id = $1 AND number = $2",
+    )
+    .bind(repo_id)
+    .bind(number)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((base_oid, head_oid)) = row else {
+        return Err(AppError::NotFound);
+    };
+    let base = base_oid.ok_or(AppError::Validation("missing base_oid".into()))?;
+    let head = head_oid.ok_or(AppError::Validation("missing head_oid".into()))?;
+    let bare = bare_repo_path(&state.git_root, &storage_key);
+    let path = params.get("path").map(|s| s.as_str());
+    if let Some(p) = path {
+        let diff = crate::mcp::git_read::git_unified_diff(&bare, &base, &head, p, 128 * 1024)?;
+        return Ok(Json(diff));
+    }
+    let (items, summary, has_more) =
+        crate::mcp::git_read::git_commit_compare(&bare, &base, &head, None, 200)?;
+    Ok(Json(json!({
+        "base_oid": base,
+        "head_oid": head,
+        "summary": summary,
+        "files": items,
+        "has_more": has_more,
+    })))
 }
