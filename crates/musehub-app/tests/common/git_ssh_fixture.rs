@@ -73,22 +73,41 @@ pub async fn git_ssh_fixture(repo_prefix: &str) -> GitSshFixture {
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .expect("key id");
+    #[cfg(unix)]
+    {
+        // `git` (transport) and the test runner (API repo create) both need bare repo RW.
+        let _ = std::process::Command::new("sudo")
+            .args(["chmod", "-R", "a+rwX", git_root.to_str().expect("git root")])
+            .status();
+    }
     let sshd = TestGitSshd::start(&git_root, &database_url, &bin);
     let fp_row: (String,) = sqlx::query_as("SELECT fingerprint FROM ssh_keys WHERE id = $1")
         .bind(key_id)
         .fetch_one(&pool)
         .await
         .expect("key fp");
-    let akc_bin = super::git_ssh_sshd::install_root_owned_git_ssh_bin(&bin);
-    let akc_ok = std::process::Command::new(&akc_bin)
-        .args(["authorized-keys", "git", "probe", "ssh-ed25519", &fp_row.0])
-        .env("DATABASE_URL", &database_url)
+    let _ = super::git_ssh_sshd::install_root_owned_git_ssh_bin(&bin);
+    let pk_parts: Vec<&str> = pub_key.split_whitespace().collect();
+    let akc_wrap = sshd.run_dir.join("akc-wrap.sh");
+    let akc_ok = std::process::Command::new("sudo")
+        .args([
+            akc_wrap.to_str().expect("akc wrap"),
+            "git",
+            pk_parts[1],
+            pk_parts[0],
+            &fp_row.0,
+        ])
         .output()
         .expect("akc preflight");
     assert!(
         akc_ok.status.success(),
         "akc preflight failed: {}",
         String::from_utf8_lossy(&akc_ok.stderr)
+    );
+    let akc_line = String::from_utf8_lossy(&akc_ok.stdout).trim().to_string();
+    assert!(
+        akc_line.contains("environment=\"MUSEHUB_SSH_KEY_ID=") && akc_line.contains("ssh-ed25519 "),
+        "AKC line missing key-bound gateway env: {akc_line}"
     );
     let clone_url = format!("ssh://git@127.0.0.1:{}/demo/{}.git", sshd.port, repo);
     GitSshFixture {

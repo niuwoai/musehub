@@ -34,8 +34,12 @@ if command -v sudo >/dev/null; then
 fi
 if ! id git >/dev/null 2>&1; then
   if command -v useradd >/dev/null; then
-  sudo useradd -r -M -s /usr/sbin/nologin git 2>/dev/null || true
+  sudo useradd -r -M -s /bin/false git 2>/dev/null || true
   fi
+fi
+if id git >/dev/null 2>&1 && command -v sudo >/dev/null; then
+  sudo passwd -d git 2>/dev/null || true
+  sudo usermod -s /bin/false git 2>/dev/null || true
 fi
 if ! test -x /usr/sbin/sshd && ! command -v sshd >/dev/null 2>&1; then
   echo "git_ssh=fail openssh-server (sshd) is required for product acceptance (install in CI setup)" >&2

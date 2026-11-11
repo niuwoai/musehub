@@ -40,8 +40,30 @@ pub struct ParsedGitSshCommand {
 }
 
 /// Parses OpenSSH `SSH_ORIGINAL_COMMAND` for MuseHub logical paths `org/repo[.git]`.
-pub fn parse_ssh_original_command(raw: &str) -> Result<ParsedGitSshCommand, AppError> {
+fn extract_forced_git_command(inner: &str, cmd: &str) -> Option<String> {
+    let needle = format!("{cmd} ");
+    let start = inner.find(&needle)?;
+    let rest = &inner[start..];
+    let open = rest.find('\'')?;
+    let path = rest.get(open + 1..)?;
+    let close = path.find('\'')?;
+    Some(format!("{cmd} '{}'", &path[..close]))
+}
+
+/// OpenSSH often passes `-c 'git-upload-pack …'` as the original command for custom login shells.
+pub fn normalize_ssh_original_command(raw: &str) -> String {
     let raw = raw.trim();
+    let inner = raw.strip_prefix("-c ").unwrap_or(raw).trim();
+    for cmd in ALLOWED_GIT_COMMANDS {
+        if let Some(extracted) = extract_forced_git_command(inner, cmd) {
+            return extracted;
+        }
+    }
+    inner.trim_matches('\'').to_string()
+}
+
+pub fn parse_ssh_original_command(raw: &str) -> Result<ParsedGitSshCommand, AppError> {
+    let raw = normalize_ssh_original_command(raw).trim().to_string();
     if raw.is_empty() {
         return Err(AppError::Validation("empty ssh command".into()));
     }
@@ -211,8 +233,9 @@ pub fn format_authorized_keys_line(
         return Err(AppError::Validation("invalid stored ssh public key".into()));
     }
     let gateway_bin = gateway_bin.replace('"', "");
+    let _gateway_bin = gateway_bin;
     Ok(format!(
-        "environment=\"MUSEHUB_SSH_KEY_ID={key_id}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding,command=\"{gateway_bin} gateway\" {key_material}",
+        "environment=\"MUSEHUB_SSH_KEY_ID={key_id}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding {key_material}",
         key_id = auth.key_id,
     ))
 }
@@ -263,6 +286,9 @@ pub async fn run_ssh_gateway(
 
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let mut child = Command::new("git");
+    child
+        .arg("-c")
+        .arg(format!("safe.directory={}", bare.display()));
     child.arg(service).arg(bare);
     child.stdin(Stdio::inherit());
     child.stdout(Stdio::inherit());
@@ -315,6 +341,7 @@ ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid}
 {env_lines}PermitRootLogin no
+PermitUserEnvironment yes
 AllowUsers {login_user}
 AuthorizedKeysFile none
 AuthorizedKeysCommand {akc_cmd} %u %k %t %f
@@ -359,6 +386,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_openssh_c_wrapper() {
+        let n = normalize_ssh_original_command("-c 'git-upload-pack 'demo/app.git''");
+        assert_eq!(n, "git-upload-pack 'demo/app.git'");
+    }
+
+    #[test]
     fn parse_upload_pack_logical_path() {
         let p = parse_ssh_original_command("git-upload-pack 'demo/app.git'").unwrap();
         assert_eq!(p.service, GitSshService::UploadPack);
@@ -381,7 +414,7 @@ mod tests {
             public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXd1mIaYHo4ZxmswgaeWTij03jgeXse1S6HqIvQ1jrs test@musehub".into(),
         };
         let line = format_authorized_keys_line(&auth, "/opt/bin/musehub-git-ssh").unwrap();
-        assert!(line.contains(&format!("MUSEHUB_SSH_KEY_ID={}", auth.key_id)));
+        assert!(line.contains(&format!("environment=\"MUSEHUB_SSH_KEY_ID={}", auth.key_id)));
         assert!(!line.contains("MUSEHUB_SSH_PRINCIPAL_ID"));
         assert_eq!(line.matches('\n').count(), 0);
     }

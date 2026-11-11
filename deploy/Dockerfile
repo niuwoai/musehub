@@ -102,7 +102,8 @@ FROM debian:${DEBIAN_VERSION} AS git-ssh-runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssh-server git ca-certificates tini \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd -r -u 997 -M -s /usr/sbin/nologin git \
+  && useradd -r -u 997 -M -s /bin/false git \
+  && passwd -d git \
   && useradd -r -u 10001 -d /var/lib/musehub musehub \
   && mkdir -p /var/lib/musehub/git /var/lib/musehub/git-ssh /run/sshd \
   && chown musehub:musehub /var/lib/musehub/git-ssh \

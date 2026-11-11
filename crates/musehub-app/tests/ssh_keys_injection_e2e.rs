@@ -73,7 +73,8 @@ async fn akc_line_never_contains_extra_authorized_keys_record() {
     assert!(!line.contains('\n'));
     assert!(!line.contains('\r'));
     assert_eq!(line.matches("ssh-ed25519 ").count(), 1);
-    assert!(line.contains("command=\""));
+    assert!(line.contains("environment=\"MUSEHUB_SSH_KEY_ID="));
+    assert!(!line.contains("command=\""));
 }
 
 #[tokio::test]

@@ -28,10 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("help");
     match sub {
         "authorized-keys" => authorized_keys(&args[1..]).await,
-        "gateway" => gateway().await,
+        "gateway" | "shell" => gateway().await,
         "serve" => serve(args.get(1).map(String::as_str)).await,
         _ => {
-            eprintln!("usage: musehub-git-ssh {{authorized-keys|gateway|serve}}");
+            eprintln!("usage: musehub-git-ssh {{authorized-keys|gateway|shell|serve}}");
             std::process::exit(2);
         }
     }
@@ -60,6 +60,85 @@ fn gateway_bin() -> PathBuf {
 
 fn git_ssh_akc_user() -> String {
     env::var("MUSEHUB_GIT_SSH_AKC_USER").unwrap_or_else(|_| GIT_SSH_LOGIN_USER.to_string())
+}
+
+const GIT_LOGIN_SHELL: &str = "/usr/local/lib/musehub/musehub-git-login.sh";
+
+fn install_git_login_shell(
+    exe: &Path,
+    db_url: &str,
+    git_root: &str,
+    gateway: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let script = format!(
+        "#!/bin/sh\nif [ -z \"${{SSH_ORIGINAL_COMMAND:-}}\" ] && [ \"$#\" -ge 2 ]; then\n  export SSH_ORIGINAL_COMMAND=\"$1 '$2'\"\nfi\nexport DATABASE_URL={db}\nexport MUSEHUB_GIT_ROOT={git}\nexport MUSEHUB_GIT_SSH_GATEWAY_BIN={gw}\nexec {exe} shell\n",
+        db = shell_single_quote(db_url),
+        git = shell_single_quote(git_root),
+        gw = shell_single_quote(gateway),
+        exe = shell_single_quote(&exe.to_string_lossy()),
+    );
+    let install_dir = Path::new("/usr/local/lib/musehub");
+    if !install_dir.exists() {
+        let _ = Command::new("sudo")
+            .args(["install", "-d", "-m", "0755", "-o", "root", "-g", "root"])
+            .arg(install_dir)
+            .status();
+    }
+    let tmp = env::temp_dir().join("musehub-git-login.sh");
+    std::fs::write(&tmp, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let status = Command::new("sudo")
+        .args([
+            "install",
+            "-m",
+            "0755",
+            "-o",
+            "root",
+            "-g",
+            "root",
+            tmp.to_str().expect("tmp"),
+            GIT_LOGIN_SHELL,
+        ])
+        .status()?;
+    if !status.success() {
+        return Err("install git login shell".into());
+    }
+    let _ = Command::new("sudo")
+        .args(["usermod", "-s", GIT_LOGIN_SHELL, GIT_SSH_LOGIN_USER])
+        .status();
+    let _ = Command::new("sudo")
+        .args([
+            "bash",
+            "-c",
+            &format!(
+                "grep -qxF {shell} /etc/shells 2>/dev/null || echo {shell} >> /etc/shells",
+                shell = shell_single_quote(GIT_LOGIN_SHELL)
+            ),
+        ])
+        .status();
+    Ok(())
+}
+
+#[cfg(unix)]
+fn chown_root_if_possible(path: &Path) -> bool {
+    if std::env::var("MUSEHUB_GIT_SSH_SUDO_SSHD").ok().as_deref() == Some("1") {
+        return Command::new("sudo")
+            .args(["chown", "root:root", path.to_str().unwrap_or("")])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    // In container/systemd deployments the serve process is root; chown is implicit.
+    false
+}
+
+#[cfg(not(unix))]
+fn chown_root_if_possible(_path: &Path) -> bool {
+    false
 }
 
 async fn pool() -> Result<sqlx::PgPool, Box<dyn std::error::Error + Send + Sync>> {
@@ -146,6 +225,7 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     let gateway_s = gateway.to_str().unwrap_or("musehub-git-ssh");
     let exe_s = exe.to_str().unwrap_or("musehub-git-ssh");
     let akc_user = git_ssh_akc_user();
+    install_git_login_shell(&exe, &db_url, git_root_s, gateway_s)?;
     let akc_wrap = run_dir.join("akc-wrap.sh");
     let akc_script = format!(
         "#!/bin/sh\nexport DATABASE_URL={db}\nexport MUSEHUB_GIT_ROOT={git}\nexport MUSEHUB_GIT_SSH_GATEWAY_BIN={gw}\nexec {exe} authorized-keys \"$@\"\n",
@@ -158,12 +238,10 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&akc_wrap, std::fs::Permissions::from_mode(0o700))?;
-        if std::env::var("MUSEHUB_GIT_SSH_SUDO_SSHD").ok().as_deref() == Some("1") {
-            let _ = Command::new("sudo")
-                .args(["chown", "root:root", akc_wrap.to_str().expect("wrap")])
-                .status();
-        }
+        // OpenSSH requires root ownership and no group/other write; the AKC identity
+        // (`AuthorizedKeysCommandUser`, default `git`) must be able to execute the script.
+        std::fs::set_permissions(&akc_wrap, std::fs::Permissions::from_mode(0o755))?;
+        let _ = chown_root_if_possible(&akc_wrap);
     }
     let setenv: Vec<(&str, &str)> = vec![
         ("DATABASE_URL", &db_url),

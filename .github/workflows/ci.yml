@@ -57,7 +57,9 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
           sudo apt-get install -y -qq openssh-server git
-          id git >/dev/null 2>&1 || sudo useradd -r -M -s /usr/sbin/nologin git
+          id git >/dev/null 2>&1 || sudo useradd -r -M -s /bin/false git
+          sudo passwd -d git 2>/dev/null || true
+          sudo usermod -s /bin/false git 2>/dev/null || true
           sudo install -d -m 755 /run/sshd
           cargo build -p musehub-git-ssh -q && sudo install -m 0755 target/debug/musehub-git-ssh /usr/local/bin/musehub-git-ssh
       - name: build agent adapter binaries
