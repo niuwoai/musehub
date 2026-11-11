@@ -357,7 +357,6 @@ GatewayPorts no
 AllowAgentForwarding no
 PermitUserRC no
 UsePAM no
-UsePrivilegeSeparation no
 LogLevel {log_level}
 Subsystem sftp /bin/false
 "#,

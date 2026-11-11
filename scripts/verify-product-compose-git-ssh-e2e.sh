@@ -22,14 +22,21 @@ else
   dc() { docker compose -p "$COMPOSE_PROJECT_NAME" "$@"; }
 fi
 
-echo "=== compose git-ssh: wait listen 2222 ==="
+echo "=== compose git-ssh: wait published port ${MUSEHUB_GIT_SSH_PORT} ==="
+wait_published_port() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -tln 2>/dev/null | grep -qE ":${MUSEHUB_GIT_SSH_PORT}([[:space:]]|$)"
+    return
+  fi
+  (echo >/dev/tcp/127.0.0.1/"${MUSEHUB_GIT_SSH_PORT}") 2>/dev/null
+}
 for _ in $(seq 1 120); do
-  if dc exec -T musehub-git-ssh sh -c 'ss -tln | grep -q ":2222 "' 2>/dev/null; then
+  if wait_published_port; then
     break
   fi
   sleep 2
 done
-dc exec -T musehub-git-ssh sh -c 'ss -tln | grep -q ":2222 "' || {
+wait_published_port || {
   dc logs musehub-git-ssh --tail=80 >&2 || true
   exit 1
 }

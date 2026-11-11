@@ -114,7 +114,16 @@ exec /usr/local/bin/musehub-git-ssh shell
         } else {
             run_privileged(
                 "install",
-                &["-d", "-m", "0755", "-o", "root", "-g", "root", install_dir.to_str().expect("dir")],
+                &[
+                    "-d",
+                    "-m",
+                    "0755",
+                    "-o",
+                    "root",
+                    "-g",
+                    "root",
+                    install_dir.to_str().expect("dir"),
+                ],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -325,6 +334,14 @@ exec /usr/local/bin/musehub-git-ssh authorized-keys "$@"
         .into_iter()
         .find(|p| p.exists())
         .unwrap_or_else(|| PathBuf::from("sshd"));
+    let test = Command::new(&sshd)
+        .arg("-t")
+        .arg("-f")
+        .arg(&config_path)
+        .status()?;
+    if !test.success() {
+        return Err("sshd config test failed".into());
+    }
     let mut child = if std::env::var("MUSEHUB_GIT_SSH_SUDO_SSHD").ok().as_deref() == Some("1") {
         let mut c = Command::new("sudo");
         c.arg("-n").arg(&sshd);
