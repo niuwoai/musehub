@@ -704,8 +704,9 @@ export default function App() {
   }
 
   async function pollRun(runId: string, pollEpoch: number) {
-    // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
-    for (let i = 0; i < 360; i++) {
+    const remoteAgent = runnerCaps?.agent_executor === 'remote'
+    const maxIter = remoteAgent ? 600 : 360
+    for (let i = 0; i < maxIter; i++) {
       if (!agentRunPollEpochActive(pollEpoch)) {
         return null
       }
