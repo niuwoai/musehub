@@ -237,6 +237,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(pipeline::retry_pipeline_job_http),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-jobs/{job_id}/logs",
+            get(pipeline::get_pipeline_job_logs),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/releases",
             post(release::create_release),
         )

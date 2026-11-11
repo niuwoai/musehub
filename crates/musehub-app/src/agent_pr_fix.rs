@@ -14,7 +14,6 @@ use crate::agent_adapter;
 use crate::agent_supervisor;
 use crate::error::AppError;
 use crate::git_http::bare_repo_path;
-use crate::pipeline::PipelineJobView;
 use crate::pr::{self, DEFAULT_REPO_CHECK};
 use crate::runner_api;
 use crate::security::{validate_git_oid, validate_pr_agent_fix_work_branch};
@@ -29,10 +28,27 @@ pub fn agent_fix_max_rounds() -> i64 {
         .unwrap_or(3)
 }
 
+const CHECK_LOG_LOCATION_NOTE: &str =
+    "repository check runs store state only; see pipeline job logs when a validation run exists";
+
 #[derive(Serialize, Clone)]
 pub struct PrCheckFailureView {
     pub check_name: String,
     pub state: String,
+    pub log_location_note: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PrCiFailedJobView {
+    pub id: Uuid,
+    pub pipeline_run_id: Uuid,
+    pub job_key: String,
+    pub state: String,
+    pub run_attempt_id: Uuid,
+    /// Relative to `/api/v1/orgs/{org}/repos/{repo}/`.
+    pub log_api_path: String,
+    pub log_has_chunks: bool,
+    pub log_excerpt: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -43,9 +59,10 @@ pub struct PrCiFailureView {
     pub issue_id: Option<Uuid>,
     pub checks_failed: Vec<PrCheckFailureView>,
     pub pipeline_run_id: Option<Uuid>,
+    pub pipeline_run_attempt_id: Option<Uuid>,
     pub pipeline_state: Option<String>,
     pub pipeline_error_code: Option<String>,
-    pub failed_jobs: Vec<PipelineJobView>,
+    pub failed_jobs: Vec<PrCiFailedJobView>,
     pub fix_rounds_used: i64,
     pub fix_rounds_max: i64,
     pub agent_fix_allowed: bool,
@@ -130,6 +147,39 @@ fn verify_pr_head_at_branch(
     Ok(())
 }
 
+async fn pipeline_job_log_hint(
+    pool: &sqlx::PgPool,
+    repo_id: Uuid,
+    job_id: Uuid,
+    attempt_id: Uuid,
+) -> (bool, Option<String>, String) {
+    let log_api_path = format!("pipeline-jobs/{job_id}/logs?attempt_id={attempt_id}");
+    let has: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(
+            SELECT 1 FROM pipeline_job_logs WHERE job_id = $1 AND attempt_id = $2
+        )",
+    )
+    .bind(job_id)
+    .bind(attempt_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((false,));
+    let excerpt = if has.0 {
+        crate::mcp::contract_domain::job_logs(pool, repo_id, job_id, attempt_id, None, 512)
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+    (has.0, excerpt, log_api_path)
+}
+
 async fn build_pr_ci_failure_view(
     pool: &sqlx::PgPool,
     git_root: &Path,
@@ -157,6 +207,7 @@ async fn build_pr_ci_failure_view(
             pipeline_state: None,
             pipeline_error_code: None,
             failed_jobs: vec![],
+            pipeline_run_attempt_id: None,
             fix_rounds_used: fix_rounds_used_early.0,
             fix_rounds_max: agent_fix_max_rounds(),
             agent_fix_allowed: false,
@@ -178,11 +229,12 @@ async fn build_pr_ci_failure_view(
         .map(|(name, st)| PrCheckFailureView {
             check_name: name.clone(),
             state: st.clone(),
+            log_location_note: CHECK_LOG_LOCATION_NOTE.to_string(),
         })
         .collect();
 
-    let pipe = sqlx::query_as::<_, (Uuid, String, Option<String>)>(
-        "SELECT id, state, error_code FROM pipeline_runs
+    let pipe = sqlx::query_as::<_, (Uuid, String, Option<String>, Uuid)>(
+        "SELECT id, state, error_code, run_attempt_id FROM pipeline_runs
          WHERE repo_id = $1 AND pr_id = $2 AND run_kind = 'pr_validation' AND source_oid = $3
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -193,32 +245,36 @@ async fn build_pr_ci_failure_view(
     .await?;
 
     let mut failed_jobs = Vec::new();
-    let (pipeline_run_id, pipeline_state, pipeline_error_code) = if let Some((id, st, err)) = pipe {
-        if st == "failed" {
-            let jobs = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
-                "SELECT id, pipeline_run_id, job_key, state FROM pipeline_jobs
-                 WHERE pipeline_run_id = $1 AND repo_id = $2 ORDER BY job_key",
-            )
-            .bind(id)
-            .bind(repo_id)
-            .fetch_all(pool)
-            .await?;
-            failed_jobs = jobs
-                .iter()
-                .filter(|(_, _, _, js)| js == "failed")
-                .map(|(jid, prid, jk, js)| PipelineJobView {
-                    id: *jid,
-                    pipeline_run_id: *prid,
-                    job_key: jk.clone(),
-                    state: js.clone(),
-                    retry_allowed: false,
-                })
-                .collect();
-        }
-        (Some(id), Some(st), err)
-    } else {
-        (None, None, None)
-    };
+    let (pipeline_run_id, pipeline_run_attempt_id, pipeline_state, pipeline_error_code) =
+        if let Some((id, st, err, attempt_id)) = pipe {
+            if st == "failed" {
+                let jobs = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+                    "SELECT id, pipeline_run_id, job_key, state FROM pipeline_jobs
+                     WHERE pipeline_run_id = $1 AND repo_id = $2 ORDER BY job_key",
+                )
+                .bind(id)
+                .bind(repo_id)
+                .fetch_all(pool)
+                .await?;
+                for (jid, prid, jk, js) in jobs.iter().filter(|(_, _, _, js)| js == "failed") {
+                    let (log_has_chunks, log_excerpt, log_api_path) =
+                        pipeline_job_log_hint(pool, repo_id, *jid, attempt_id).await;
+                    failed_jobs.push(PrCiFailedJobView {
+                        id: *jid,
+                        pipeline_run_id: *prid,
+                        job_key: jk.clone(),
+                        state: js.clone(),
+                        run_attempt_id: attempt_id,
+                        log_api_path,
+                        log_has_chunks,
+                        log_excerpt,
+                    });
+                }
+            }
+            (Some(id), Some(attempt_id), Some(st), err)
+        } else {
+            (None, None, None, None)
+        };
 
     let ci_failed = !checks_failed.is_empty() || pipeline_state.as_deref() == Some("failed");
 
@@ -279,6 +335,7 @@ async fn build_pr_ci_failure_view(
         issue_id: pr.issue_id,
         checks_failed,
         pipeline_run_id,
+        pipeline_run_attempt_id,
         pipeline_state,
         pipeline_error_code,
         failed_jobs,

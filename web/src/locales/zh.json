@@ -20,6 +20,8 @@
     "prCiFixRounds": "Agent 修复轮次 {{used}} / {{max}}（仅手动，非自动循环）",
     "prAgentFix": "交给 Agent 修复",
     "prAgentFixDenied": "无法启动 Agent 修复",
+    "prCiJobLogPath": "日志 API",
+    "prCiJobLogMissing": "此 job 尝试尚无已存储的日志片段。",
     "deliveryTitle": "交付链",
     "deliveryMockNote": "部署仅使用 compose-mock（非真实 OCI/Docker）。",
     "deliveryModeNote": "部署遵循服务端策略：MUSEHUB_REQUIRE_PIPELINE_OCI=1 时为流水线构建 OCI + compose-runner；否则本地开发使用 compose-mock。",

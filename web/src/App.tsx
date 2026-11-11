@@ -1861,6 +1861,10 @@ export default function App() {
                       {prCiFailure.checks_failed.map((c) => (
                         <li key={c.check_name}>
                           {c.check_name}: {c.state}
+                          <span data-testid={`pr-ci-check-log-note-${c.check_name}`}>
+                            {' '}
+                            — {c.log_location_note}
+                          </span>
                         </li>
                       ))}
                     </ul>
@@ -1868,8 +1872,23 @@ export default function App() {
                   {prCiFailure.failed_jobs.length > 0 ? (
                     <ul data-testid="pr-ci-job-list">
                       {prCiFailure.failed_jobs.map((j) => (
-                        <li key={j.id}>
+                        <li key={j.id} data-testid={`pr-ci-job-${j.job_key}`}>
                           {j.job_key} ({j.state})
+                          <div data-testid={`pr-ci-job-log-path-${j.job_key}`}>
+                            {t('app.prCiJobLogPath')}: {j.log_api_path}
+                          </div>
+                          {j.log_has_chunks && j.log_excerpt ? (
+                            <pre
+                              data-testid={`pr-ci-job-log-excerpt-${j.job_key}`}
+                              style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}
+                            >
+                              {j.log_excerpt}
+                            </pre>
+                          ) : (
+                            <p data-testid={`pr-ci-job-log-missing-${j.job_key}`}>
+                              {t('app.prCiJobLogMissing')}
+                            </p>
+                          )}
                         </li>
                       ))}
                     </ul>

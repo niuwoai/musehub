@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -626,6 +626,35 @@ pub async fn retry_pipeline_job_http(
             Err(e)
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct PipelineJobLogsQuery {
+    pub attempt_id: Uuid,
+    pub cursor: Option<i32>,
+    pub max_bytes: Option<usize>,
+}
+
+pub async fn get_pipeline_job_logs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, job_id)): AxumPath<(String, String, Uuid)>,
+    Query(query): Query<PipelineJobLogsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let max_bytes = query.max_bytes.unwrap_or(8_192).clamp(1, 262_144);
+    let body = crate::mcp::contract_domain::job_logs(
+        &state.pool,
+        repo_id,
+        job_id,
+        query.attempt_id,
+        query.cursor,
+        max_bytes,
+    )
+    .await?;
+    Ok(Json(body))
 }
 
 pub async fn cancel_pipeline_run(
