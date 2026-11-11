@@ -42,16 +42,28 @@ export type PullRequest = {
   issue_id?: string | null
 }
 
+export type PrCiFailedJob = {
+  id: string
+  pipeline_run_id: string
+  job_key: string
+  state: string
+  run_attempt_id: string
+  log_api_path: string
+  log_has_chunks: boolean
+  log_excerpt?: string | null
+}
+
 export type PrCiFailure = {
   pr_id: string
   pr_number: number
   head_oid: string
   issue_id?: string | null
-  checks_failed: { check_name: string; state: string }[]
+  checks_failed: { check_name: string; state: string; log_location_note: string }[]
   pipeline_run_id?: string | null
+  pipeline_run_attempt_id?: string | null
   pipeline_state?: string | null
   pipeline_error_code?: string | null
-  failed_jobs: PipelineJob[]
+  failed_jobs: PrCiFailedJob[]
   fix_rounds_used: number
   fix_rounds_max: number
   agent_fix_allowed: boolean
@@ -247,6 +259,17 @@ export async function listPullRequests(org: string, repo: string) {
 export async function getPrCiFailure(org: string, repo: string, prNumber: number) {
   return api<PrCiFailure>(
     `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/ci-failure`,
+  )
+}
+
+export async function getPipelineJobLogs(
+  org: string,
+  repo: string,
+  jobId: string,
+  attemptId: string,
+) {
+  return api<{ text: string; complete: boolean; truncated: boolean; next_cursor?: number | null }>(
+    `/api/v1/orgs/${org}/repos/${repo}/pipeline-jobs/${jobId}/logs?attempt_id=${encodeURIComponent(attemptId)}`,
   )
 }
 

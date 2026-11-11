@@ -125,7 +125,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | 部署失败诊断与回滚（控制台） | `[x]` | `deployment-rollback-console`；REST `POST .../deployments/rollback` + 客户端 `attempt_id` 防重复点击；Playwright 为 **路由 fixture**，不替代 `deployment_rollback_runner_e2e` / 受保护环境 live 审批 |
 | 流水线失败诊断与 build job 重试（控制台） | `[x]` | `pipeline_job_retry_http_e2e`、`pipeline-job-retry-console`（**fixture**）；`POST .../pipeline-jobs/{id}/retry` + `attempt_id`；HTTP 证明 **requeue**，**非** live worker 执行完成 |
 | 流水线运行取消（控制台） | `[x]` | `pipeline_cancel_http_e2e`、`pipeline-cancel-console`（**fixture**）；`POST .../pipeline-runs/{id}/cancel`；`cancel_requested` 为观测中状态，**canceled** 才表示终态；**非** remote worker 强杀证明 |
-| PR CI 失败 → Agent 修复（§2 S3） | `[~]` | `GET/POST .../pull-requests/{n}/ci-failure` + `agent-fix`；`pr_agent_fix_http_e2e`（真实 HTTP）；每 PR 最大轮次默认 **3**（`MUSEHUB_AGENT_FIX_MAX_ROUNDS`）；**非** 自动循环、**非** Live Codex；CI 绿 ≠ `docs/01-product-requirements.md` §8 生产验收 |
+| PR CI 失败 → Agent 修复（§2 S3） | `[x]` | `GET .../ci-failure`（含失败 job **log_api_path** / **log_excerpt** 来自 `pipeline_job_logs`）+ `GET .../pipeline-jobs/{id}/logs` + `agent-fix`；`pr_ci_failure_log_http_e2e`、`pr_agent_fix_http_e2e`；每 PR 最大轮次默认 **3**；**无** check 独立日志、**非** 自动循环；CI 绿 ≠ §8 生产验收 |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
