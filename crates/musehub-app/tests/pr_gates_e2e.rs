@@ -592,8 +592,8 @@ async fn stale_approval_after_new_commit_requires_resync() {
         &detail.into_body().collect().await.unwrap().to_bytes(),
     )
     .unwrap()["row_version"]
-    .as_i64()
-    .unwrap();
+        .as_i64()
+        .unwrap();
     let synced = app
         .clone()
         .oneshot(
