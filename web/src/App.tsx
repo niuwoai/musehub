@@ -147,6 +147,11 @@ export default function App() {
     pipelineRunIdRef.current = pipelineRun?.id ?? null
   }, [pipelineRun])
 
+  function applyPipelineRun(run: PipelineRun | null) {
+    pipelineRunIdRef.current = run?.id ?? null
+    setPipelineRun(run)
+  }
+
   useEffect(() => {
     deploymentListModeRef.current = deploymentListMode
   }, [deploymentListMode])
@@ -199,6 +204,7 @@ export default function App() {
     setDeploymentApprovalBusy(false)
     setDeploymentRollbackBusy(false)
     deploymentRollbackFlightRef.current = null
+    pipelineRunIdRef.current = null
     setPipelineRun(null)
     setPipelineJobs([])
     setPipelineRetryBusy(false)
@@ -796,7 +802,9 @@ export default function App() {
   async function pollPipelineRun(runId: string, pollEpoch: number, op: PipelineOpContext) {
     if (!selectedRepo) return null
     const repo = selectedRepo
-    for (let i = 0; i < 240; i++) {
+    const remotePipeline = runnerCaps?.pipeline_executor === 'remote'
+    const maxIter = remotePipeline ? 600 : 240
+    for (let i = 0; i < maxIter; i++) {
       if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
         return null
       }
@@ -804,7 +812,7 @@ export default function App() {
       if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
         return null
       }
-      setPipelineRun(run)
+      applyPipelineRun(run)
       if (run.state === 'succeeded' || run.state === 'failed' || run.state === 'canceled') {
         return run
       }
@@ -823,7 +831,7 @@ export default function App() {
     try {
       const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
-      setPipelineRun(run)
+      applyPipelineRun(run)
       const pollOp = capturePipelineOp(run.id)
       const done = await pollPipelineRun(run.id, pollEpoch, pollOp)
       if (!done || !pipelineOpActive(pollOp)) return
@@ -861,7 +869,7 @@ export default function App() {
     try {
       const requested = await cancelPipelineRun(DEFAULT_ORG, selectedRepo, runId)
       if (!pipelineOpActive(op)) return
-      setPipelineRun(requested)
+      applyPipelineRun(requested)
       const done = await pollPipelineRun(runId, pollEpoch, op)
       if (!done || !pipelineOpActive(op)) return
       if (done.state === 'canceled' || done.state === 'failed') {
@@ -894,7 +902,7 @@ export default function App() {
       const pollEpoch = pipelinePollEpochRef.current
       const done = await pollPipelineRun(pipelineRun.id, pollEpoch, op)
       if (!done || !pipelineOpActive(op)) return
-      setPipelineRun(done)
+      applyPipelineRun(done)
       setPipelineJobs([])
       if (done.state === 'failed') {
         await loadPipelineJobsForRun(done.id)
