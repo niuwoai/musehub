@@ -124,6 +124,7 @@ export default function App() {
   const selectedRepoRef = useRef<string | null>(null)
   /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
   const agentRunPollEpochRef = useRef(0)
+  const pipelineRunIdRef = useRef<string | null>(null)
 
   type DeploymentOpContext = {
     sessionEpoch: number
@@ -131,9 +132,17 @@ export default function App() {
     repo: string
   }
 
+  type PipelineOpContext = DeploymentOpContext & {
+    pipelineRunId: string | null
+  }
+
   useEffect(() => {
     selectedRepoRef.current = selectedRepo
   }, [selectedRepo])
+
+  useEffect(() => {
+    pipelineRunIdRef.current = pipelineRun?.id ?? null
+  }, [pipelineRun])
 
   useEffect(() => {
     deploymentListModeRef.current = deploymentListMode
@@ -152,6 +161,21 @@ export default function App() {
       sessionEpochRef.current === ctx.sessionEpoch &&
       repoDeliveryGenerationRef.current === ctx.repoGeneration &&
       selectedRepoRef.current === ctx.repo
+    )
+  }
+
+  function capturePipelineOp(pipelineRunId: string | null): PipelineOpContext {
+    return {
+      ...captureDeploymentOp(),
+      pipelineRunId,
+    }
+  }
+
+  function pipelineOpActive(ctx: PipelineOpContext): boolean {
+    return (
+      deploymentOpActive(ctx) &&
+      ctx.pipelineRunId !== null &&
+      pipelineRunIdRef.current === ctx.pipelineRunId
     )
   }
 
@@ -750,9 +774,9 @@ export default function App() {
 
   async function loadPipelineJobsForRun(runId: string) {
     if (!selectedRepo) return
-    const op = captureDeploymentOp()
+    const op = capturePipelineOp(runId)
     const jobs = await listPipelineJobs(DEFAULT_ORG, selectedRepo, runId)
-    if (!deploymentOpActive(op)) return
+    if (!pipelineOpActive(op)) return
     setPipelineJobs(jobs)
   }
 
@@ -765,15 +789,16 @@ export default function App() {
       const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
       setPipelineRun(run)
+      const pollOp = capturePipelineOp(run.id)
       const done = await pollPipeline(DEFAULT_ORG, selectedRepo, run.id)
-      if (!deploymentOpActive(op)) return
+      if (!pipelineOpActive(pollOp)) return
       setPipelineRun(done)
       if (done.state === 'succeeded') {
         return
       }
       if (done.state === 'failed') {
         await loadPipelineJobsForRun(done.id)
-        if (deploymentOpActive(op)) {
+        if (pipelineOpActive(pollOp)) {
           setError(done.error_code ?? 'pipeline failed')
         }
         return
@@ -792,30 +817,30 @@ export default function App() {
     if (inFlight?.jobId === jobId) return
     const attemptId = crypto.randomUUID()
     pipelineRetryFlightRef.current = { jobId, attemptId }
-    const op = captureDeploymentOp()
+    const op = capturePipelineOp(pipelineRun.id)
     setPipelineRetryBusy(true)
     setError(null)
     try {
       await retryPipelineJob(DEFAULT_ORG, selectedRepo, jobId, attemptId)
-      if (!deploymentOpActive(op)) return
+      if (!pipelineOpActive(op)) return
       const done = await pollPipeline(DEFAULT_ORG, selectedRepo, pipelineRun.id)
-      if (!deploymentOpActive(op)) return
+      if (!pipelineOpActive(op)) return
       setPipelineRun(done)
       setPipelineJobs([])
       if (done.state === 'failed') {
         await loadPipelineJobsForRun(done.id)
-        if (deploymentOpActive(op)) {
+        if (pipelineOpActive(op)) {
           setError(done.error_code ?? 'pipeline failed')
         }
       } else if (done.state !== 'succeeded') {
         setError(done.error_code ?? done.state)
       }
     } catch (err) {
-      if (deploymentOpActive(op)) {
+      if (pipelineOpActive(op)) {
         setError(err instanceof Error ? err.message : 'pipeline job retry failed')
       }
     } finally {
-      if (deploymentOpActive(op)) {
+      if (pipelineOpActive(op)) {
         setPipelineRetryBusy(false)
       }
       if (pipelineRetryFlightRef.current?.attemptId === attemptId) {

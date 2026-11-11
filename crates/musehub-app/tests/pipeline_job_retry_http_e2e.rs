@@ -175,4 +175,109 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
         .await
         .unwrap();
     assert_eq!(deploy_retry.status(), StatusCode::BAD_REQUEST);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/repos")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(r#"{"slug":"pipe-retry-race","description":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let race_repo_id: Uuid = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT id FROM repositories WHERE slug_normalized = 'pipe-retry-race'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .0;
+    let race_run_id = Uuid::new_v4();
+    let race_job_id = Uuid::new_v4();
+    let race_oid = "d".repeat(40);
+    sqlx::query(
+        "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
+         requested_by, run_attempt_id, run_kind, error_code)
+         VALUES ($1,$2,$3,$4,'product-ci','failed',$5,$6,'release_build','build_failed')",
+    )
+    .bind(race_run_id)
+    .bind(org_id)
+    .bind(race_repo_id)
+    .bind(&race_oid)
+    .bind(admin_id)
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pipeline_jobs (id, org_id, repo_id, pipeline_run_id, job_key, state)
+         VALUES ($1,$2,$3,$4,'build','failed')",
+    )
+    .bind(race_job_id)
+    .bind(org_id)
+    .bind(race_repo_id)
+    .bind(race_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let attempt_a = Uuid::new_v4();
+    let attempt_b = Uuid::new_v4();
+    let uri = format!(
+        "/api/v1/orgs/demo/repos/pipe-retry-race/pipeline-jobs/{race_job_id}/retry"
+    );
+    let body_a = serde_json::json!({ "attempt_id": attempt_a.to_string() }).to_string();
+    let body_b = serde_json::json!({ "attempt_id": attempt_b.to_string() }).to_string();
+
+    let (resp_a, resp_b) = tokio::join!(
+        app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(body_a))
+                .unwrap(),
+        ),
+        app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(body_b))
+                .unwrap(),
+        ),
+    );
+    let resp_a = resp_a.unwrap();
+    let resp_b = resp_b.unwrap();
+    let ok_count = [resp_a.status(), resp_b.status()]
+        .iter()
+        .filter(|s| **s == StatusCode::OK)
+        .count();
+    let bad_count = [resp_a.status(), resp_b.status()]
+        .iter()
+        .filter(|s| **s == StatusCode::BAD_REQUEST)
+        .count();
+    assert_eq!(ok_count, 1, "exactly one retry succeeds");
+    assert_eq!(bad_count, 1, "loser rejected without partial retry");
+
+    let job_state: (String,) = sqlx::query_as("SELECT state FROM pipeline_jobs WHERE id = $1")
+        .bind(race_job_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(job_state.0, "queued");
+    let run_row: (String, Option<String>) =
+        sqlx::query_as("SELECT state, error_code FROM pipeline_runs WHERE id = $1")
+            .bind(race_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(matches!(run_row.0.as_str(), "queued" | "running"));
+    assert!(run_row.1.is_none());
 }

@@ -461,12 +461,15 @@ pub async fn retry_pipeline_job(
     repo_id: Uuid,
     job_id: Uuid,
 ) -> Result<PipelineJobView, AppError> {
+    let mut tx = state.pool.begin().await?;
     let row = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT pipeline_run_id, job_key, state FROM pipeline_jobs WHERE id = $1 AND repo_id = $2",
+        "SELECT pipeline_run_id, job_key, state FROM pipeline_jobs
+         WHERE id = $1 AND repo_id = $2
+         FOR UPDATE",
     )
     .bind(job_id)
     .bind(repo_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((run_id, job_key, job_state)) = row else {
         return Err(AppError::NotFound);
@@ -481,41 +484,55 @@ pub async fn retry_pipeline_job(
             "only failed jobs may be retried".to_string(),
         ));
     }
-    sqlx::query(
-        "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    let job_up = sqlx::query(
+        "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND repo_id = $2 AND job_key <> 'deploy' AND state = 'failed'",
     )
     .bind(job_id)
-    .execute(&state.pool)
+    .bind(repo_id)
+    .execute(&mut *tx)
     .await?;
+    if job_up.rows_affected() == 0 {
+        return Err(AppError::Validation(
+            "only failed jobs may be retried".to_string(),
+        ));
+    }
     sqlx::query(
         "UPDATE pipeline_runs SET state = 'queued', error_code = NULL, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1",
+         WHERE id = $1 AND repo_id = $2 AND state = 'failed'",
     )
     .bind(run_id)
-    .execute(&state.pool)
+    .bind(repo_id)
+    .execute(&mut *tx)
     .await?;
-    if !crate::runner_api::pipeline_executor_remote() {
+    let spawn = if !crate::runner_api::pipeline_executor_remote() {
         let (storage_key, org_id): (Uuid, Uuid) =
             sqlx::query_as("SELECT storage_key, org_id FROM repositories WHERE id = $1")
                 .bind(repo_id)
-                .fetch_one(&state.pool)
+                .fetch_one(&mut *tx)
                 .await?;
+        let source: (String,) =
+            sqlx::query_as("SELECT source_oid FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let run_kind: (String,) =
+            sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        Some((storage_key, org_id, source.0, run_kind.0))
+    } else {
+        None
+    };
+    tx.commit().await?;
+    if let Some((storage_key, org_id, source_oid, run_kind)) = spawn {
         let pool = state.pool.clone();
         let git_root = state.git_root.clone();
         let artifact_root = state.artifact_root.clone();
         let pipeline_bin = state.pipeline_adapter_bin.clone();
         let supervisor = state.pipeline_supervisor.clone();
         let instance_id = state.instance_id;
-        let source: (String,) =
-            sqlx::query_as("SELECT source_oid FROM pipeline_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await?;
-        let run_kind: (String,) =
-            sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await?;
         tokio::spawn(async move {
             execute_pipeline_job(
                 pool,
@@ -529,8 +546,8 @@ pub async fn retry_pipeline_job(
                 job_id,
                 org_id,
                 repo_id,
-                source.0,
-                run_kind.0,
+                source_oid,
+                run_kind,
             )
             .await;
         });

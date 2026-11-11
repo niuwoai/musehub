@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 
 import type { Page } from '@playwright/test'
 
+import { createRepoViaUi, openRepoBySlug, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -24,7 +25,7 @@ test.describe('pipeline job retry console (route fixtures)', () => {
   }) => {
     let retryCount = 0
 
-    await page.route('**/pull-requests?*', async (route) => {
+    await page.route(/\/api\/v1\/orgs\/[^/]+\/repos\/[^/]+\/pull-requests$/, async (route) => {
       if (route.request().method() !== 'GET') {
         await route.continue()
         return
@@ -134,14 +135,11 @@ test.describe('pipeline job retry console (route fixtures)', () => {
 
     await page.goto('/')
     await fillLoginForm(page, 'admin', password!)
-    await page.getByRole('button', { name: /sign in|登录/i }).click()
+    await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-
-    const slug = `pipe-retry-ui-${Date.now().toString(36)}`
-    await page.getByPlaceholder(/slug|仓库标识/i).fill(slug)
-    await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-    await expect(page.getByRole('button', { name: slug })).toBeVisible({ timeout: 30_000 })
-    await page.getByRole('button', { name: slug }).click()
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await openRepoBySlug(page, slug)
 
     await expect(page.getByTestId('delivery-panel')).toContainText(/main @/, { timeout: 30_000 })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
