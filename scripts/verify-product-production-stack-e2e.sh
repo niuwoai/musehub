@@ -2,6 +2,8 @@
 # Production compose: API enqueue-only (no docker.sock); worker runs pipeline/agent/deploy.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/ci-ephemeral-ports.sh
+source "$ROOT/scripts/lib/ci-ephemeral-ports.sh"
 cd "$ROOT"
 if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && getent group docker >/dev/null 2>&1; then
   exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1; cd '$PWD' && ./scripts/verify-product-production-stack-e2e.sh"
@@ -24,9 +26,7 @@ STACK_ID="musehub-prod-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
 ENV_FILE="$ROOT/deploy/.env.production.${STACK_ID}"
 CADDY_CI_HOST="$ROOT/deploy/.caddy.prod.${STACK_ID}.yml"
-MUSEHUB_CI_POSTGRES_PORT=$((40000 + RANDOM % 20000))
-MUSEHUB_CI_API_HOST_PORT=$((50000 + RANDOM % 15000))
-MUSEHUB_GATEWAY_HTTP_PORT=$((30000 + RANDOM % 20000))
+allocate_compose_ci_ports
 DOCKER_GID="$(getent group docker | cut -d: -f3 || echo 999)"
 HOST_DOCKER_BIN="$(command -v docker)"
 HOST_COMPOSE_PLUGIN=""
@@ -37,10 +37,10 @@ for _c in /usr/libexec/docker/cli-plugins/docker-compose \
 done
 export MUSEHUB_CI_POSTGRES_PORT MUSEHUB_CI_API_HOST_PORT MUSEHUB_GATEWAY_HTTP_PORT DOCKER_GID
 unset MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD MUSEHUB_SESSION_SECRET 2>/dev/null || true
-sed "s/host.docker.internal:58080/host.docker.internal:${MUSEHUB_CI_API_HOST_PORT}/g" \
-  "$ROOT/deploy/Caddyfile.ci.host.yml" >"$CADDY_CI_HOST"
-COMPOSE_CI_EXTRA="$ROOT/deploy/.compose.prod.${STACK_ID}.yml"
-cat >"$COMPOSE_CI_EXTRA" <<EOF
+write_prod_port_overlays() {
+  sed "s/host.docker.internal:58080/host.docker.internal:${MUSEHUB_CI_API_HOST_PORT}/g" \
+    "$ROOT/deploy/Caddyfile.ci.host.yml" >"$CADDY_CI_HOST"
+  cat >"$COMPOSE_CI_EXTRA" <<EOF
 services:
   gateway:
     volumes:
@@ -59,6 +59,9 @@ $([ -n "$HOST_COMPOSE_PLUGIN" ] && printf '      - %s:/usr/local/lib/docker/cli-
       DATABASE_URL: postgres://musehub:\${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub?sslmode=disable
       MUSEHUB_DATABASE_URL: postgres://musehub:\${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub?sslmode=disable
 EOF
+}
+COMPOSE_CI_EXTRA="$ROOT/deploy/.compose.prod.${STACK_ID}.yml"
+write_prod_port_overlays
 
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 SESSION_SECRET="$(openssl rand -hex 24)"
@@ -118,7 +121,33 @@ else
 fi
 
 echo "=== phase 1: control plane (no worker until PAT) ==="
-dc up -d postgres musehub-server gateway
+echo "ci_ports postgres=${MUSEHUB_CI_POSTGRES_PORT} api=${MUSEHUB_CI_API_HOST_PORT} gateway=${MUSEHUB_GATEWAY_HTTP_PORT}"
+up_ok=0
+for up_attempt in 1 2 3; do
+  if up_out=$(dc up -d postgres musehub-server gateway 2>&1); then
+    up_ok=1
+    break
+  fi
+  echo "$up_out" >&2
+  if [[ "$up_out" != *"address already in use"* && "$up_out" != *"failed to bind host port"* ]]; then
+    exit 1
+  fi
+  echo "compose up bind conflict (attempt ${up_attempt}/3), reallocating ports" >&2
+  allocate_compose_ci_ports
+  write_prod_port_overlays
+  {
+    grep -v '^MUSEHUB_CI_POSTGRES_PORT=' "$ENV_FILE" | grep -v '^MUSEHUB_CI_API_HOST_PORT=' | grep -v '^MUSEHUB_GATEWAY_HTTP_PORT='
+  } >"${ENV_FILE}.re"
+  mv "${ENV_FILE}.re" "$ENV_FILE"
+  {
+    echo "MUSEHUB_CI_POSTGRES_PORT=$MUSEHUB_CI_POSTGRES_PORT"
+    echo "MUSEHUB_CI_API_HOST_PORT=$MUSEHUB_CI_API_HOST_PORT"
+    echo "MUSEHUB_GATEWAY_HTTP_PORT=$MUSEHUB_GATEWAY_HTTP_PORT"
+  } >>"$ENV_FILE"
+  export MUSEHUB_CI_POSTGRES_PORT MUSEHUB_CI_API_HOST_PORT MUSEHUB_GATEWAY_HTTP_PORT
+  dc down -v --remove-orphans 2>/dev/null || true
+done
+[[ "$up_ok" == 1 ]] || { diagnose_production_failure "compose up bind retries exhausted"; exit 1; }
 sleep 5
 BOOTSTRAP_PW="$(_postenv MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD)"
 MUSEHUB_GATEWAY_HTTP_PORT="$(_postenv MUSEHUB_GATEWAY_HTTP_PORT)"
