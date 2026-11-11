@@ -97,6 +97,10 @@ export default function App() {
   const deploymentListFetchSeqRef = useRef(0)
   const deploymentListModeRef = useRef<'pending' | 'all'>('pending')
   const deploymentListModeEpochRef = useRef(0)
+  const deploymentRollbackFlightRef = useRef<{
+    targetId: string
+    attemptId: string
+  } | null>(null)
   const DEPLOYMENT_LIST_PAGE = 20
   const DEPLOYMENT_LIST_MAX_OFFSET = 10_000
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
@@ -153,6 +157,7 @@ export default function App() {
     setDeploymentLookupId('')
     setDeploymentApprovalBusy(false)
     setDeploymentRollbackBusy(false)
+    deploymentRollbackFlightRef.current = null
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
     deploymentListModeRef.current = 'pending'
@@ -822,9 +827,15 @@ export default function App() {
   }
 
   async function onRollbackToTarget(targetDeploymentId: string) {
-    if (!selectedRepo) {
+    if (!selectedRepo || deploymentRollbackBusy) {
       return
     }
+    const inFlight = deploymentRollbackFlightRef.current
+    if (inFlight?.targetId === targetDeploymentId) {
+      return
+    }
+    const attemptId = crypto.randomUUID()
+    deploymentRollbackFlightRef.current = { targetId: targetDeploymentId, attemptId }
     const op = captureDeploymentOp()
     setDeploymentRollbackBusy(true)
     setError(null)
@@ -834,6 +845,7 @@ export default function App() {
         selectedRepo,
         targetDeploymentId,
         'console rollback',
+        attemptId,
       )
       if (!deploymentOpActive(op)) {
         return
@@ -858,6 +870,9 @@ export default function App() {
     } finally {
       if (deploymentOpActive(op)) {
         setDeploymentRollbackBusy(false)
+      }
+      if (deploymentRollbackFlightRef.current?.attemptId === attemptId) {
+        deploymentRollbackFlightRef.current = null
       }
     }
   }

@@ -4,13 +4,14 @@ import { randomUUID } from 'crypto'
 import type { Page } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
+import {
+  createRepoViaUi,
+  repoNavButtonForSlug,
+  waitForDemoRepoNavHydrated,
+} from './helpers/repo'
 
 const adminPassword = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
-
-function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
-}
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
   const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
@@ -28,11 +29,7 @@ async function loginCookie(handle: string, pass: string) {
 }
 
 async function deliveryThroughRelease(page: Page, adminCookie: string) {
-  const repoCountBefore = await repoNavButtons(page).count()
-  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  await expect(repoNavButtons(page)).toHaveCount(repoCountBefore + 1, { timeout: 15_000 })
-  const repoEntry = repoNavButtons(page).last()
-  const slug = (await repoEntry.textContent())?.trim() ?? ''
+  const { slug, repoEntry } = await createRepoViaUi(page)
   await repoEntry.click()
   await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
   await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
@@ -162,6 +159,7 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await waitForDemoRepoNavHydrated(page)
     const adminCookie = `${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.name}=${(await page.context().cookies()).find((c) => c.name.includes('musehub'))!.value}`
 
     await deliveryThroughRelease(page, adminCookie)
@@ -180,6 +178,7 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await waitForDemoRepoNavHydrated(page)
     await expect(page.getByTestId('deployment-approval')).toHaveCount(0)
     const body = await page.locator('body').innerText()
     expect(body).not.toContain(STALE_PROD_PLAN_PREFIX)
@@ -199,6 +198,7 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
+    await waitForDemoRepoNavHydrated(page)
     const adminSession = (await page.context().cookies()).find((c) =>
       c.name.includes('musehub'),
     )
@@ -268,7 +268,8 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await repoNavButtons(page).filter({ hasText: slug }).click()
+    await waitForDemoRepoNavHydrated(page)
+    await repoNavButtonForSlug(page, slug).click()
     await page.getByTestId('deployment-lookup-id').fill(pending.id)
     await page.getByTestId('load-deployment').click()
     await expect(page.getByTestId('deployment-approval')).toBeVisible()
@@ -280,7 +281,8 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await repoNavButtons(page).filter({ hasText: slug }).click()
+    await waitForDemoRepoNavHydrated(page)
+    await repoNavButtonForSlug(page, slug).click()
     await page.getByTestId('deployment-lookup-id').fill(pending.id)
     await page.getByTestId('load-deployment').click()
     await expect(page.getByTestId('deployment-approval')).toBeVisible()

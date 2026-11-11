@@ -3,6 +3,8 @@
 # restart persistence, migrate idempotency, backup/restore, upgrade recreate.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/ci-ephemeral-ports.sh
+source "$ROOT/scripts/lib/ci-ephemeral-ports.sh"
 cd "$ROOT"
 bash "$ROOT/scripts/verify-caddyfile-layout.sh"
 # Legacy builder avoids buildx lock issues on shared CI/VM runners.
@@ -18,9 +20,7 @@ STACK_ID="musehub-stack-ci-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
 ENV_FILE="$ROOT/deploy/.env.ci"
 CADDY_CI_HOST="$ROOT/deploy/.caddy.ci.host.${STACK_ID}.yml"
-MUSEHUB_CI_POSTGRES_PORT=$((40000 + RANDOM % 20000))
-MUSEHUB_CI_API_HOST_PORT=$((50000 + RANDOM % 15000))
-MUSEHUB_GATEWAY_HTTP_PORT=$((30000 + RANDOM % 20000))
+allocate_compose_ci_ports
 export MUSEHUB_CI_POSTGRES_PORT MUSEHUB_CI_API_HOST_PORT MUSEHUB_GATEWAY_HTTP_PORT
 sed "s/host.docker.internal:58080/host.docker.internal:${MUSEHUB_CI_API_HOST_PORT}/g" \
   "$ROOT/deploy/Caddyfile.ci.host.yml" >"$CADDY_CI_HOST"
