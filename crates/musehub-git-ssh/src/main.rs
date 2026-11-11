@@ -1,13 +1,17 @@
 //! Product Git-over-SSH: AuthorizedKeysCommand, gateway, optional sshd supervisor.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use musehub_app::git_ssh::{
-    self, lookup_ssh_key_by_fingerprint, reload_ssh_key_session, render_sshd_config,
-    write_authorized_keys_stdout,
+    self, assert_git_ssh_connection_user, lookup_ssh_key_by_fingerprint, reload_ssh_key_by_id,
+    render_sshd_config, write_authorized_keys_stdout, GIT_SSH_LOGIN_USER,
 };
+use musehub_app::git_ssh_runtime::{
+    default_git_ssh_run_dir, ensure_host_ed25519_key, prepare_git_ssh_run_dir, write_secure_file,
+};
+use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -41,13 +45,21 @@ fn require_database_url() -> Result<String, Box<dyn std::error::Error + Send + S
 }
 
 fn require_git_root() -> PathBuf {
-    PathBuf::from(env::var("MUSEHUB_GIT_ROOT").unwrap_or_else(|_| "/tmp/musehub-git".into()))
+    PathBuf::from(env::var("MUSEHUB_GIT_ROOT").unwrap_or_else(|_| "/var/lib/musehub/git".into()))
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn gateway_bin() -> PathBuf {
     env::var("MUSEHUB_GIT_SSH_GATEWAY_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|_| env::current_exe().unwrap_or_else(|_| PathBuf::from("musehub-git-ssh")))
+}
+
+fn git_ssh_akc_user() -> String {
+    env::var("MUSEHUB_GIT_SSH_AKC_USER").unwrap_or_else(|_| GIT_SSH_LOGIN_USER.to_string())
 }
 
 async fn pool() -> Result<sqlx::PgPool, Box<dyn std::error::Error + Send + Sync>> {
@@ -58,30 +70,43 @@ async fn pool() -> Result<sqlx::PgPool, Box<dyn std::error::Error + Send + Sync>
 }
 
 async fn authorized_keys(args: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let ssh_user = args.first().ok_or("missing ssh user arg")?;
+    assert_git_ssh_connection_user(ssh_user).map_err(|_| "invalid ssh user")?;
     let fingerprint = args.last().ok_or("missing fingerprint arg")?;
+    let derived_fp = if args.len() >= 4 {
+        let key_b64 = &args[1];
+        let key_type = &args[2];
+        fingerprint_public_key_canonical(&format!("{key_type} {key_b64}"))
+            .ok()
+            .or_else(|| Some(fingerprint.clone()))
+    } else {
+        None
+    };
     let pool = pool().await?;
-    match lookup_ssh_key_by_fingerprint(&pool, fingerprint).await {
-        Ok(auth) => {
-            write_authorized_keys_stdout(&auth, &gateway_bin().display().to_string())?;
-            Ok(())
+    let lookup_fp = derived_fp.as_deref().unwrap_or(fingerprint.as_str());
+    let auth = match lookup_ssh_key_by_fingerprint(&pool, lookup_fp).await {
+        Ok(auth) => auth,
+        Err(_) if lookup_fp != fingerprint.as_str() => {
+            lookup_ssh_key_by_fingerprint(&pool, fingerprint)
+                .await
+                .map_err(|_| "unknown key")?
         }
-        Err(_) => std::process::exit(1),
-    }
+        Err(_) => {
+            std::process::exit(1);
+        }
+    };
+    write_authorized_keys_stdout(&auth, &gateway_bin().display().to_string())?;
+    Ok(())
 }
 
 async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let key_id = env::var("MUSEHUB_SSH_KEY_ID")
         .map_err(|_| "missing MUSEHUB_SSH_KEY_ID")?
         .parse()?;
-    let principal_id = env::var("MUSEHUB_SSH_PRINCIPAL_ID")
-        .map_err(|_| "missing MUSEHUB_SSH_PRINCIPAL_ID")?
-        .parse()?;
     let original = env::var("SSH_ORIGINAL_COMMAND").unwrap_or_default();
     let pool = pool().await?;
-    let _ = reload_ssh_key_session(&pool, key_id, principal_id).await?;
-    match git_ssh::run_ssh_gateway(&pool, &require_git_root(), key_id, principal_id, &original)
-        .await
-    {
+    let _ = reload_ssh_key_by_id(&pool, key_id).await?;
+    match git_ssh::run_ssh_gateway(&pool, &require_git_root(), key_id, &original).await {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("{}", e);
@@ -99,39 +124,86 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
                 .and_then(|p| p.parse().ok())
         })
         .unwrap_or(2222);
-    let run_dir = PathBuf::from(
-        env::var("MUSEHUB_GIT_SSH_RUN_DIR").unwrap_or_else(|_| "/tmp/musehub-git-ssh".into()),
-    );
-    std::fs::create_dir_all(&run_dir)?;
+    let run_dir = default_git_ssh_run_dir();
+    prepare_git_ssh_run_dir(&run_dir).map_err(|e| e.to_string())?;
     let host_key = run_dir.join("ssh_host_ed25519_key");
-    if !host_key.exists() {
-        let status = Command::new("ssh-keygen")
-            .args([
-                "-t",
-                "ed25519",
-                "-f",
-                host_key.to_str().expect("path"),
-                "-N",
-                "",
-                "-q",
-            ])
-            .status()?;
-        if !status.success() {
-            return Err("ssh-keygen host key failed".into());
-        }
-    }
+    ensure_host_ed25519_key(&host_key).map_err(|e| e.to_string())?;
     let pid_file = run_dir.join("sshd.pid");
     let exe = env::current_exe()?;
-    let config_body = render_sshd_config(port, &host_key, &pid_file, &exe);
+    let staged_bin = run_dir.join("musehub-git-ssh");
+    if !staged_bin.exists() {
+        std::fs::copy(&exe, &staged_bin)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged_bin, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    let db_url = require_database_url()?;
+    let git_root = require_git_root();
+    let gateway = gateway_bin();
+    let git_root_s = git_root.to_str().unwrap_or("/var/lib/musehub/git");
+    let gateway_s = gateway.to_str().unwrap_or("musehub-git-ssh");
+    let exe_s = exe.to_str().unwrap_or("musehub-git-ssh");
+    let akc_user = git_ssh_akc_user();
+    let akc_wrap = run_dir.join("akc-wrap.sh");
+    let akc_script = format!(
+        "#!/bin/sh\nexport DATABASE_URL={db}\nexport MUSEHUB_GIT_ROOT={git}\nexport MUSEHUB_GIT_SSH_GATEWAY_BIN={gw}\nexec {exe} authorized-keys \"$@\"\n",
+        db = shell_single_quote(&db_url),
+        git = shell_single_quote(git_root_s),
+        gw = shell_single_quote(gateway_s),
+        exe = shell_single_quote(exe_s),
+    );
+    std::fs::write(&akc_wrap, akc_script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&akc_wrap, std::fs::Permissions::from_mode(0o700))?;
+        if std::env::var("MUSEHUB_GIT_SSH_SUDO_SSHD").ok().as_deref() == Some("1") {
+            let _ = Command::new("sudo")
+                .args(["chown", "root:root", akc_wrap.to_str().expect("wrap")])
+                .status();
+        }
+    }
+    let setenv: Vec<(&str, &str)> = vec![
+        ("DATABASE_URL", &db_url),
+        ("MUSEHUB_GIT_ROOT", git_root_s),
+        ("MUSEHUB_GIT_SSH_GATEWAY_BIN", gateway_s),
+    ];
+    let use_wrap = std::env::var("MUSEHUB_GIT_SSH_AKC_WRAP").ok().as_deref() != Some("0");
+    let system_bin = PathBuf::from("/usr/local/bin/musehub-git-ssh");
+    let akc_bin: &Path = if !use_wrap && system_bin.exists() {
+        &system_bin
+    } else if use_wrap {
+        &akc_wrap
+    } else {
+        &staged_bin
+    };
+    let config_body = render_sshd_config(
+        port,
+        &host_key,
+        &pid_file,
+        akc_bin,
+        &setenv,
+        GIT_SSH_LOGIN_USER,
+        &akc_user,
+        use_wrap,
+    );
     let config_path = run_dir.join("sshd_config");
-    std::fs::write(&config_path, config_body)?;
+    write_secure_file(&config_path, config_body.as_bytes())?;
     tracing::info!(port, ?config_path, "starting product git sshd");
     let sshd = ["/usr/sbin/sshd", "/usr/local/sbin/sshd"]
         .map(PathBuf::from)
         .into_iter()
         .find(|p| p.exists())
         .unwrap_or_else(|| PathBuf::from("sshd"));
-    let mut child = Command::new(sshd);
+    let mut child = if std::env::var("MUSEHUB_GIT_SSH_SUDO_SSHD").ok().as_deref() == Some("1") {
+        let mut c = Command::new("sudo");
+        c.arg("-n").arg(&sshd);
+        c
+    } else {
+        Command::new(&sshd)
+    };
     child.arg("-D").arg("-f").arg(&config_path).arg("-e");
     child.stdin(Stdio::null());
     child.stdout(Stdio::inherit());

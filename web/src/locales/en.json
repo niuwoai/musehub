@@ -113,7 +113,9 @@
     "pinnedCommit": "Pinned commit: {{oid}}",
     "loadFailed": "Could not load repository history.",
     "emptyTree": "No entries at this path.",
-    "binaryFile": "Binary file @ {{path}}"
+    "binaryFile": "Binary file @ {{path}}",
+    "truncatedFile": "Large file (truncated) @ {{path}}",
+    "sshCloneLabel": "SSH clone"
   },
   "pull": {
     "syncHead": "Sync head",

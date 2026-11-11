@@ -53,6 +53,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: migrate
         run: cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
+      - name: Git SSH transport prerequisites
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo apt-get install -y -qq openssh-server git
+          id git >/dev/null 2>&1 || sudo useradd -r -M -s /usr/sbin/nologin git
+          sudo install -d -m 755 /run/sshd
+          cargo build -p musehub-git-ssh -q && sudo install -m 0755 target/debug/musehub-git-ssh /usr/local/bin/musehub-git-ssh
       - name: build agent adapter binaries
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
@@ -74,6 +81,9 @@ jobs:
           ./scripts/verify-dev-local-stack-negative.sh
           ./scripts/verify-dev-local-stack.sh
       - name: product acceptance
+        env:
+          MUSEHUB_REQUIRE_GIT_SSH: "1"
+          MUSEHUB_GIT_SSH_BIN: ${{ github.workspace }}/target/debug/musehub-git-ssh
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
       - name: backup restore verification
         run: chmod +x ./scripts/verify-backup-restore.sh && ./scripts/verify-backup-restore.sh

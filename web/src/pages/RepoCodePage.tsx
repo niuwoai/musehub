@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Panel } from '../components/Panel'
 import { DEFAULT_ORG } from '../app/paths'
-import { listGitCommits, listGitTree, readGitBlob } from '../api'
+import { listGitCommits, listGitTree, listRepos, readGitBlob } from '../api'
 
 export function RepoCodePage() {
   const { t } = useTranslation()
@@ -15,6 +15,7 @@ export function RepoCodePage() {
   const [fileBody, setFileBody] = useState('')
   const [fileMeta, setFileMeta] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [sshCloneUrl, setSshCloneUrl] = useState<string | null>(null)
 
   const loadTree = useCallback(async () => {
     if (!slug || !commit) return
@@ -24,6 +25,16 @@ export function RepoCodePage() {
     setFileBody('')
     setFileMeta('')
   }, [org, slug, commit, path])
+
+  useEffect(() => {
+    if (!slug) return
+    void listRepos(org)
+      .then((repos) => {
+        const match = repos.find((r) => r.slug === slug)
+        setSshCloneUrl(match?.ssh_clone_url ?? null)
+      })
+      .catch(() => setSshCloneUrl(null))
+  }, [org, slug])
 
   useEffect(() => {
     if (!slug) return
@@ -54,7 +65,10 @@ export function RepoCodePage() {
       setFileMeta(t('code.binaryFile', { path: entryPath }))
       setFileBody('')
     } else {
-      setFileMeta(entryPath)
+      const meta = blob.truncated
+        ? t('code.truncatedFile', { path: entryPath })
+        : entryPath
+      setFileMeta(meta)
       setFileBody(blob.text ?? '')
     }
   }
@@ -64,6 +78,12 @@ export function RepoCodePage() {
   return (
     <Panel data-testid="repo-code">
       <h2>{t('nav.repoCode')}</h2>
+      {sshCloneUrl ? (
+        <p data-testid="code-ssh-clone-url">
+          <strong>{t('code.sshCloneLabel')}</strong>{' '}
+          <code>{sshCloneUrl}</code>
+        </p>
+      ) : null}
       <label>
         {t('code.refLabel')}{' '}
         <input

@@ -82,15 +82,20 @@ The API listens on `0.0.0.0:8080` inside the container; the UI **`clone_url`** u
 
 ## SSH Git transport (product)
 
-Product Git-over-SSH is a **separate** listener (`musehub-git-ssh serve`), not the HTTP gateway port. OpenSSH invokes `musehub-git-ssh authorized-keys` and forces `musehub-git-ssh gateway` (no shell, no forwarding). Repository API returns **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`). Host keys persist under `MUSEHUB_GIT_SSH_RUN_DIR` (default `/var/lib/musehub/git-ssh`). Trust is the host key users pin on first connect — document your rotation procedure. Linux acceptance installs `openssh-server` when missing (`verify-product-acceptance.sh`). This is **not** untrusted multi-tenant process isolation and **not** the Colima `musehub-ssh-probe` harness.
+Product Git-over-SSH is a **separate** listener (`musehub-git-ssh serve` or the **`musehub-git-ssh`** Compose service), not the HTTP gateway port. OpenSSH invokes `musehub-git-ssh authorized-keys` and forces `musehub-git-ssh gateway` (no shell, no forwarding). Principal identity is bound to the stored key row in Postgres — clients cannot override `MUSEHUB_SSH_PRINCIPAL_ID`. Repository API and the Code tab show **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`).
 
-```bash
-export DATABASE_URL=...
-export MUSEHUB_GIT_ROOT=/var/lib/musehub/git
-export MUSEHUB_GIT_SSH_PORT=2222
-export MUSEHUB_GIT_SSH_RUN_DIR=/var/lib/musehub/git-ssh
-target/debug/musehub-git-ssh serve
-```
+| Path / variable | Purpose |
+|----------------|---------|
+| `deploy/docker-compose.yml` → `musehub-git-ssh` | Product sshd sidecar; shares `gitdata` with API |
+| Volume `gitsshdata` | Persistent **host keys** + sshd pid/config under `MUSEHUB_GIT_SSH_RUN_DIR` |
+| `MUSEHUB_GIT_SSH_LISTEN` | Bind address (`0.0.0.0` in Compose; `127.0.0.1` for local acceptance) |
+| `deploy/.env` | Set `MUSEHUB_PUBLIC_SSH_HOST` to the hostname users type for `ssh://git@…` |
+
+**Trust & rotation:** Users pin the sshd host public key on first connect (`gitsshdata` or `MUSEHUB_GIT_SSH_RUN_DIR`). To rotate, stop sshd, archive old keys, let `serve` generate new host keys (or run `ssh-keygen` manually), publish the new fingerprint to your team, then restart. **Permissions:** run the service as an unprivileged user (`musehub` in the image); do not grant login shells on this listener.
+
+**systemd:** optional `musehub-git-ssh.service` (installed by `install-musehub-systemd.sh`) starts/stops the Compose sshd service with the control plane — secrets stay in `deploy/.env` only.
+
+CI **fails** product acceptance when `openssh-server` is missing (`MUSEHUB_REQUIRE_GIT_SSH=1`); local runs without sshd exit the SSH suites as `not_run` (never as false success). This is **not** untrusted multi-tenant process isolation and **not** the Colima `musehub-ssh-probe` harness.
 
 ## Upgrade
 

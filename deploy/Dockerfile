@@ -13,7 +13,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
 COPY VERSION ./
-RUN cargo build --release -p musehub-server -p musehub-migrate -p musehub-runnerd \
+RUN cargo build --release -p musehub-server -p musehub-migrate -p musehub-runnerd -p musehub-git-ssh \
   && cargo build --release -p musehub-agent-adapter \
     --bin musehub-agent-reference \
     --bin musehub-agent-codex-sim \
@@ -97,6 +97,29 @@ ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
     MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/local/bin/musehub-runnerd"]
+
+FROM debian:${DEBIAN_VERSION} AS git-ssh-runtime
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssh-server git ca-certificates tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && useradd -r -u 997 -M -s /usr/sbin/nologin git \
+  && useradd -r -u 10001 -d /var/lib/musehub musehub \
+  && mkdir -p /var/lib/musehub/git /var/lib/musehub/git-ssh /run/sshd \
+  && chown musehub:musehub /var/lib/musehub/git-ssh \
+  && chown -R musehub:musehub /var/lib/musehub/git \
+  && chmod 700 /var/lib/musehub/git-ssh
+COPY --from=rust-builder /build/target/release/musehub-git-ssh /usr/local/bin/
+ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
+    MUSEHUB_GIT_SSH_RUN_DIR=/var/lib/musehub/git-ssh \
+    MUSEHUB_GIT_SSH_LISTEN=0.0.0.0 \
+    MUSEHUB_GIT_SSH_PORT=2222 \
+    MUSEHUB_GIT_SSH_AKC_USER=git
+VOLUME ["/var/lib/musehub/git", "/var/lib/musehub/git-ssh"]
+EXPOSE 2222
+# sshd supervisor must start as root; AKC/gateway drop to `git` / unprivileged paths.
+USER root
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/musehub-git-ssh", "serve"]
 
 FROM caddy:${CADDY_VERSION} AS gateway-runtime
 COPY --from=web-builder /web/dist /srv/web

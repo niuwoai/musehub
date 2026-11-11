@@ -11,6 +11,18 @@ use crate::audit;
 use crate::error::AppError;
 use crate::git_http::bare_repo_path;
 use crate::grants;
+use crate::ssh_keys::sanitize_stored_ssh_public_key;
+
+/// Unix account clients must use (`ssh git@host`, `AllowUsers`).
+pub const GIT_SSH_LOGIN_USER: &str = "git";
+
+pub fn assert_git_ssh_connection_user(ssh_user: &str) -> Result<(), AppError> {
+    if ssh_user.trim() == GIT_SSH_LOGIN_USER {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized)
+    }
+}
 
 pub const ALLOWED_GIT_COMMANDS: [&str; 2] = ["git-upload-pack", "git-receive-pack"];
 
@@ -145,61 +157,74 @@ pub async fn lookup_ssh_key_by_fingerprint(
     if member.0 == 0 {
         return Err(AppError::Unauthorized);
     }
+    let public_key = sanitize_stored_ssh_public_key(&public_key)?;
     Ok(SshKeyAuth {
         key_id,
         principal_id,
         handle,
-        public_key: public_key.trim().to_string(),
+        public_key,
     })
 }
 
-pub async fn reload_ssh_key_session(
-    pool: &PgPool,
-    key_id: Uuid,
-    principal_id: Uuid,
-) -> Result<SshKeyAuth, AppError> {
+/// Session auth uses only `key_id` from sshd-forced env; principal comes from DB (not client-settable).
+pub async fn reload_ssh_key_by_id(pool: &PgPool, key_id: Uuid) -> Result<SshKeyAuth, AppError> {
     let row = sqlx::query_as::<_, (Uuid, String, String, String)>(
         "SELECT s.principal_id, p.handle, p.status, s.public_key
          FROM ssh_keys s
          JOIN principals p ON p.id = s.principal_id
-         WHERE s.id = $1 AND s.principal_id = $2 AND s.revoked_at IS NULL",
+         WHERE s.id = $1 AND s.revoked_at IS NULL",
     )
     .bind(key_id)
-    .bind(principal_id)
     .fetch_optional(pool)
     .await?;
-    let Some((pid, handle, status, public_key)) = row else {
+    let Some((principal_id, handle, status, public_key)) = row else {
         return Err(AppError::Unauthorized);
     };
-    if status != "active" || pid != principal_id {
+    if status != "active" {
         return Err(AppError::Unauthorized);
     }
+    let member = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM memberships WHERE principal_id = $1 AND status = 'active'",
+    )
+    .bind(principal_id)
+    .fetch_one(pool)
+    .await?;
+    if member.0 == 0 {
+        return Err(AppError::Unauthorized);
+    }
+    let public_key = sanitize_stored_ssh_public_key(&public_key)?;
     Ok(SshKeyAuth {
         key_id,
         principal_id,
         handle,
-        public_key: public_key.trim().to_string(),
+        public_key,
     })
 }
 
 /// Writes one OpenSSH `authorized_keys` line for sshd `AuthorizedKeysCommand`.
-pub fn format_authorized_keys_line(auth: &SshKeyAuth, gateway_bin: &str) -> String {
-    format!(
-        "environment=\"MUSEHUB_SSH_KEY_ID={}\",environment=\"MUSEHUB_SSH_PRINCIPAL_ID={}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding,command=\"{gateway_bin} gateway\" {}",
-        auth.key_id,
-        auth.principal_id,
-        auth.public_key.trim()
-    )
+pub fn format_authorized_keys_line(
+    auth: &SshKeyAuth,
+    gateway_bin: &str,
+) -> Result<String, AppError> {
+    let key_material = sanitize_stored_ssh_public_key(&auth.public_key)?;
+    if key_material.contains('\n') || key_material.contains('\r') {
+        return Err(AppError::Validation("invalid stored ssh public key".into()));
+    }
+    let gateway_bin = gateway_bin.replace('"', "");
+    Ok(format!(
+        "environment=\"MUSEHUB_SSH_KEY_ID={key_id}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding,command=\"{gateway_bin} gateway\" {key_material}",
+        key_id = auth.key_id,
+    ))
 }
 
 pub async fn run_ssh_gateway(
     pool: &PgPool,
     git_root: &Path,
     key_id: Uuid,
-    principal_id: Uuid,
     original_command: &str,
 ) -> Result<i32, AppError> {
-    let _auth = reload_ssh_key_session(pool, key_id, principal_id).await?;
+    let auth = reload_ssh_key_by_id(pool, key_id).await?;
+    let principal_id = auth.principal_id;
     let parsed = parse_ssh_original_command(original_command)?;
     let (_, repo_id, storage_key) =
         super::repo_storage_for_member(pool, &parsed.org, &parsed.repo, principal_id).await?;
@@ -247,19 +272,53 @@ fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
 }
 
 /// Render sshd_config fragment for product Git SSH (caller supplies absolute paths).
+pub fn ssh_listen_address() -> String {
+    std::env::var("MUSEHUB_GIT_SSH_LISTEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn render_sshd_config(
     port: u16,
     host_key_path: &Path,
     pid_file: &Path,
     authorized_keys_bin: &Path,
+    setenv: &[(&str, &str)],
+    login_user: &str,
+    akc_user: &str,
+    akc_is_wrapper: bool,
 ) -> String {
+    let log_level = std::env::var("MUSEHUB_GIT_SSH_SSHD_LOG")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "ERROR".to_string());
+    let listen = ssh_listen_address();
+    let akc_cmd = if akc_is_wrapper {
+        format!("{}", authorized_keys_bin.display())
+    } else {
+        format!("{} authorized-keys", authorized_keys_bin.display())
+    };
+    let mut env_lines = String::new();
+    for (k, v) in setenv {
+        if k.is_empty() || v.is_empty() {
+            continue;
+        }
+        let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
+        env_lines.push_str(&format!("SetEnv {k}=\"{escaped}\"\n"));
+    }
     format!(
         r#"Port {port}
-ListenAddress 127.0.0.1
+ListenAddress {listen}
 HostKey {host_key}
 PidFile {pid}
+{env_lines}PermitRootLogin no
+AllowUsers {login_user}
 AuthorizedKeysFile none
-AuthorizedKeysCommand {akc} authorized-keys %u %k %t %f
+AuthorizedKeysCommand {akc_cmd} %u %k %t %f
+AuthorizedKeysCommandUser {akc_user}
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
@@ -271,18 +330,24 @@ GatewayPorts no
 AllowAgentForwarding no
 PermitUserRC no
 UsePAM no
-LogLevel ERROR
+UsePrivilegeSeparation no
+LogLevel {log_level}
 Subsystem sftp /bin/false
 "#,
         port = port,
+        listen = listen,
         host_key = host_key_path.display(),
         pid = pid_file.display(),
-        akc = authorized_keys_bin.display(),
+        akc_cmd = akc_cmd,
+        login_user = login_user,
+        akc_user = akc_user,
+        log_level = log_level,
     )
 }
 
 pub fn write_authorized_keys_stdout(auth: &SshKeyAuth, gateway_bin: &str) -> io::Result<()> {
-    let line = format_authorized_keys_line(auth, gateway_bin);
+    let line = format_authorized_keys_line(auth, gateway_bin)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut out = io::stdout().lock();
     out.write_all(line.as_bytes())?;
     out.write_all(b"\n")?;
@@ -305,5 +370,19 @@ mod tests {
     fn parse_rejects_shell() {
         assert!(parse_ssh_original_command("sh").is_err());
         assert!(parse_ssh_original_command("git-upload-pack '../etc/passwd'").is_err());
+    }
+
+    #[test]
+    fn authorized_keys_line_is_key_bound_not_principal_spoofable() {
+        let auth = SshKeyAuth {
+            key_id: Uuid::new_v4(),
+            principal_id: Uuid::new_v4(),
+            handle: "u".into(),
+            public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICXd1mIaYHo4ZxmswgaeWTij03jgeXse1S6HqIvQ1jrs test@musehub".into(),
+        };
+        let line = format_authorized_keys_line(&auth, "/opt/bin/musehub-git-ssh").unwrap();
+        assert!(line.contains(&format!("MUSEHUB_SSH_KEY_ID={}", auth.key_id)));
+        assert!(!line.contains("MUSEHUB_SSH_PRINCIPAL_ID"));
+        assert_eq!(line.matches('\n').count(), 0);
     }
 }

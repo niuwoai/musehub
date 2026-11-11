@@ -18,6 +18,7 @@ mod deployment;
 mod error;
 mod git_http;
 pub mod git_ssh;
+pub mod git_ssh_runtime;
 mod grants;
 mod hooks;
 pub mod lease;
@@ -45,7 +46,7 @@ mod list_cursor;
 mod pr;
 mod release;
 mod security;
-mod ssh_keys;
+pub mod ssh_keys;
 mod trace;
 
 use std::path::PathBuf;

@@ -48,6 +48,31 @@ services:
     expose:
       - "8080"
 
+  musehub-git-ssh:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: git-ssh-runtime
+    image: musehub-git-ssh:local
+    environment:
+      DATABASE_URL: postgres://musehub:${POSTGRES_PASSWORD}@postgres:5432/musehub?sslmode=disable
+      MUSEHUB_GIT_ROOT: /var/lib/musehub/git
+      MUSEHUB_GIT_SSH_RUN_DIR: /var/lib/musehub/git-ssh
+      MUSEHUB_GIT_SSH_PORT: ${MUSEHUB_GIT_SSH_PORT:-2222}
+      MUSEHUB_GIT_SSH_LISTEN: ${MUSEHUB_GIT_SSH_LISTEN:-0.0.0.0}
+      MUSEHUB_PUBLIC_SSH_HOST: ${MUSEHUB_PUBLIC_SSH_HOST:-127.0.0.1}
+    volumes:
+      - gitdata:/var/lib/musehub/git
+      - gitsshdata:/var/lib/musehub/git-ssh
+    ports:
+      - "${MUSEHUB_GIT_SSH_PORT:-2222}:2222"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      musehub-server:
+        condition: service_healthy
+    restart: unless-stopped
+
   gateway:
     build:
       context: ..
@@ -66,4 +91,5 @@ services:
 volumes:
   pgdata:
   gitdata:
+  gitsshdata:
   artifacts:
