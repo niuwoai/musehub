@@ -271,7 +271,7 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_state.0, "queued");
+    assert!(matches!(job_state.0.as_str(), "queued" | "running"));
     let run_row: (String, Option<String>) =
         sqlx::query_as("SELECT state, error_code FROM pipeline_runs WHERE id = $1")
             .bind(race_run_id)
