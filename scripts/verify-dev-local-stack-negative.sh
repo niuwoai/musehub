@@ -99,21 +99,46 @@ mv "$STATE/marker.bak" "$SERVER_MARKER"
 sleep 1
 port_free 8080 || { echo "verify_negative=fail port 8080 still busy" >&2; exit 1; }
 
-export MUSEHUB_DEV_STACK_FORCE_VITE_FAIL=1
-"$ROOT/scripts/dev-local-stack.sh" init >/dev/null 2>&1 || true
+STATE_VF="/tmp/musehub-dev-stack-vitefail-$$"
+mkdir -p "$STATE_VF"
+export MUSEHUB_DEV_STATE_DIR="$STATE_VF"
+export DATABASE_URL
+printf '%s\n' '#!/bin/sh' 'exit 1' >"$STATE_VF/vite-fail.sh"
+chmod +x "$STATE_VF/vite-fail.sh"
+export MUSEHUB_DEV_STACK_VITE_BIN="$STATE_VF/vite-fail.sh"
+"$ROOT/scripts/dev-local-stack.sh" init >/dev/null
 set +e
 "$ROOT/scripts/dev-local-stack.sh" start 2>"$STATE/vitefail.err"
 vf_code=$?
 set -e
-[[ "$vf_code" -ne 0 ]] || { echo "verify_negative=fail forced vite fail hook" >&2; exit 1; }
-grep -q 'vite_start_forced_fail' "$STATE/vitefail.err"
+[[ "$vf_code" -ne 0 ]] || { echo "verify_negative=fail vite launch should fail" >&2; exit 1; }
+grep -qE 'vite_login_unreachable|exec_ready_process_exit|exec_ready_timeout' "$STATE/vitefail.err"
 sleep 1
 port_free 8080 || { echo "verify_negative=fail server left on 8080 after vite fail" >&2; exit 1; }
-[[ ! -f "$SERVER_PID" ]] || ! kill -0 "$(tr -d '[:space:]' <"$SERVER_PID")" 2>/dev/null || {
+[[ ! -f "$STATE_VF/pids/server.pid" ]] || ! kill -0 "$(tr -d '[:space:]' <"$STATE_VF/pids/server.pid")" 2>/dev/null || {
   echo "verify_negative=fail server pid still alive after vite fail" >&2
   exit 1
 }
+rm -rf "$STATE_VF"
+unset MUSEHUB_DEV_STACK_VITE_BIN
 
-unset MUSEHUB_DEV_STACK_FORCE_VITE_FAIL
+STATE_YF="/tmp/musehub-dev-stack-yarnfail-$$"
+mkdir -p "$STATE_YF"
+export MUSEHUB_DEV_STATE_DIR="$STATE_YF"
+export MUSEHUB_DEV_STACK_YARN_CMD=/bin/false
+export MUSEHUB_DEV_STACK_TEST_YARN=1
+"$ROOT/scripts/dev-local-stack.sh" init >/dev/null
+set +e
+"$ROOT/scripts/dev-local-stack.sh" start 2>"$STATE/yarnfail.err"
+yf_code=$?
+set -e
+[[ "$yf_code" -ne 0 ]] || { echo "verify_negative=fail yarn should fail" >&2; exit 1; }
+grep -q 'yarn_install_failed' "$STATE/yarnfail.err"
+sleep 1
+port_free 8080 || { echo "verify_negative=fail server after yarn fail" >&2; exit 1; }
+rm -rf "$STATE_YF"
+unset MUSEHUB_DEV_STACK_YARN_CMD MUSEHUB_DEV_STACK_TEST_YARN
+
+export MUSEHUB_DEV_STATE_DIR="$STATE"
 
 echo "verify_dev_local_stack_negative=ok"

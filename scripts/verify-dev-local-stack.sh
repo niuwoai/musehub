@@ -75,13 +75,14 @@ assert_stack_down
 STATE_ALT="/tmp/musehub-dev-stack-verify-alt-$$"
 export MUSEHUB_DEV_STATE_DIR="$STATE_ALT"
 export MUSEHUB_BIND="127.0.0.1:18080"
-export MUSEHUB_DEV_API_URL="http://127.0.0.1:18080"
+unset MUSEHUB_DEV_API_URL
 "$ROOT/scripts/dev-local-stack.sh" init
 set -a
 # shellcheck disable=SC1090
 source "$STATE_ALT/env"
 set +a
 [[ "${MUSEHUB_DEV_API_URL:-}" == "http://127.0.0.1:18080" ]]
+[[ "${MUSEHUB_BIND:-}" == "127.0.0.1:18080" ]]
 "$ROOT/scripts/dev-local-stack.sh" start
 curl -sf http://127.0.0.1:18080/readyz | jq -e '.ready == true' >/dev/null
 "$ROOT/scripts/dev-local-stack.sh" stop

@@ -316,30 +316,43 @@ cmd_start() {
     cd "$ROOT" && exec "$ROOT/target/debug/musehub-server" >>"$SERVER_LOG" 2>&1
   ) &
   server_pid=$!
-  dev_local_slot_claim "$SERVER_PID" "$SERVER_MARKER" "$server_pid" "$SERVER_CMD_PATTERN" \
-    "$ROOT/target/debug/musehub-server"
+  if ! dev_local_slot_claim "$SERVER_PID" "$SERVER_MARKER" "$server_pid" "$SERVER_CMD_PATTERN" \
+    "$ROOT/target/debug/musehub-server"; then
+    kill "$server_pid" 2>/dev/null || true
+    exit 1
+  fi
   STARTED_SERVER=1
 
   if ! wait_readyz; then
     exit 1
   fi
 
-  if [[ "${MUSEHUB_DEV_STACK_FORCE_VITE_FAIL:-}" == "1" ]]; then
-    echo "dev_error=vite_start_forced_fail test_hook=1" >&2
-    exit 1
-  fi
-
   if ! dev_local_slot_occupied "$VITE_PID" "$VITE_MARKER" "$VITE_CMD_PATTERN"; then
-    if [[ ! -d "$ROOT/web/node_modules" ]]; then
-      yarn --cwd "$ROOT/web" install
+    local need_yarn=0
+    if [[ ! -d "$ROOT/web/node_modules" ]] || [[ "${MUSEHUB_DEV_STACK_TEST_YARN:-}" == "1" ]]; then
+      need_yarn=1
     fi
+    if [[ "$need_yarn" -eq 1 ]]; then
+      local yarn_cmd=(yarn)
+      if [[ -n "${MUSEHUB_DEV_STACK_YARN_CMD:-}" ]]; then
+        yarn_cmd=("${MUSEHUB_DEV_STACK_YARN_CMD}")
+      fi
+      if ! "${yarn_cmd[@]}" --cwd "$ROOT/web" install; then
+        echo "dev_error=yarn_install_failed" >&2
+        exit 1
+      fi
+    fi
+    local vite_bin="${MUSEHUB_DEV_STACK_VITE_BIN:-./node_modules/.bin/vite}"
     echo "dev_start=vite host=$vite_host port=$vite_port log=$VITE_LOG"
     local vite_pid
     (
-      cd "$ROOT/web" && exec ./node_modules/.bin/vite --host "$vite_host" --port "$vite_port" >>"$VITE_LOG" 2>&1
+      cd "$ROOT/web" && exec "$vite_bin" --host "$vite_host" --port "$vite_port" >>"$VITE_LOG" 2>&1
     ) &
     vite_pid=$!
-    dev_local_slot_claim "$VITE_PID" "$VITE_MARKER" "$vite_pid" "$VITE_CMD_PATTERN" "vite"
+    if ! dev_local_slot_claim "$VITE_PID" "$VITE_MARKER" "$vite_pid" "$VITE_CMD_PATTERN" "$vite_bin"; then
+      kill "$vite_pid" 2>/dev/null || true
+      exit 1
+    fi
     STARTED_VITE=1
 
     if ! wait_vite_login "${MUSEHUB_DEV_WEB_URL:-$VITE_URL}"; then
