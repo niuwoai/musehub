@@ -17,6 +17,7 @@ pub use compose::{compose_mode_from_env, ComposeAdapterMode};
 mod deployment;
 mod error;
 mod git_http;
+pub mod git_ssh;
 mod grants;
 mod hooks;
 pub mod lease;
@@ -72,6 +73,7 @@ use crate::auth::{
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
 use crate::git_http::{git_clone_url, git_http_backend};
+use crate::git_ssh::git_ssh_clone_url;
 
 /// Application state for product routes.
 #[derive(Clone)]
@@ -497,6 +499,7 @@ struct RepositoryView {
     slug: String,
     state: String,
     clone_url: String,
+    ssh_clone_url: String,
 }
 
 async fn list_repos(
@@ -537,6 +540,7 @@ async fn list_repos(
                 slug: slug.clone(),
                 state: repo_state,
                 clone_url: git_clone_url(&state.bind_display, &org, &slug),
+                ssh_clone_url: git_ssh_clone_url(&state.bind_display, &org, &slug),
             })
             .collect(),
     ))
@@ -593,6 +597,7 @@ async fn create_repo(
             slug: slug.clone(),
             state: "ready".to_string(),
             clone_url: git_clone_url(&state.bind_display, &org, &slug),
+            ssh_clone_url: git_ssh_clone_url(&state.bind_display, &org, &slug),
         }),
     ))
 }

@@ -80,6 +80,18 @@ Host / CI parity (Postgres URL, down then up idempotency): `scripts/verify-produ
 
 The API listens on `0.0.0.0:8080` inside the container; the UI **`clone_url`** uses `MUSEHUB_PUBLIC_HTTP_ORIGIN` (default `http://127.0.0.1:<gateway-port>`). For real clients, set e.g. `MUSEHUB_PUBLIC_HTTP_ORIGIN=https://musehub.internal` in `deploy/.env` to match how users reach the **gateway** (`/git/...` is proxied).
 
+## SSH Git transport (product)
+
+Product Git-over-SSH is a **separate** listener (`musehub-git-ssh serve`), not the HTTP gateway port. OpenSSH invokes `musehub-git-ssh authorized-keys` and forces `musehub-git-ssh gateway` (no shell, no forwarding). Repository API returns **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`). Host keys persist under `MUSEHUB_GIT_SSH_RUN_DIR` (default `/var/lib/musehub/git-ssh`). Trust is the host key users pin on first connect — document your rotation procedure. Linux acceptance installs `openssh-server` when missing (`verify-product-acceptance.sh`). This is **not** untrusted multi-tenant process isolation and **not** the Colima `musehub-ssh-probe` harness.
+
+```bash
+export DATABASE_URL=...
+export MUSEHUB_GIT_ROOT=/var/lib/musehub/git
+export MUSEHUB_GIT_SSH_PORT=2222
+export MUSEHUB_GIT_SSH_RUN_DIR=/var/lib/musehub/git-ssh
+target/debug/musehub-git-ssh serve
+```
+
 ## Upgrade
 
 Production profile (rebuild, migrate, recreate control plane + runner when PAT is set):

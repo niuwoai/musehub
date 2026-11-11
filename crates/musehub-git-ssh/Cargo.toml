@@ -1,0 +1,16 @@
+[package]
+name = "musehub-git-ssh"
+version = "0.1.0-rc4"
+edition = "2021"
+
+[[bin]]
+name = "musehub-git-ssh"
+path = "src/main.rs"
+
+[dependencies]
+musehub-app = { path = "../musehub-app" }
+musehub-core = { path = "../musehub-core" }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

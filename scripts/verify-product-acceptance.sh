@@ -23,6 +23,12 @@ cargo build -p musehub-agent-adapter --bin musehub-agent-codex-sim -q
 cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-compose-mock -q
 cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
+cargo build -p musehub-git-ssh -q
+if command -v apt-get >/dev/null 2>&1 && ! command -v sshd >/dev/null && ! test -x /usr/sbin/sshd; then
+  if command -v sudo >/dev/null; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 || true
+  fi
+fi
 
 echo "=== migrate reset (down) ==="
 cargo run -p musehub-migrate -- down migrations "$DATABASE_URL"
@@ -31,7 +37,7 @@ echo "=== migrate up ==="
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 
 echo "=== product integration tests ==="
-for suite in product_slice security_db agent_cancel_e2e protected_branch_git auth_matrix plan_immutable pr_gates_e2e pr_security_e2e agent_budget pat_scope pipeline_delivery_e2e pipeline_security_e2e pipeline_runner_pat_e2e pipeline_cancel_e2e deployment_idempotency_e2e deployment_conflict_e2e startup_reconcile_e2e lease_reconcile_e2e worker_claim_e2e multi_instance_reconcile_e2e stale_worker_fencing_e2e s1_collaboration_http_e2e s1_pr_comment_sync_race_e2e; do
+for suite in product_slice security_db agent_cancel_e2e protected_branch_git auth_matrix plan_immutable pr_gates_e2e pr_security_e2e agent_budget pat_scope pipeline_delivery_e2e pipeline_security_e2e pipeline_runner_pat_e2e pipeline_cancel_e2e deployment_idempotency_e2e deployment_conflict_e2e startup_reconcile_e2e lease_reconcile_e2e worker_claim_e2e multi_instance_reconcile_e2e stale_worker_fencing_e2e s1_collaboration_http_e2e s1_pr_comment_sync_race_e2e git_ssh_transport_e2e git_browse_limits_e2e; do
   echo "--- musehub-app $suite ---"
   cargo test -p musehub-app --test "$suite" -- --test-threads=1
 done

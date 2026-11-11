@@ -1,4 +1,4 @@
-//! IAM-02: SSH public key management (Git-over-SSH transport not productized here).
+//! IAM-02: SSH public key management (used by product `musehub-git-ssh` transport).
 
 use std::process::Command;
 use std::sync::Arc;
