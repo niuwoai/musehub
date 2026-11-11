@@ -150,13 +150,24 @@ test.describe('agent cancel releases busy for next start', () => {
     await expect(page.getByTestId('last-agent-run')).toContainText(/canceled/i, {
       timeout: 60_000,
     })
+    await expect(page.getByTestId('last-agent-run')).toHaveAttribute(
+      'data-agent-run-id',
+      CONTROLLABLE_RUN_ID,
+    )
 
     await runReferenceAgentButton(page).first().click()
     const secondResponse = await secondPost
     await expectResponseOk(secondResponse, 'second agent start POST')
+    const secondJson = (await secondResponse.json()) as { id: string }
+    expect(secondJson.id).not.toBe(CONTROLLABLE_RUN_ID)
     expect(routes.getPostCount()).toBeGreaterThanOrEqual(2)
 
     await routes.unroute()
-    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 180_000 })
+    await expect(page.getByTestId('last-agent-run')).toHaveAttribute(
+      'data-agent-run-id',
+      secondJson.id,
+      { timeout: 180_000 },
+    )
+    await expect(page.getByTestId('last-agent-run')).not.toContainText(/canceled/i)
   })
 })

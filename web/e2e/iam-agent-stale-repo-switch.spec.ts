@@ -146,6 +146,10 @@ test.describe('agent run start repo guard', () => {
     expect(recoveryResponse.ok()).toBeTruthy()
     const recoveryJson = (await recoveryResponse.json()) as { id: string }
     expect(recoveryJson.id).not.toBe(STALE_AGENT_FIXTURE_ID)
-    await expect(page.getByTestId('last-agent-run')).toBeVisible({ timeout: 180_000 })
+    await expect(page.getByTestId('last-agent-run')).toHaveAttribute(
+      'data-agent-run-id',
+      recoveryJson.id,
+      { timeout: 180_000 },
+    )
   })
 })

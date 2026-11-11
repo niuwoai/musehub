@@ -825,6 +825,9 @@ export default function App() {
     const heldStart = agentStartOpRef.current
     const runId = lastRun.id
     bumpAgentRunPollEpoch()
+    if (heldStart) {
+      releaseAgentStartBusy(heldStart)
+    }
     const op = captureAgentCancelOp(runId)
     setError(null)
     try {
@@ -843,8 +846,6 @@ export default function App() {
     } finally {
       if (heldStart) {
         releaseAgentStartBusy(heldStart)
-      } else {
-        setAgentRunStarting(false)
       }
     }
   }
@@ -1723,7 +1724,10 @@ export default function App() {
                 ))}
               </ul>
               {lastRun || agentRunStarting ? (
-                <div data-testid="last-agent-run">
+                <div
+                  data-testid="last-agent-run"
+                  data-agent-run-id={lastRun?.id ?? ''}
+                >
                   <p>
                     {agentRunStarting && !lastRun
                       ? t('app.agentStarting', { defaultValue: 'starting agent run…' })
