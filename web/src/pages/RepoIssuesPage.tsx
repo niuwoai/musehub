@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
 import { listIssuesPage, type Issue } from '../api'
 
+function issueMatchesFilters(
+  issue: Issue,
+  filters: { state: string; label: string; assignee: string },
+): boolean {
+  if (filters.state && issue.state !== filters.state) return false
+  if (filters.label && !(issue.labels ?? []).includes(filters.label)) return false
+  if (filters.assignee && issue.assignee_handle !== filters.assignee) return false
+  return true
+}
+
 export function RepoIssuesPage() {
   const { org = DEFAULT_ORG } = useParams<{ org: string }>()
+  const [searchParams] = useSearchParams()
+  const pageLimit = Math.min(
+    100,
+    Math.max(1, Number(searchParams.get('e2e_issue_limit')) || 25),
+  )
   const {
     t,
     selectedRepo,
@@ -26,30 +41,52 @@ export function RepoIssuesPage() {
   const [filterLabel, setFilterLabel] = useState('')
   const [filterAssignee, setFilterAssignee] = useState('')
   const [listError, setListError] = useState<string | null>(null)
+  const [listNotice, setListNotice] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+
+  const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
   const fetchPage = useCallback(
     async (cursor?: string, append = false) => {
       if (!selectedRepo) return
       setListError(null)
+      setListNotice(null)
       const page = await listIssuesPage(org, selectedRepo, {
         state: filterState || undefined,
         label: filterLabel || undefined,
         assignee: filterAssignee || undefined,
         cursor,
-        limit: 25,
+        limit: pageLimit,
       })
       setItems((prev) => (append ? [...prev, ...page.items] : page.items))
       setHasMore(page.has_more)
       setNextCursor(page.next_cursor)
     },
-    [org, selectedRepo, filterState, filterLabel, filterAssignee],
+    [org, selectedRepo, filterState, filterLabel, filterAssignee, pageLimit],
   )
 
   useEffect(() => {
     if (!selectedRepo) return
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
   }, [selectedRepo, fetchPage, t])
+
+  async function handleCreateIssue() {
+    setListError(null)
+    setListNotice(null)
+    const created = await onCreateIssue()
+    if (!created || !selectedRepo) return
+    if (issueMatchesFilters(created, filters)) {
+      setItems((prev) => {
+        const merged = [created, ...prev.filter((i) => i.id !== created.id)]
+        merged.sort((a, b) => b.number - a.number)
+        return merged
+      })
+    } else {
+      setListNotice(t('issues.createdHiddenByFilters', { number: created.number }))
+    }
+    await loadIssues(selectedRepo)
+    void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
+  }
 
   async function refreshAll() {
     await Promise.all([loadIssues(selectedRepo!), fetchPage()])
@@ -103,10 +140,11 @@ export function RepoIssuesPage() {
       <button type="button" data-testid="refresh-repo" onClick={() => void refreshAll()}>
         {t('app.refreshRepo')}
       </button>
-      <button type="button" onClick={() => void onCreateIssue()}>
+      <button type="button" data-testid="create-issue" onClick={() => void handleCreateIssue()}>
         {t('app.createIssue')}
       </button>
       {listError ? <p role="alert">{listError}</p> : null}
+      {listNotice ? <p role="status" data-testid="issue-list-notice">{listNotice}</p> : null}
       <ul data-testid="issue-list">
         {items.map((issue) => (
           <li key={issue.id} data-testid={`issue-row-${issue.number}`}>

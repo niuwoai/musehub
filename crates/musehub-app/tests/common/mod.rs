@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod s1_git_push;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

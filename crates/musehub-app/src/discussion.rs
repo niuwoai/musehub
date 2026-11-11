@@ -86,6 +86,7 @@ pub async fn post_issue_comment(
     let issue_id = issue_id_for_number(&state.pool, repo_id, number).await?;
     insert_comment(
         &state.pool,
+        &state.pool,
         org_id,
         repo_id,
         "issue",
@@ -122,11 +123,21 @@ pub async fn post_pr_comment(
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
     let (_, _, storage_key) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let (pr_id, row_version, base_oid, head_oid) =
-        pr_meta_for_number(&state.pool, repo_id, number).await?;
+    let bare = crate::git_http::bare_repo_path(&state.git_root, &storage_key);
+    let mut tx = state.pool.begin().await?;
+    let locked = sqlx::query_as::<_, (Uuid, i64, Option<String>, Option<String>)>(
+        "SELECT id, row_version, base_oid, head_oid FROM pull_requests
+         WHERE repo_id = $1 AND number = $2 FOR UPDATE",
+    )
+    .bind(repo_id)
+    .bind(number)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((pr_id, row_version, base_oid, head_oid)) = locked else {
+        return Err(AppError::NotFound);
+    };
     let base = base_oid.ok_or(AppError::Validation("pull request missing base_oid".into()))?;
     let head = head_oid.ok_or(AppError::Validation("pull request missing head_oid".into()))?;
-    let bare = crate::git_http::bare_repo_path(&state.git_root, &storage_key);
     let stored_anchor = match body.anchor {
         None | Some(Value::Null) => None,
         Some(anchor) => Some(pr_anchor::validate_and_normalize_pr_anchor(
@@ -137,7 +148,8 @@ pub async fn post_pr_comment(
             anchor,
         )?),
     };
-    insert_comment(
+    let view = insert_comment(
+        &mut *tx,
         &state.pool,
         org_id,
         repo_id,
@@ -147,7 +159,9 @@ pub async fn post_pr_comment(
         &body.body,
         stored_anchor,
     )
-    .await
+    .await?;
+    tx.commit().await?;
+    Ok(view)
 }
 
 pub async fn mark_pr_comments_outdated<'e, E>(
@@ -223,8 +237,9 @@ async fn list_comments(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn insert_comment(
-    pool: &sqlx::PgPool,
+async fn insert_comment<'e, E>(
+    executor: E,
+    lookup_pool: &sqlx::PgPool,
     org_id: Uuid,
     repo_id: Uuid,
     target_kind: &str,
@@ -232,7 +247,10 @@ async fn insert_comment(
     author_id: Uuid,
     body: &str,
     anchor: Option<Value>,
-) -> Result<(StatusCode, Json<DiscussionCommentView>), AppError> {
+) -> Result<(StatusCode, Json<DiscussionCommentView>), AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO discussion_comments (id, org_id, repo_id, target_kind, target_id, author_id, body, anchor)
@@ -246,11 +264,11 @@ async fn insert_comment(
     .bind(author_id)
     .bind(body.trim())
     .bind(anchor.clone())
-    .execute(pool)
+    .execute(executor)
     .await?;
     let author: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
         .bind(author_id)
-        .fetch_one(pool)
+        .fetch_one(lookup_pool)
         .await?;
     Ok((
         StatusCode::CREATED,

@@ -73,6 +73,11 @@ export function RepoCodePage() {
         />
       </label>
       <p data-testid="code-pinned-commit">{t('code.pinnedCommit', { oid: commit || '…' })}</p>
+      {commit ? (
+        <span data-testid="code-commit-oid" className="sr-only" aria-hidden>
+          {commit}
+        </span>
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       <ul data-testid="code-tree">
         {entries.length === 0 ? (

@@ -132,7 +132,18 @@
     "applyFilters": "Apply filters",
     "loadMore": "Load more",
     "loadingMore": "Loading more…",
-    "loadFailed": "Could not load issues."
+    "loadFailed": "Could not load issues.",
+    "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters."
+  },
+  "issueDetail": {
+    "labels": "Labels",
+    "assignee": "Assignee",
+    "save": "Save",
+    "saveFailed": "Could not save issue.",
+    "discussion": "Discussion",
+    "noComments": "No comments yet.",
+    "addComment": "Add comment",
+    "commentFailed": "Could not post comment."
   },
   "sshKeys": {
     "title": "SSH keys",

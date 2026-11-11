@@ -66,9 +66,11 @@ pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn org_assignee_id(
+/// Assignee must be an active org member **and** have repository access (grant or org admin/owner).
+async fn repo_assignee_id(
     pool: &sqlx::PgPool,
     org_id: Uuid,
+    repo_id: Uuid,
     handle: &str,
 ) -> Result<Uuid, AppError> {
     let row = sqlx::query_as::<_, (Uuid,)>(
@@ -82,8 +84,14 @@ async fn org_assignee_id(
     .bind(org_id)
     .fetch_optional(pool)
     .await?;
-    row.map(|(id,)| id)
-        .ok_or_else(|| AppError::Validation("assignee not eligible".into()))
+    let Some((id,)) = row else {
+        return Err(AppError::Validation("assignee not eligible".into()));
+    };
+    match crate::grants::ensure_principal_repo_access(pool, org_id, repo_id, id).await {
+        Ok(()) => Ok(id),
+        Err(AppError::Forbidden) => Err(AppError::Validation("assignee not eligible".into())),
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Serialize)]
@@ -130,7 +138,7 @@ pub async fn list_issues_page(
     }
 
     let assignee_id: Option<Uuid> = if let Some(handle) = &q.assignee {
-        Some(org_assignee_id(&state.pool, org_id, handle).await?)
+        Some(repo_assignee_id(&state.pool, org_id, repo_id, handle).await?)
     } else {
         None
     };
@@ -273,7 +281,7 @@ pub async fn patch_issue(
         if handle.is_empty() {
             assignee_id = None;
         } else {
-            assignee_id = Some(org_assignee_id(&state.pool, org_id, handle).await?);
+            assignee_id = Some(repo_assignee_id(&state.pool, org_id, repo_id, handle).await?);
         }
     }
 

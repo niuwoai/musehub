@@ -543,21 +543,30 @@ pub async fn sync_pull_request(
     .bind(number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, source_branch, target_branch, pr_state, _old_head, row_version)) = pr else {
+    let Some((pr_id, source_branch, target_branch, pr_state, _old_head, _row_version)) = pr else {
         return Err(AppError::NotFound);
     };
-    if row_version != body.expected_row_version {
+    if pr_state != "open" {
+        return Err(AppError::Validation("pull request is not open".to_string()));
+    }
+    let mut tx = state.pool.begin().await?;
+    let locked = sqlx::query_as::<_, (i64,)>(
+        "SELECT row_version FROM pull_requests WHERE id = $1 FOR UPDATE",
+    )
+    .bind(pr_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((locked_row_version,)) = locked else {
+        return Err(AppError::NotFound);
+    };
+    if locked_row_version != body.expected_row_version {
         return Err(AppError::Validation(
             "stale pull request revision".to_string(),
         ));
     }
-    if pr_state != "open" {
-        return Err(AppError::Validation("pull request is not open".to_string()));
-    }
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let head_oid = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     let base_oid = git_rev_parse(&bare, &format!("refs/heads/{target_branch}"))?;
-    let mut tx = state.pool.begin().await?;
     let new_row: Option<(i64,)> = sqlx::query_as(
         "UPDATE pull_requests SET head_oid = $2, base_oid = $3, row_version = row_version + 1,
          updated_at = CURRENT_TIMESTAMP

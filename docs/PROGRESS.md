@@ -35,7 +35,7 @@
 | ID | 状态 | 说明 |
 |----|------|------|
 | GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff`（根路径树、输出上限）；控制台 **Code** 页 + en/zh |
-| ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验、**组织内**负责人资格；Issue 页筛选/加载更多 |
+| ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验；负责人须为 **组织内活跃成员且具有仓库 grant（或 org admin/owner）**；Issue 列表创建后与筛选/分页一致 |
 | PR-01 | `[~]` | diff **可选行锚点** + `pr_revision_id` CAS；sync **`expected_row_version`**；outdated 与 sync 同事务 |
 | IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`，撤销可重加）；**GIT-02 SSH transport 未接线**（探针≠产品） |
 

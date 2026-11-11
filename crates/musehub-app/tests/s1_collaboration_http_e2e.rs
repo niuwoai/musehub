@@ -7,7 +7,6 @@ use std::process::Command;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use musehub_app::bare_repo_path;
 use serde_json::json;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -35,63 +34,7 @@ fn temp_ed25519_public() -> String {
     std::fs::read_to_string(key.with_extension("pub")).expect("pub")
 }
 
-fn push_branch(
-    git_root: &std::path::Path,
-    storage_key: Uuid,
-    branch: &str,
-    file: &str,
-    content: &[u8],
-) -> String {
-    let bare = bare_repo_path(git_root, &storage_key);
-    let work = tempfile::tempdir().unwrap();
-    assert!(Command::new("git")
-        .args([
-            "clone",
-            bare.to_str().unwrap(),
-            work.path().to_str().unwrap()
-        ])
-        .status()
-        .unwrap()
-        .success());
-    let git = |args: &[&str]| {
-        assert!(Command::new("git")
-            .current_dir(work.path())
-            .args(args)
-            .status()
-            .unwrap()
-            .success());
-    };
-    if !Command::new("git")
-        .current_dir(work.path())
-        .args(["checkout", branch])
-        .status()
-        .unwrap()
-        .success()
-    {
-        git(&["checkout", "-b", branch]);
-    }
-    if let Some(parent) = work.path().join(file).parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(work.path().join(file), content).unwrap();
-    git(&["add", file]);
-    git(&[
-        "-c",
-        "user.email=itest@musehub.local",
-        "-c",
-        "user.name=itest",
-        "commit",
-        "-m",
-        "s1",
-    ]);
-    git(&["push", "origin", branch]);
-    let out = Command::new("git")
-        .current_dir(work.path())
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
-}
+use common::s1_git_push::push_branch;
 
 fn push_extra_commits(git_root: &std::path::Path, storage_key: Uuid, branch: &str, n: usize) {
     for i in 0..n {
@@ -264,6 +207,30 @@ async fn s1_collaboration_rest_slice() {
         StatusCode::NO_CONTENT
     );
 
+    let nogrant = format!("nogrant{}", &Uuid::new_v4().simple().to_string()[..8]);
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/demo/members")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "handle": nogrant,
+                            "password": "S1-NoGrant-Strong-12!",
+                            "role": "member"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CREATED
+    );
     let issue_resp = app
         .clone()
         .oneshot(
@@ -281,6 +248,25 @@ async fn s1_collaboration_rest_slice() {
         .unwrap();
     assert_eq!(issue_resp.status(), StatusCode::CREATED);
     let issue_number = body_json(issue_resp).await["number"].as_i64().unwrap();
+
+    let nogrant_assignee = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues/{issue_number}"
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "assignee_handle": nogrant }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nogrant_assignee.status(), StatusCode::BAD_REQUEST);
 
     let bad_labels = app
         .clone()

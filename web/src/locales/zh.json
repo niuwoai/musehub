@@ -137,7 +137,18 @@
     "applyFilters": "应用筛选",
     "loadMore": "加载更多",
     "loadingMore": "正在加载更多…",
-    "loadFailed": "无法加载 Issue 列表。"
+    "loadFailed": "无法加载 Issue 列表。",
+    "createdHiddenByFilters": "Issue #{{number}} 已创建，但不满足当前筛选条件。"
+  },
+  "issueDetail": {
+    "labels": "标签",
+    "assignee": "负责人",
+    "save": "保存",
+    "saveFailed": "无法保存 Issue。",
+    "discussion": "讨论",
+    "noComments": "暂无评论。",
+    "addComment": "发表评论",
+    "commentFailed": "无法发表评论。"
   },
   "sshKeys": {
     "title": "SSH 密钥",
