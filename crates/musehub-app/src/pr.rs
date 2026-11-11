@@ -27,6 +27,7 @@ pub struct PullRequestView {
     pub state: String,
     pub head_oid: Option<String>,
     pub base_oid: Option<String>,
+    pub issue_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -252,6 +253,7 @@ pub async fn create_pull_request(
             state: "open".to_string(),
             head_oid: Some(head_oid),
             base_oid: Some(base_oid),
+            issue_id: body.issue_id,
         }),
     ))
 }
@@ -479,9 +481,10 @@ pub async fn list_pull_requests(
             String,
             Option<String>,
             Option<String>,
+            Option<Uuid>,
         ),
     >(
-        "SELECT id, number, title, source_branch, target_branch, state, head_oid, base_oid
+        "SELECT id, number, title, source_branch, target_branch, state, head_oid, base_oid, issue_id
          FROM pull_requests WHERE repo_id = $1 ORDER BY number",
     )
     .bind(repo_id)
@@ -490,7 +493,17 @@ pub async fn list_pull_requests(
     Ok(Json(
         rows.into_iter()
             .map(
-                |(id, number, title, source_branch, target_branch, state, head_oid, base_oid)| {
+                |(
+                    id,
+                    number,
+                    title,
+                    source_branch,
+                    target_branch,
+                    state,
+                    head_oid,
+                    base_oid,
+                    issue_id,
+                )| {
                     PullRequestView {
                         id,
                         number,
@@ -500,6 +513,7 @@ pub async fn list_pull_requests(
                         state,
                         head_oid,
                         base_oid,
+                        issue_id,
                     }
                 },
             )
@@ -541,19 +555,22 @@ pub async fn sync_pull_request(
     .execute(&state.pool)
     .await?;
     insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
-    let title: (String,) = sqlx::query_as("SELECT title FROM pull_requests WHERE id = $1")
-        .bind(pr_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT title, issue_id FROM pull_requests WHERE id = $1",
+    )
+    .bind(pr_id)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
-        title: title.0,
+        title: meta.0,
         source_branch,
         target_branch,
         state: "open".to_string(),
         head_oid: Some(head_oid),
         base_oid: Some(base_oid),
+        issue_id: meta.1,
     }))
 }
 
@@ -985,19 +1002,22 @@ pub async fn merge_pull_request(
     .bind(principal_id)
     .execute(&state.pool)
     .await?;
-    let title: (String,) = sqlx::query_as("SELECT title FROM pull_requests WHERE id = $1")
-        .bind(pr_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT title, issue_id FROM pull_requests WHERE id = $1",
+    )
+    .bind(pr_id)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
-        title: title.0,
+        title: meta.0,
         source_branch,
         target_branch,
         state: "merged".to_string(),
         head_oid: Some(merged_oid.clone()),
         base_oid: Some(base_oid),
+        issue_id: meta.1,
     }))
 }
 

@@ -337,6 +337,7 @@ pub async fn agent_run_start(
                 message_owned,
                 deadline,
                 budget_tokens,
+                None,
             )
             .await;
         });

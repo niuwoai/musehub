@@ -39,6 +39,34 @@ export type PullRequest = {
   source_branch: string
   target_branch: string
   head_oid?: string | null
+  issue_id?: string | null
+}
+
+export type PrCiFailure = {
+  pr_id: string
+  pr_number: number
+  head_oid: string
+  issue_id?: string | null
+  checks_failed: { check_name: string; state: string }[]
+  pipeline_run_id?: string | null
+  pipeline_state?: string | null
+  pipeline_error_code?: string | null
+  failed_jobs: PipelineJob[]
+  fix_rounds_used: number
+  fix_rounds_max: number
+  agent_fix_allowed: boolean
+  agent_fix_denial_reason?: string | null
+}
+
+export type PrAgentFixRun = {
+  id: string
+  adapter_kind: string
+  state: string
+  pr_id: string
+  fix_round: number
+  head_oid: string
+  usage_tokens: number
+  budget_unknown: boolean
 }
 
 export type PipelineRun = {
@@ -214,6 +242,27 @@ export async function cancelAgentRun(runId: string) {
 
 export async function listPullRequests(org: string, repo: string) {
   return api<PullRequest[]>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`)
+}
+
+export async function getPrCiFailure(org: string, repo: string, prNumber: number) {
+  return api<PrCiFailure>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/ci-failure`,
+  )
+}
+
+export async function startPrAgentFix(
+  org: string,
+  repo: string,
+  prNumber: number,
+  body?: { budget_tokens?: number },
+) {
+  return api<PrAgentFixRun>(
+    `/api/v1/orgs/${org}/repos/${repo}/pull-requests/${prNumber}/agent-fix`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    },
+  )
 }
 
 export async function createPullRequest(

@@ -33,6 +33,9 @@ import {
   type PatMasked,
   type RunnerCapabilities,
   getAgentRun,
+  getPrCiFailure,
+  type PrCiFailure,
+  startPrAgentFix,
   getDeployment,
   getDeploymentTrace,
   approveDeployment,
@@ -76,6 +79,8 @@ export default function App() {
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
   const [issues, setIssues] = useState<Issue[]>([])
   const [pulls, setPulls] = useState<PullRequest[]>([])
+  const [prCiFailure, setPrCiFailure] = useState<PrCiFailure | null>(null)
+  const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null)
   const [lastRun, setLastRun] = useState<AgentRun | null>(null)
   const [agentRunStarting, setAgentRunStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -539,13 +544,17 @@ export default function App() {
     await refreshRepos()
   }
 
-  async function loadIssues(slug: string) {
+  async function loadIssues(slug: string, preservePrNumber?: number) {
     if (selectedRepoRef.current !== slug) {
       invalidateAgentRunWork()
     }
     invalidateDeploymentWork()
     selectedRepoRef.current = slug
     setSelectedRepo(slug)
+    if (preservePrNumber == null) {
+      setPrCiFailure(null)
+      setSelectedPrNumber(null)
+    }
     const op = captureDeploymentOp(slug)
     setError(null)
     try {
@@ -847,6 +856,60 @@ export default function App() {
       if (heldStart) {
         releaseAgentStartBusy(heldStart)
       }
+    }
+  }
+
+  async function onInspectPrCi(pr: PullRequest) {
+    if (!selectedRepo) return
+    setSelectedPrNumber(pr.number)
+    setError(null)
+    try {
+      const ctx = await getPrCiFailure(DEFAULT_ORG, selectedRepo, pr.number)
+      setPrCiFailure(ctx)
+    } catch (err) {
+      setPrCiFailure(null)
+      setError(err instanceof Error ? err.message : 'CI failure lookup failed')
+    }
+  }
+
+  async function onStartPrAgentFix() {
+    if (!selectedRepo || !prCiFailure?.agent_fix_allowed || !prCiFailure.issue_id) return
+    if (agentRunStarting) return
+    bumpAgentRunPollEpoch()
+    const op = captureAgentStartOp(prCiFailure.issue_id)
+    agentStartOpRef.current = op
+    setAgentRunStarting(true)
+    setError(null)
+    const prNumber = prCiFailure.pr_number
+    try {
+      const run = await startPrAgentFix(DEFAULT_ORG, selectedRepo, prNumber)
+      if (!agentOpActive(op)) {
+        return
+      }
+      applyAgentRun({
+        id: run.id,
+        adapter_kind: run.adapter_kind,
+        state: run.state,
+        result_commit_oid: null,
+        usage_tokens: run.usage_tokens,
+        budget_unknown: run.budget_unknown,
+      })
+      const finished = await pollRun(run.id, op)
+      if (!finished || !agentOpActive(op)) {
+        return
+      }
+      applyAgentRun(finished)
+      const ctx = await getPrCiFailure(DEFAULT_ORG, selectedRepo, prNumber)
+      if (agentOpActive(op)) {
+        setPrCiFailure(ctx)
+      }
+      await loadIssues(selectedRepo, prNumber)
+    } catch (err) {
+      if (agentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'agent fix failed')
+      }
+    } finally {
+      releaseAgentStartBusy(op)
     }
   }
 
@@ -1757,13 +1820,78 @@ export default function App() {
                       #{pr.number} {pr.title} ({pr.state}) {pr.source_branch} →{' '}
                       {pr.target_branch}
                       {pr.state === 'open' ? (
-                        <button type="button" onClick={() => void onApproveAndMerge(pr)}>
-                          {t('app.mergeShortcut')}
-                        </button>
+                        <>
+                          <button type="button" onClick={() => void onInspectPrCi(pr)}>
+                            {t('app.prCiInspect')}
+                          </button>
+                          <button type="button" onClick={() => void onApproveAndMerge(pr)}>
+                            {t('app.mergeShortcut')}
+                          </button>
+                        </>
                       ) : null}
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {prCiFailure && selectedPrNumber != null ? (
+                <div data-testid="pr-ci-failure-panel">
+                  <h3>
+                    {t('app.prCiFailureTitle', { number: selectedPrNumber })}
+                  </h3>
+                  <p data-testid="pr-ci-head-oid">
+                    head {prCiFailure.head_oid.slice(0, 7)}
+                  </p>
+                  <p data-testid="pr-ci-fix-rounds">
+                    {t('app.prCiFixRounds', {
+                      used: prCiFailure.fix_rounds_used,
+                      max: prCiFailure.fix_rounds_max,
+                    })}
+                  </p>
+                  {prCiFailure.pipeline_error_code || prCiFailure.pipeline_state ? (
+                    <p data-testid="pr-ci-pipeline-summary">
+                      pipeline{' '}
+                      {prCiFailure.pipeline_state ?? '—'}
+                      {prCiFailure.pipeline_error_code
+                        ? ` (${prCiFailure.pipeline_error_code})`
+                        : ''}
+                    </p>
+                  ) : null}
+                  {prCiFailure.checks_failed.length > 0 ? (
+                    <ul data-testid="pr-ci-check-list">
+                      {prCiFailure.checks_failed.map((c) => (
+                        <li key={c.check_name}>
+                          {c.check_name}: {c.state}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {prCiFailure.failed_jobs.length > 0 ? (
+                    <ul data-testid="pr-ci-job-list">
+                      {prCiFailure.failed_jobs.map((j) => (
+                        <li key={j.id}>
+                          {j.job_key} ({j.state})
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {prCiFailure.agent_fix_allowed ? (
+                    <button
+                      type="button"
+                      data-testid="pr-agent-fix"
+                      disabled={agentRunStarting}
+                      onClick={() => void onStartPrAgentFix()}
+                    >
+                      {t('app.prAgentFix')}
+                    </button>
+                  ) : (
+                    <p data-testid="pr-agent-fix-denied" style={{ color: '#9a6700' }}>
+                      {t('app.prAgentFixDenied')}
+                      {prCiFailure.agent_fix_denial_reason
+                        ? `: ${prCiFailure.agent_fix_denial_reason}`
+                        : ''}
+                    </p>
+                  )}
+                </div>
               ) : null}
               <Panel style={{ marginTop: '1rem' }} data-testid="delivery-panel">
                 <h3>{t('app.deliveryTitle')}</h3>

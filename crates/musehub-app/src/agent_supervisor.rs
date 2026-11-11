@@ -97,7 +97,19 @@ pub async fn run_agent_job(
     message: String,
     deadline: Duration,
     budget_tokens: Option<u64>,
+    checkout_head_oid: Option<String>,
 ) {
+    let checkout_head_oid = if checkout_head_oid.is_some() {
+        checkout_head_oid
+    } else {
+        sqlx::query_as::<_, (Option<String>,)>("SELECT head_oid FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|(oid,)| oid)
+    };
     let work_lease = match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
         Ok(lease) => lease,
         Err(_) => {
@@ -153,10 +165,46 @@ pub async fn run_agent_job(
         fenced_fail(&pool, run_id, instance_id, epoch, "git_clone_failed").await;
         return;
     }
-    let _ = std::process::Command::new("git")
-        .current_dir(work_dir.path())
-        .args(["checkout", "-B", &branch, "main"])
-        .status();
+    if let Some(oid) = checkout_head_oid.as_deref() {
+        let checkout_ok = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["checkout", "-B", &branch])
+            .status()
+            .is_ok_and(|s| s.success());
+        let reset_ok = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["reset", "--hard", oid])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !checkout_ok || !reset_ok {
+            fenced_fail(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "git_head_checkout_failed",
+            )
+            .await;
+            return;
+        }
+    } else {
+        let checkout_ok = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["checkout", "-B", &branch, "main"])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !checkout_ok {
+            fenced_fail(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "git_branch_checkout_failed",
+            )
+            .await;
+            return;
+        }
+    }
 
     let message = if message.is_empty() {
         sqlx::query_as::<_, (String,)>("SELECT task_message FROM agent_runs WHERE id = $1")
@@ -258,10 +306,15 @@ pub async fn run_agent_job(
                 .await;
             } else if commit.is_some() {
                 if still_holds_lease(&pool, run_id, instance_id, epoch).await {
-                    let _ = std::process::Command::new("git")
+                    let push_ok = std::process::Command::new("git")
                         .current_dir(work_dir.path())
                         .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
-                        .status();
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if !push_ok {
+                        fenced_fail(&pool, run_id, instance_id, epoch, "git_push_failed").await;
+                        return;
+                    }
                 }
                 let _ = finalize_agent_run_state(
                     &pool,

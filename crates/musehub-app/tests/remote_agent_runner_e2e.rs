@@ -212,6 +212,7 @@ async fn remote_worker_claims_and_completes_agent_run() {
         message,
         Duration::from_secs(120),
         None,
+        None,
     )
     .await;
     let state: (String,) = sqlx::query_as("SELECT state FROM agent_runs WHERE id = $1")
