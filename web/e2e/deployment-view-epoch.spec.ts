@@ -31,7 +31,6 @@ async function loginAsAdmin(page: Page) {
 }
 
 async function createEmptyRepo(page: Page) {
-  await waitForDemoRepoNavHydrated(page)
   const { slug } = await createRepoViaUi(page)
   await openRepoDelivery(page, slug)
   return slug

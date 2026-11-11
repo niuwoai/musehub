@@ -140,6 +140,7 @@ test.describe('deployment list discovery', () => {
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
     const { slug: slugA } = await createRepoViaUi(page)
+    const { slug: slugB } = await createRepoViaUi(page)
     await openRepoDelivery(page, slugA)
     await expect(page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`)).toBeVisible({
       timeout: 15_000,
@@ -148,17 +149,13 @@ test.describe('deployment list discovery', () => {
     const detailReq = page.waitForRequest(
       (req) => req.url().includes(STALE_DEPLOYMENT_ID) && req.method() === 'GET',
     )
-    void page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
-    await detailReq
-
-    await page.getByTestId('nav-repos').click()
-    await waitForDemoRepoNavHydrated(page)
-    const { slug: slugB } = await createRepoViaUi(page)
-    await openRepoDelivery(page, slugB)
-
     const detailDone = page.waitForResponse(
       (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
     )
+    void page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
+    await detailReq
+
+    await openRepoDelivery(page, slugB)
     release()
     await detailDone
 

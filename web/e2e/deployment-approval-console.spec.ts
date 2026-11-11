@@ -9,7 +9,7 @@ import { goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
   openRepoBySlug,
-  repoNavButtonForSlug,
+  openRepoDelivery,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
 
@@ -274,8 +274,7 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await waitForDemoRepoNavHydrated(page)
-    await repoNavButtonForSlug(page, slug).click()
+    await openRepoDelivery(page, slug)
     await page.getByTestId('deployment-lookup-id').fill(pending.id)
     await page.getByTestId('load-deployment').click()
     await expect(page.getByTestId('deployment-approval')).toBeVisible()
@@ -287,8 +286,7 @@ test.describe('protected deployment approval console', () => {
     await fillLoginForm(page, 'admin', adminPassword!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')
-    await waitForDemoRepoNavHydrated(page)
-    await repoNavButtonForSlug(page, slug).click()
+    await openRepoDelivery(page, slug)
     await page.getByTestId('deployment-lookup-id').fill(pending.id)
     await page.getByTestId('load-deployment').click()
     await expect(page.getByTestId('deployment-approval')).toBeVisible()

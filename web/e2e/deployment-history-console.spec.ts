@@ -301,19 +301,21 @@ test.describe('deployment history console', () => {
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
 
-    const reselect = page.getByRole('button', { name: savedSlug, exact: true })
-    await expect(reselect).toBeVisible({ timeout: 15_000 })
+    await expect(repoNavButtonForSlug(page, savedSlug)).toBeVisible({ timeout: 15_000 })
     const remountList = page.waitForResponse(
       (r) =>
         r.url().includes('/deployments?') &&
         r.request().method() === 'GET' &&
         r.url().includes(savedSlug),
     )
-    const otherRepo = repoNavButtons(page).filter({ hasNotText: savedSlug }).first()
-    if ((await otherRepo.count()) > 0) {
-      await otherRepo.click()
+    const otherButtons = repoNavButtons(page).filter({ hasNotText: savedSlug })
+    if ((await otherButtons.count()) > 0) {
+      const otherSlug = ((await otherButtons.first().textContent()) ?? '').trim()
+      if (otherSlug) {
+        await openRepoDelivery(page, otherSlug)
+      }
     }
-    await reselect.click()
+    await openRepoDelivery(page, savedSlug)
     await remountList
     await expect(page.getByTestId('deployment-list-empty')).toBeVisible({ timeout: 15_000 })
 

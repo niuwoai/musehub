@@ -102,7 +102,7 @@ test.describe('agent run start repo guard', () => {
 
     const responseDone = page.waitForResponse(
       (r) =>
-        r.url().includes(`/repos/${staleSlug}/agent-runs`) &&
+        r.url().includes(`/api/v1/orgs/demo/repos/${staleSlug}/agent-runs`) &&
         r.request().method() === 'POST',
     )
 
@@ -133,7 +133,7 @@ test.describe('agent run start repo guard', () => {
 
     const recoveryPost = page.waitForResponse(
       (r) =>
-        r.url().includes(`/repos/${staleSlug}/agent-runs`) &&
+        r.url().includes(`/api/v1/orgs/demo/repos/${staleSlug}/agent-runs`) &&
         r.request().method() === 'POST',
       { timeout: 180_000 },
     )
