@@ -46,11 +46,12 @@ import {
   listRepos,
   login,
   me,
+  cancelPipelineRun,
+  getPipeline,
   listPipelineJobs,
   mergePullRequest,
   PipelineJob,
   PipelineRun,
-  pollPipeline,
   retryPipelineJob,
   publishRelease,
   PullRequest,
@@ -87,7 +88,9 @@ export default function App() {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([])
   const [pipelineRetryBusy, setPipelineRetryBusy] = useState(false)
+  const [pipelineCancelBusy, setPipelineCancelBusy] = useState(false)
   const pipelineRetryFlightRef = useRef<{ jobId: string; attemptId: string } | null>(null)
+  const pipelinePollEpochRef = useRef(0)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [activeDeployment, setActiveDeployment] = useState<Deployment | null>(null)
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null)
@@ -124,12 +127,20 @@ export default function App() {
   const selectedRepoRef = useRef<string | null>(null)
   /** Invalidated on logout so agent polling does not use IAM session epoch bumps. */
   const agentRunPollEpochRef = useRef(0)
+  const agentRunIdRef = useRef<string | null>(null)
+  const agentStartOpRef = useRef<AgentOpContext | null>(null)
   const pipelineRunIdRef = useRef<string | null>(null)
 
   type DeploymentOpContext = {
     sessionEpoch: number
     repoGeneration: number
     repo: string
+  }
+
+  type AgentOpContext = DeploymentOpContext & {
+    issueId: string | null
+    agentRunId: string | null
+    pollEpoch: number
   }
 
   type PipelineOpContext = DeploymentOpContext & {
@@ -143,6 +154,11 @@ export default function App() {
   useEffect(() => {
     pipelineRunIdRef.current = pipelineRun?.id ?? null
   }, [pipelineRun])
+
+  function applyPipelineRun(run: PipelineRun | null) {
+    pipelineRunIdRef.current = run?.id ?? null
+    setPipelineRun(run)
+  }
 
   useEffect(() => {
     deploymentListModeRef.current = deploymentListMode
@@ -179,6 +195,14 @@ export default function App() {
     )
   }
 
+  function bumpPipelinePollEpoch() {
+    pipelinePollEpochRef.current += 1
+  }
+
+  function pipelinePollEpochActive(epoch: number) {
+    return pipelinePollEpochRef.current === epoch
+  }
+
   function resetDeploymentUiState() {
     setActiveDeployment(null)
     setDeploymentId(null)
@@ -188,10 +212,13 @@ export default function App() {
     setDeploymentApprovalBusy(false)
     setDeploymentRollbackBusy(false)
     deploymentRollbackFlightRef.current = null
+    pipelineRunIdRef.current = null
     setPipelineRun(null)
     setPipelineJobs([])
     setPipelineRetryBusy(false)
+    setPipelineCancelBusy(false)
     pipelineRetryFlightRef.current = null
+    bumpPipelinePollEpoch()
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
     deploymentListModeRef.current = 'pending'
@@ -216,7 +243,57 @@ export default function App() {
     return agentRunPollEpochRef.current === epoch
   }
 
+  function captureAgentStartOp(issueId: string, repoSlug?: string): AgentOpContext {
+    return {
+      ...captureDeploymentOp(repoSlug),
+      issueId,
+      agentRunId: null,
+      pollEpoch: agentRunPollEpochRef.current,
+    }
+  }
+
+  function captureAgentCancelOp(runId: string, repoSlug?: string): AgentOpContext {
+    return {
+      ...captureDeploymentOp(repoSlug),
+      issueId: null,
+      agentRunId: runId,
+      pollEpoch: agentRunPollEpochRef.current,
+    }
+  }
+
+  function releaseAgentStartBusy(op: AgentOpContext) {
+    if (agentStartOpRef.current && agentOpMatches(agentStartOpRef.current, op)) {
+      agentStartOpRef.current = null
+      setAgentRunStarting(false)
+    }
+  }
+
+  function agentOpActive(ctx: AgentOpContext): boolean {
+    return (
+      deploymentOpActive(ctx) &&
+      agentRunPollEpochActive(ctx.pollEpoch)
+    )
+  }
+
+  function agentOpMatches(a: AgentOpContext, b: AgentOpContext): boolean {
+    return (
+      a.sessionEpoch === b.sessionEpoch &&
+      a.repoGeneration === b.repoGeneration &&
+      a.repo === b.repo &&
+      a.issueId === b.issueId &&
+      a.agentRunId === b.agentRunId &&
+      a.pollEpoch === b.pollEpoch
+    )
+  }
+
+  function applyAgentRun(run: AgentRun | null) {
+    agentRunIdRef.current = run?.id ?? null
+    setLastRun(run)
+  }
+
   function resetAgentRunUi() {
+    agentRunIdRef.current = null
+    agentStartOpRef.current = null
     setLastRun(null)
     setAgentRunStarting(false)
   }
@@ -463,6 +540,9 @@ export default function App() {
   }
 
   async function loadIssues(slug: string) {
+    if (selectedRepoRef.current !== slug) {
+      invalidateAgentRunWork()
+    }
     invalidateDeploymentWork()
     selectedRepoRef.current = slug
     setSelectedRepo(slug)
@@ -684,17 +764,21 @@ export default function App() {
     await acceptPlan(DEFAULT_ORG, selectedRepo, issue.number)
   }
 
-  async function pollRun(runId: string, pollEpoch: number) {
-    // Up to ~3 minutes — matches Playwright delivery-flow budgets on slow CI agents.
-    for (let i = 0; i < 360; i++) {
-      if (!agentRunPollEpochActive(pollEpoch)) {
+  async function pollRun(runId: string, op: AgentOpContext) {
+    const remoteAgent = runnerCaps?.agent_executor === 'remote'
+    const maxIter = remoteAgent ? 600 : 360
+    for (let i = 0; i < maxIter; i++) {
+      if (!agentOpActive(op)) {
         return null
       }
       const run = await getAgentRun(runId)
-      if (!agentRunPollEpochActive(pollEpoch)) {
+      if (!agentOpActive(op)) {
         return null
       }
-      setLastRun(run)
+      if (agentRunIdRef.current !== null && agentRunIdRef.current !== run.id) {
+        return null
+      }
+      applyAgentRun(run)
       if (['succeeded', 'failed', 'canceled'].includes(run.state)) {
         return run
       }
@@ -704,9 +788,12 @@ export default function App() {
   }
 
   async function onRunAgent(issue: Issue) {
-    if (!selectedRepo) return
-    const pollEpoch = agentRunPollEpochRef.current
+    if (!selectedRepo || agentRunStarting) return
+    bumpAgentRunPollEpoch()
+    const op = captureAgentStartOp(issue.id)
+    agentStartOpRef.current = op
     setAgentRunStarting(true)
+    setError(null)
     try {
       const run = await startAgentRun(
         DEFAULT_ORG,
@@ -714,27 +801,53 @@ export default function App() {
         issue.id,
         `Implement: ${issue.title}`,
       )
-      if (!agentRunPollEpochActive(pollEpoch)) {
+      if (!agentOpActive(op)) {
         return
       }
-      setLastRun(run)
-      const finished = await pollRun(run.id, pollEpoch)
-      if (!finished || !agentRunPollEpochActive(pollEpoch)) {
+      applyAgentRun(run)
+      const finished = await pollRun(run.id, op)
+      if (!finished || !agentOpActive(op)) {
         return
       }
+      applyAgentRun(finished)
       await loadIssues(selectedRepo)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'agent run failed')
+      if (agentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'agent run failed')
+      }
     } finally {
-      setAgentRunStarting(false)
+      releaseAgentStartBusy(op)
     }
   }
 
   async function onCancelRun() {
-    if (!lastRun) return
-    const pollEpoch = agentRunPollEpochRef.current
-    await cancelAgentRun(lastRun.id)
-    await pollRun(lastRun.id, pollEpoch)
+    if (!selectedRepo || !lastRun) return
+    const heldStart = agentStartOpRef.current
+    const runId = lastRun.id
+    bumpAgentRunPollEpoch()
+    if (heldStart) {
+      releaseAgentStartBusy(heldStart)
+    }
+    const op = captureAgentCancelOp(runId)
+    setError(null)
+    try {
+      await cancelAgentRun(runId)
+      if (!agentOpActive(op)) {
+        return
+      }
+      const finished = await pollRun(runId, op)
+      if (finished && agentOpActive(op)) {
+        applyAgentRun(finished)
+      }
+    } catch (err) {
+      if (agentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'agent cancel failed')
+      }
+    } finally {
+      if (heldStart) {
+        releaseAgentStartBusy(heldStart)
+      }
+    }
   }
 
   async function onCreatePrFromRun() {
@@ -780,19 +893,42 @@ export default function App() {
     setPipelineJobs(jobs)
   }
 
+  async function pollPipelineRun(runId: string, pollEpoch: number, op: PipelineOpContext) {
+    if (!selectedRepo) return null
+    const repo = selectedRepo
+    const remotePipeline = runnerCaps?.pipeline_executor === 'remote'
+    const maxIter = remotePipeline ? 600 : 240
+    for (let i = 0; i < maxIter; i++) {
+      if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
+        return null
+      }
+      const run = await getPipeline(DEFAULT_ORG, repo, runId)
+      if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
+        return null
+      }
+      applyPipelineRun(run)
+      if (run.state === 'succeeded' || run.state === 'failed' || run.state === 'canceled') {
+        return run
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    throw new Error('pipeline timeout')
+  }
+
   async function onRunDeliveryPipeline() {
     if (!selectedRepo || !mergedPr?.head_oid) return
     const op = captureDeploymentOp()
     setError(null)
     setPipelineJobs([])
+    bumpPipelinePollEpoch()
+    const pollEpoch = pipelinePollEpochRef.current
     try {
       const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
-      setPipelineRun(run)
+      applyPipelineRun(run)
       const pollOp = capturePipelineOp(run.id)
-      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, run.id)
-      if (!pipelineOpActive(pollOp)) return
-      setPipelineRun(done)
+      const done = await pollPipelineRun(run.id, pollEpoch, pollOp)
+      if (!done || !pipelineOpActive(pollOp)) return
       if (done.state === 'succeeded') {
         return
       }
@@ -803,10 +939,43 @@ export default function App() {
         }
         return
       }
+      if (done.state === 'canceled') {
+        await loadPipelineJobsForRun(done.id)
+        return
+      }
       throw new Error(done.error_code ?? done.state)
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'pipeline failed')
+      }
+    }
+  }
+
+  async function onCancelPipelineRun() {
+    if (!selectedRepo || !pipelineRun || pipelineCancelBusy) return
+    if (!['queued', 'running'].includes(pipelineRun.state)) return
+    const op = capturePipelineOp(pipelineRun.id)
+    setPipelineCancelBusy(true)
+    setError(null)
+    bumpPipelinePollEpoch()
+    const pollEpoch = pipelinePollEpochRef.current
+    const runId = pipelineRun.id
+    try {
+      const requested = await cancelPipelineRun(DEFAULT_ORG, selectedRepo, runId)
+      if (!pipelineOpActive(op)) return
+      applyPipelineRun(requested)
+      const done = await pollPipelineRun(runId, pollEpoch, op)
+      if (!done || !pipelineOpActive(op)) return
+      if (done.state === 'canceled' || done.state === 'failed') {
+        await loadPipelineJobsForRun(done.id)
+      }
+    } catch (err) {
+      if (pipelineOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'pipeline cancel failed')
+      }
+    } finally {
+      if (pipelineOpActive(op)) {
+        setPipelineCancelBusy(false)
       }
     }
   }
@@ -823,9 +992,11 @@ export default function App() {
     try {
       await retryPipelineJob(DEFAULT_ORG, selectedRepo, jobId, attemptId)
       if (!pipelineOpActive(op)) return
-      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, pipelineRun.id)
-      if (!pipelineOpActive(op)) return
-      setPipelineRun(done)
+      bumpPipelinePollEpoch()
+      const pollEpoch = pipelinePollEpochRef.current
+      const done = await pollPipelineRun(pipelineRun.id, pollEpoch, op)
+      if (!done || !pipelineOpActive(op)) return
+      applyPipelineRun(done)
       setPipelineJobs([])
       if (done.state === 'failed') {
         await loadPipelineJobsForRun(done.id)
@@ -1553,7 +1724,10 @@ export default function App() {
                 ))}
               </ul>
               {lastRun || agentRunStarting ? (
-                <div data-testid="last-agent-run">
+                <div
+                  data-testid="last-agent-run"
+                  data-agent-run-id={lastRun?.id ?? ''}
+                >
                   <p>
                     {agentRunStarting && !lastRun
                       ? t('app.agentStarting', { defaultValue: 'starting agent run…' })
@@ -1605,6 +1779,38 @@ export default function App() {
                       <p data-testid="pipeline-state">
                         pipeline {pipelineRun.id.slice(0, 8)}… {pipelineRun.state}
                       </p>
+                    ) : null}
+                    {pipelineRun?.state === 'cancel_requested' ? (
+                      <p data-testid="pipeline-cancel-pending" style={{ color: '#9a6700' }}>
+                        {t('app.pipelineCancelPending')}
+                      </p>
+                    ) : null}
+                    {pipelineRun &&
+                    ['queued', 'running', 'cancel_requested', 'canceled'].includes(
+                      pipelineRun.state,
+                    ) ? (
+                      <p data-testid="pipeline-cancel-honesty" style={{ fontSize: '0.9rem' }}>
+                        {t('app.pipelineCancelHonesty')}
+                      </p>
+                    ) : null}
+                    {pipelineRun && ['queued', 'running'].includes(pipelineRun.state) ? (
+                      <button
+                        type="button"
+                        data-testid="pipeline-cancel"
+                        disabled={pipelineCancelBusy || pipelineRetryBusy}
+                        onClick={() => void onCancelPipelineRun()}
+                      >
+                        {t('app.pipelineCancelRun')}
+                      </button>
+                    ) : null}
+                    {pipelineRun?.state === 'canceled' && pipelineJobs.length > 0 ? (
+                      <ul data-testid="pipeline-cancel-job-list">
+                        {pipelineJobs.map((job) => (
+                          <li key={job.id}>
+                            {job.job_key} ({job.state})
+                          </li>
+                        ))}
+                      </ul>
                     ) : null}
                     {pipelineRun?.state === 'failed' ? (
                       <div data-testid="pipeline-failure-panel">

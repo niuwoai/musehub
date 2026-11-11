@@ -239,6 +239,13 @@ export async function getPipeline(org: string, repo: string, runId: string) {
   return api<PipelineRun>(`/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}`)
 }
 
+export async function cancelPipelineRun(org: string, repo: string, runId: string) {
+  return api<PipelineRun>(
+    `/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}/cancel`,
+    { method: 'POST' },
+  )
+}
+
 export async function listPipelineJobs(org: string, repo: string, runId: string) {
   return api<PipelineJob[]>(
     `/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}/jobs`,
