@@ -27,6 +27,7 @@ deploy/Caddyfile.live
 deploy/tls/*.pem
 
 # Local runtime data and logs
+.local/
 /data/
 /tmp/
 *.log

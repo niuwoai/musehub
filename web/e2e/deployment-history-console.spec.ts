@@ -9,6 +9,10 @@ import {
 } from './fixtures/stale-deployment-view'
 import { expectLoggedInAs } from './helpers/session'
 import {
+  activateDeploymentViewAll,
+  switchDeploymentListToAll,
+} from './helpers/delivery'
+import {
   createRepoViaUi,
   openRepoDelivery,
   repoNavButtonForSlug,
@@ -95,7 +99,7 @@ test.describe('deployment history console', () => {
     })
 
     await loginAndCreateRepo(page)
-    await page.getByTestId('deployment-view-all').click()
+    await switchDeploymentListToAll(page)
     await expect(page.getByTestId(`deployment-list-item-${HISTORY_DEPLOY_A}`)).toBeVisible({
       timeout: 15_000,
     })
@@ -168,7 +172,7 @@ test.describe('deployment history console', () => {
     })
 
     await loginAndCreateRepo(page)
-    await page.getByTestId('deployment-view-all').click()
+    await switchDeploymentListToAll(page)
     await expect(page.getByTestId(`deployment-list-item-${HISTORY_DEPLOY_A}`)).toBeVisible({
       timeout: 15_000,
     })
@@ -410,16 +414,9 @@ test.describe('deployment history console', () => {
       (req) =>
         req.url().includes(`${STALE_DEPLOYMENT_ID}/approval`) && req.method() === 'POST',
     )
-    const tabAllList = page.waitForResponse(
-      (r) =>
-        r.url().includes('/deployments?') &&
-        r.request().method() === 'GET' &&
-        !r.url().includes('state=awaiting_approval'),
-    )
     await page.getByRole('button', { name: /approve deployment|批准部署/i }).click({ noWaitAfter: true })
     await approvalReq
-    await page.getByTestId('deployment-view-all').click()
-    await tabAllList
+    await activateDeploymentViewAll(page)
     const approvalDone = page.waitForResponse(
       (r) =>
         r.url().includes(`${STALE_DEPLOYMENT_ID}/approval`) &&

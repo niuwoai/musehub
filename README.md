@@ -86,7 +86,31 @@ musehub/
 
 初始仓库包含 `main` 和 `develop`；后续开发分支从 `develop` 派生。根目录 `VERSION` 是版本源：Cargo 包版本、Web 展示版本和响应头 `X-App-Version` 都与它一致。
 
-## 本地验证
+## 本地开发（推荐入口）
+
+**目标：** 打开浏览器即可登录控制台，而不是 Vite 静态壳 + `/readyz` 503。  
+**边界：** 本脚本只起 **loopback** 上的 API + Vite；执行器默认为 **进程内 + compose-mock**（与生产 Compose + remote runner **不是**同一 profile）。
+
+1. **PostgreSQL**（任选其一，需先可达）  
+   - macOS Homebrew：`brew install postgresql@17 && brew services start postgresql@17` 后自建库/用户。  
+   - Docker（示例）：`docker run -d --name musehub-pg -e POSTGRES_USER=musehub -e POSTGRES_PASSWORD=musehub -e POSTGRES_DB=musehub_dev -p 5432:5432 postgres:17`（`dev-local-stack.sh init` 在未设置 `DATABASE_URL` 时默认 `postgres://musehub:musehub@127.0.0.1:5432/musehub_dev`；CI 通过环境变量覆盖为 `musehub`。）
+
+2. **一键流程**（状态写在 `.local/dev-stack/`，**不**覆盖已有 `env`，**不**清库）：
+
+```sh
+./scripts/dev-local-stack.sh init    # 生成 .local/dev-stack/env (600) + migrate
+./scripts/dev-local-stack.sh start   # 等 /readyz.ready==true 再起 Vite
+./scripts/dev-local-stack.sh status  # 无密钥输出
+./scripts/dev-local-stack.sh stop    # 只停本脚本记录的 pid
+```
+
+- 首次 bootstrap 密码文件：`.local/dev-stack/secrets/bootstrap-admin.password`（`chmod 600`），登录 **`admin` / 该文件内容**，组织 **`demo`**。  
+- UI：<http://127.0.0.1:5173/login>（API <http://127.0.0.1:8080/readyz>）。  
+- macOS 生产安装脚本中的 `sed -i` 已改为 `scripts/lib/sed-portable.sh`（GNU/BSD 兼容）。
+
+CI 冒烟：`./scripts/verify-dev-local-stack-negative.sh` + `./scripts/verify-dev-local-stack.sh`（需 `DATABASE_URL`、`pg_isready`、`jq`、`curl`、`openssl`；Linux CI 已验，macOS 未在 Agent 环境实测）。
+
+## 本地验证（手工 / 高级）
 
 复制 `.env.example` 了解配置。产品 API 需要 **`DATABASE_URL` + `MUSEHUB_GIT_ROOT` + `MUSEHUB_SESSION_SECRET`**；一次性引导可设 `MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD`（创建 `demo` 组织与 `admin` 用户）。服务启动**不**自动 migration。
 
