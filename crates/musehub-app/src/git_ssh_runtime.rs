@@ -521,15 +521,15 @@ fn login_home_must_be_locked(meta: &fs::Metadata) -> Result<(), AppError> {
 }
 
 #[cfg(unix)]
-pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
-    let home = git_ssh_login_home();
-    reject_symlink_path(&home)?;
+fn verify_locked_login_home_at(home: &Path) -> Result<(), AppError> {
+    reject_symlink_path(home)?;
     if !home.is_dir() {
-        return Err(AppError::Validation(
-            "git ssh login home missing (run serve to provision)".into(),
-        ));
+        return Err(AppError::Validation(format!(
+            "git ssh login home missing: {}",
+            home.display()
+        )));
     }
-    let meta = fs::metadata(&home).map_err(|e| AppError::Other(e.to_string()))?;
+    let meta = fs::metadata(home).map_err(|e| AppError::Other(e.to_string()))?;
     login_home_must_be_locked(&meta)?;
     let env_file = home.join(".ssh").join("environment");
     if env_file.exists() {
@@ -552,9 +552,41 @@ pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
+    verify_locked_login_home_at(&git_ssh_login_home())
+}
+
+/// `sshd` reads `~/.ssh/environment` from **passwd** `pw_dir`, not session `HOME`.
+#[cfg(unix)]
+pub fn verify_git_ssh_passwd_home(login_user: &str) -> Result<(), AppError> {
+    let trusted = git_ssh_login_home();
+    let trusted_s = trusted
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 trusted home".into()))?;
+    let passwd_home = passwd_home_dir(login_user)
+        .ok_or_else(|| AppError::Validation(format!("passwd entry missing for {login_user}")))?;
+    if passwd_home != trusted_s {
+        return Err(AppError::Validation(format!(
+            "passwd home for {login_user} is {passwd_home}, require {trusted_s}"
+        )));
+    }
+    verify_locked_login_home_at(&trusted)
+}
+
 #[cfg(not(unix))]
 pub fn verify_git_ssh_login_home() -> Result<(), AppError> {
     Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_git_ssh_passwd_home(_login_user: &str) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn passwd_home_for(login_user: &str) -> Option<String> {
+    passwd_home_dir(login_user)
 }
 
 #[cfg(unix)]
@@ -595,13 +627,10 @@ pub fn ensure_git_ssh_login_home(login_user: &str) -> Result<(), AppError> {
         )));
     }
     let needs_usermod = passwd_home_dir(login_user).as_deref() != Some(home_s);
-    if needs_usermod && run_privileged("usermod", &["-d", home_s, login_user]).is_err() {
-        tracing::warn!(
-            login_user,
-            home = home_s,
-            "usermod home skipped (login user busy); sshd SetEnv HOME must pin session"
-        );
+    if needs_usermod {
+        run_privileged("usermod", &["-d", home_s, login_user])?;
     }
+    verify_git_ssh_passwd_home(login_user)?;
     verify_git_ssh_login_home()
 }
 
@@ -704,10 +733,10 @@ fn run_chmod_file(args: &[&str], path: &str) -> Result<(), AppError> {
         return Ok(());
     }
     if storage_sudo_fallback_enabled() {
-        let mut sudo_args: Vec<&str> = vec!["chmod"];
-        sudo_args.extend_from_slice(args);
-        sudo_args.push(path);
-        return run_privileged("chmod", &sudo_args);
+        let mut priv_args: Vec<&str> = Vec::with_capacity(args.len() + 1);
+        priv_args.extend_from_slice(args);
+        priv_args.push(path);
+        return run_privileged("chmod", &priv_args);
     }
     Err(AppError::Other(format!("chmod on {path} failed")))
 }
@@ -928,6 +957,16 @@ pub fn write_secure_file(path: &Path, body: &[u8]) -> Result<(), io::Error> {
 mod migration_tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn chmod_sudo_argv_is_mode_then_path_not_double_chmod() {
+        let path = "/tmp/musehub-chmod-test";
+        let mode_args = ["g+rwX"];
+        let mut priv_args: Vec<&str> = Vec::with_capacity(mode_args.len() + 1);
+        priv_args.extend_from_slice(&mode_args);
+        priv_args.push(path);
+        assert_eq!(priv_args, ["g+rwX", "/tmp/musehub-chmod-test"]);
+    }
 
     #[test]
     fn privileged_migration_detects_replaced_path_inode() {

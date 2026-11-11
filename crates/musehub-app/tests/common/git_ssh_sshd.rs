@@ -1,10 +1,78 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::Duration;
+
+static GIT_PASSWD_HOME_SERIAL: Mutex<()> = Mutex::new(());
+
+struct GitPasswdHomeGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    saved_home: Option<String>,
+    fixture_home: String,
+}
+
+impl GitPasswdHomeGuard {
+    fn install_for_port(port: u16) -> Self {
+        let lock = GIT_PASSWD_HOME_SERIAL
+            .lock()
+            .expect("serialize git passwd home changes");
+        let saved_home = musehub_app::git_ssh_runtime::passwd_home_for("git");
+        let fixture_home = format!("/var/lib/musehub-ssh-test-{port}/login-home");
+        let script = format!(
+            "install -d -m 0555 -o root -g root /var/lib/musehub-ssh-test-{port} && \
+             install -d -m 0555 -o root -g root {fixture_home}"
+        );
+        let st = Command::new("sudo")
+            .args(["bash", "-c", &script])
+            .status()
+            .expect("install fixture login home");
+        assert!(st.success(), "fixture login home install failed");
+        std::env::set_var("MUSEHUB_GIT_SSH_LOGIN_HOME", &fixture_home);
+        if saved_home.as_deref() != Some(fixture_home.as_str()) {
+            let usermod = Command::new("sudo")
+                .args(["usermod", "-d", &fixture_home, "git"])
+                .status()
+                .expect("usermod git home for fixture");
+            if !usermod.success() {
+                let now = musehub_app::git_ssh_runtime::passwd_home_for("git");
+                assert_eq!(
+                    now.as_deref(),
+                    Some(fixture_home.as_str()),
+                    "usermod git home to {fixture_home} failed and passwd still {:?}",
+                    now
+                );
+            }
+        }
+        Self {
+            _lock: lock,
+            saved_home,
+            fixture_home,
+        }
+    }
+}
+
+impl Drop for GitPasswdHomeGuard {
+    fn drop(&mut self) {
+        if let Some(ref prev) = self.saved_home {
+            if prev != &self.fixture_home {
+                let _ = Command::new("sudo")
+                    .args(["usermod", "-d", prev, "git"])
+                    .status();
+            }
+        }
+        std::env::remove_var("MUSEHUB_GIT_SSH_LOGIN_HOME");
+        if let Some(parent) = std::path::Path::new(&self.fixture_home).parent() {
+            let _ = Command::new("sudo")
+                .args(["rm", "-rf", parent.to_str().unwrap_or("")])
+                .status();
+        }
+    }
+}
 
 pub struct TestGitSshd {
     pub port: u16,
     pub run_dir: PathBuf,
+    _passwd_guard: GitPasswdHomeGuard,
     child: Child,
 }
 
@@ -16,6 +84,8 @@ impl TestGitSshd {
     ) -> Self {
         ensure_git_os_user();
         let port = pick_port();
+        let passwd_guard = GitPasswdHomeGuard::install_for_port(port);
+        let login_home = passwd_guard.fixture_home.clone();
         let run_dir = prepare_root_sshd_run_dir(port);
         let bin_path = install_root_owned_git_ssh_bin(gateway_bin);
         let mut sudo = Command::new("sudo");
@@ -31,9 +101,11 @@ impl TestGitSshd {
         sudo.arg(format!("DATABASE_URL={database_url}"));
         sudo.arg(format!("MUSEHUB_GIT_ROOT={}", git_root.display()));
         sudo.arg(format!("MUSEHUB_GIT_SSH_RUN_DIR={}", run_dir.display()));
+        sudo.arg(format!("MUSEHUB_GIT_SSH_LOGIN_HOME={login_home}"));
         sudo.arg("MUSEHUB_GIT_STORAGE_GROUP=musehub-git");
         sudo.arg("MUSEHUB_GIT_SSH_RUNTIME_GROUP=git");
         sudo.arg("MUSEHUB_GIT_SSH_SUDO_SSHD=1");
+        sudo.arg("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK=1");
         sudo.arg(if std::env::var("MUSEHUB_GIT_SSH_TEST_SSHD_LOG").is_ok() {
             "MUSEHUB_GIT_SSH_SSHD_LOG=VERBOSE"
         } else {
@@ -100,6 +172,7 @@ impl TestGitSshd {
         Self {
             port,
             run_dir,
+            _passwd_guard: passwd_guard,
             child,
         }
     }
@@ -194,9 +267,8 @@ pub fn ensure_git_os_user() {
 fn prepare_root_sshd_run_dir(port: u16) -> PathBuf {
     let run_dir = PathBuf::from(format!("/var/lib/musehub-ssh-test-{port}"));
     let rd = run_dir.to_string_lossy();
-    let script = format!(
-        "rm -rf {rd} && install -d -m 0750 -o root -g git {rd} && chown root:git {rd} && chmod 0750 {rd}"
-    );
+    let script =
+        format!("install -d -m 0750 -o root -g git {rd} && chown root:git {rd} && chmod 0750 {rd}");
     let status = Command::new("sudo")
         .args(["bash", "-c", &script])
         .status()

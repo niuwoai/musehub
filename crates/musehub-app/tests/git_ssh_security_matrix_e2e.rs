@@ -131,8 +131,8 @@ async fn git_ssh_authorized_keys_environment_binding_authenticates() {
         String::from_utf8_lossy(&cfg.stderr)
     );
     let body = String::from_utf8(cfg.stdout).expect("utf8");
-    assert!(body.contains("ExposeAuthInfo yes"));
     assert!(body.contains("PermitUserEnvironment MUSEHUB_SSH_KEY_ID,MUSEHUB_SSH_KEY_FP"));
+    assert!(!body.contains("ExposeAuthInfo"));
     assert!(!body.contains("PermitUserEnvironment yes"));
     let work_dir = tempfile::tempdir().expect("work");
     let work = work_dir.path();

@@ -83,8 +83,7 @@ The API listens on `0.0.0.0:8080` inside the container; the UI **`clone_url`** u
 ## SSH Git transport (product)
 
 Product Git-over-SSH is a **separate** listener (`musehub-git-ssh serve` or the **`musehub-git-ssh`** Compose service), not the HTTP gateway port. OpenSSH runs **`AuthorizedKeysCommand`** (`musehub-git-ssh authorized-keys`) as the `git` OS user and terminates into the MuseHub **login shell** (`/usr/local/lib/musehub/musehub-git-login.sh` → `musehub-git-ssh shell` → gateway). The authorized_keys line sets **`MUSEHUB_SSH_KEY_ID`** and **`MUSEHUB_SSH_KEY_FP`** (no `command=` override).
-Gateway authorization uses **`ExposeAuthInfo`** / **`SSH_USER_AUTH`** (`pubkeys_fp`), not session env alone.
-The `git` login home is **`/var/lib/musehub/git-ssh/home`** (root-owned `0555`, no writable `~/.ssh/environment`). Database credentials live in **`runtime.env`** under `MUSEHUB_GIT_SSH_RUN_DIR` (mode `0640`, `root:git`), not in world-readable wrapper scripts. Bare repos on the shared `gitdata` volume are **`musehub:musehub-git`** with setgid so the `git` transport user can `receive-pack`. Repository API and the Code tab show **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`).
+Gateway uses **`MUSEHUB_SSH_KEY_FP`** from the AuthorizedKeysCommand line for the authenticating key; trustworthy only when **`git` passwd home** (`pw_dir`, not session `HOME`) is **`/var/lib/musehub/git-ssh/home`** — root-owned `0555`, no `~/.ssh/environment`. Database credentials live in **`runtime.env`** under `MUSEHUB_GIT_SSH_RUN_DIR` (mode `0640`, `root:git`), not in world-readable wrapper scripts. Bare repos on the shared `gitdata` volume are **`musehub:musehub-git`** with setgid so the `git` transport user can `receive-pack`. Repository API and the Code tab show **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`).
 
 | Path / variable | Purpose |
 |----------------|---------|
