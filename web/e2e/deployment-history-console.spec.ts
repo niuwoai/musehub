@@ -23,9 +23,9 @@ const HISTORY_DEPLOY_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ALL_TAB_ROW_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
-  const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
-  await loginForm.getByLabel(/password|密码/i).fill(pass)
+  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('login-handle-input').fill(handle)
+  await page.getByLabel(/password|密码/i).fill(pass)
 }
 
 function delayedGate() {
@@ -37,7 +37,7 @@ function delayedGate() {
 }
 
 async function loginAndCreateRepo(page: Page) {
-  await page.goto('/login')
+  await page.goto('/login', { waitUntil: 'domcontentloaded' })
   await fillLoginForm(page, 'admin', password!)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, 'admin')
@@ -282,6 +282,8 @@ test.describe('deployment history console', () => {
     })
 
     savedSlug = await loginAndCreateRepo(page)
+    const { slug: otherSlug } = await createRepoViaUi(page)
+    await openRepoDelivery(page, savedSlug)
     await expect(page.getByTestId('deployment-list-empty')).toBeVisible({ timeout: 15_000 })
     const listReq = page.waitForRequest(
       (req) => req.url().includes('/deployments?') && req.method() === 'GET',
@@ -301,20 +303,13 @@ test.describe('deployment history console', () => {
     await expectLoggedInAs(page, 'admin')
     await waitForDemoRepoNavHydrated(page)
 
-    await expect(repoNavButtonForSlug(page, savedSlug)).toBeVisible({ timeout: 15_000 })
     const remountList = page.waitForResponse(
       (r) =>
         r.url().includes('/deployments?') &&
         r.request().method() === 'GET' &&
         r.url().includes(savedSlug),
     )
-    const otherButtons = repoNavButtons(page).filter({ hasNotText: savedSlug })
-    if ((await otherButtons.count()) > 0) {
-      const otherSlug = ((await otherButtons.first().textContent()) ?? '').trim()
-      if (otherSlug) {
-        await openRepoDelivery(page, otherSlug)
-      }
-    }
+    await openRepoDelivery(page, otherSlug)
     await openRepoDelivery(page, savedSlug)
     await remountList
     await expect(page.getByTestId('deployment-list-empty')).toBeVisible({ timeout: 15_000 })
