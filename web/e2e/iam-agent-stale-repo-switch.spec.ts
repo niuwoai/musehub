@@ -3,8 +3,10 @@ import { expect, test } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
+  ensureRepoListPage,
   expectRepoSlugInSubnav,
   openRepoBySlug,
+  repoNavButtonForSlug,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
 import {
@@ -109,7 +111,8 @@ test.describe('agent run start repo guard', () => {
     await runReferenceAgentButton(page).first().click()
     await paused.postSeen
 
-    await openRepoBySlug(page, otherSlug)
+    await ensureRepoListPage(page)
+    await repoNavButtonForSlug(page, otherSlug).click()
     await expectRepoSlugInSubnav(page, otherSlug)
     await expect(page.getByTestId('last-agent-run')).toHaveCount(0)
 

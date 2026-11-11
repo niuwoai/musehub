@@ -7,7 +7,14 @@ import {
   STALE_DEPLOYMENT_ID,
   STALE_PLAN_PREFIX,
 } from './fixtures/stale-deployment-view'
-import { createRepoViaUi, openRepoDelivery, waitForDemoRepoNavHydrated } from './helpers/repo'
+import { goRepoDelivery } from './helpers/navigation'
+import {
+  createRepoViaUi,
+  ensureRepoListPage,
+  openRepoDelivery,
+  repoNavButtonForSlug,
+  waitForDemoRepoNavHydrated,
+} from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -155,7 +162,9 @@ test.describe('deployment list discovery', () => {
     void page.getByTestId(`deployment-pick-${STALE_DEPLOYMENT_ID}`).click()
     await detailReq
 
-    await openRepoDelivery(page, slugB)
+    await ensureRepoListPage(page)
+    await repoNavButtonForSlug(page, slugB).click()
+    await goRepoDelivery(page)
     release()
     await detailDone
 

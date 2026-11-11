@@ -8,7 +8,13 @@ import {
   STALE_PLAN_PREFIX,
   STALE_TRACE_BODY,
 } from './fixtures/stale-deployment-view'
-import { createRepoViaUi, openRepoDelivery } from './helpers/repo'
+import { goRepoDelivery } from './helpers/navigation'
+import {
+  createRepoViaUi,
+  ensureRepoListPage,
+  openRepoDelivery,
+  repoNavButtonForSlug,
+} from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -110,6 +116,9 @@ test.describe('deployment view session/repo epoch', () => {
 
     await loginAsAdmin(page)
     const repoA = await createEmptyRepo(page)
+    const { slug: repoB } = await createRepoViaUi(page)
+    expect(repoB).not.toBe(repoA)
+    await openRepoDelivery(page, repoA)
     await page.getByTestId('deployment-lookup-id').fill(STALE_DEPLOYMENT_ID)
     const loadReq = page.waitForRequest(
       (req) => req.url().includes(STALE_DEPLOYMENT_ID) && req.method() === 'GET',
@@ -117,13 +126,12 @@ test.describe('deployment view session/repo epoch', () => {
     await page.getByTestId('load-deployment').click()
     await loadReq
 
-    const { slug: repoB } = await createRepoViaUi(page)
-    await openRepoDelivery(page, repoB)
-    expect(repoB).not.toBe(repoA)
-
     const staleResponse = page.waitForResponse(
       (r) => r.url().includes(STALE_DEPLOYMENT_ID) && r.request().method() === 'GET',
     )
+    await ensureRepoListPage(page)
+    await repoNavButtonForSlug(page, repoB).click()
+    await goRepoDelivery(page)
     release()
     await staleResponse
 
