@@ -7,7 +7,7 @@ mod domain;
 pub mod envelope;
 mod git_read;
 mod http;
-mod idempotency;
+pub(crate) mod idempotency;
 mod pagination;
 mod prompts;
 mod resource_reads;

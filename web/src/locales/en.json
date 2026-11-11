@@ -19,6 +19,7 @@
     "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
     "deliveryModeNote": "Deploy follows server policy: pipeline-built OCI + compose-runner when MUSEHUB_REQUIRE_PIPELINE_OCI=1; otherwise compose-mock for local dev.",
     "runPipelineOnMain": "Run pipeline on merged main tip",
+    "pipelineRetryJob": "Retry failed job",
     "releaseAndDeployMock": "Release + mock deploy",
     "deployProductionProtected": "Deploy to production (approval required)",
     "deploymentAwaitingApproval": "Deployment to {{env}} is awaiting approval",

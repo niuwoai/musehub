@@ -50,6 +50,14 @@ export type PipelineRun = {
   error_code?: string | null
 }
 
+export type PipelineJob = {
+  id: string
+  pipeline_run_id: string
+  job_key: string
+  state: string
+  retry_allowed: boolean
+}
+
 export type DeploymentTrace = {
   deployment_id: string
   release_id: string
@@ -229,6 +237,27 @@ export async function startPipeline(org: string, repo: string, sourceOid: string
 
 export async function getPipeline(org: string, repo: string, runId: string) {
   return api<PipelineRun>(`/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}`)
+}
+
+export async function listPipelineJobs(org: string, repo: string, runId: string) {
+  return api<PipelineJob[]>(
+    `/api/v1/orgs/${org}/repos/${repo}/pipeline-runs/${runId}/jobs`,
+  )
+}
+
+export async function retryPipelineJob(
+  org: string,
+  repo: string,
+  jobId: string,
+  attemptId: string,
+) {
+  return api<PipelineJob>(
+    `/api/v1/orgs/${org}/repos/${repo}/pipeline-jobs/${jobId}/retry`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ attempt_id: attemptId }),
+    },
+  )
 }
 
 export async function getDeploymentTrace(

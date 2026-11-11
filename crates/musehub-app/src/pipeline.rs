@@ -21,8 +21,12 @@ use crate::git_http::bare_repo_path;
 use crate::security::validate_git_oid;
 use musehub_agent_adapter::configure_child_process_group;
 
+use crate::mcp::idempotency::{
+    begin_idempotent_write, complete_idempotent_write, fail_idempotent_write, IdempotencyAction,
+};
 use crate::pipeline_supervisor::PipelineSupervisor;
 use crate::AppState;
+use serde_json::json;
 
 const JOB_BUILD: &str = "build";
 const KIND_RELEASE: &str = "release_build";
@@ -37,6 +41,20 @@ pub struct PipelineRunView {
     pub state: String,
     pub run_attempt_id: Uuid,
     pub error_code: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PipelineJobView {
+    pub id: Uuid,
+    pub pipeline_run_id: Uuid,
+    pub job_key: String,
+    pub state: String,
+    pub retry_allowed: bool,
+}
+
+#[derive(Deserialize)]
+pub struct RetryPipelineJobRequest {
+    pub attempt_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -395,6 +413,219 @@ pub async fn get_pipeline_run(
         run_attempt_id: attempt.0,
         error_code,
     }))
+}
+
+pub async fn list_pipeline_jobs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, run_id)): AxumPath<(String, String, Uuid)>,
+) -> Result<Json<Vec<PipelineJobView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let run_ok =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM pipeline_runs WHERE id = $1 AND repo_id = $2")
+            .bind(run_id)
+            .bind(repo_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if run_ok.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        "SELECT id, pipeline_run_id, job_key, state FROM pipeline_jobs
+         WHERE pipeline_run_id = $1 AND repo_id = $2 ORDER BY job_key",
+    )
+    .bind(run_id)
+    .bind(repo_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(id, pipeline_run_id, job_key, job_state)| PipelineJobView {
+                    id,
+                    pipeline_run_id,
+                    job_key: job_key.clone(),
+                    state: job_state.clone(),
+                    retry_allowed: job_key != "deploy" && job_state == "failed",
+                },
+            )
+            .collect(),
+    ))
+}
+
+/// Retry a failed pipeline job (shared by session HTTP and MCP).
+pub async fn retry_pipeline_job(
+    state: &Arc<AppState>,
+    repo_id: Uuid,
+    job_id: Uuid,
+) -> Result<PipelineJobView, AppError> {
+    let mut tx = state.pool.begin().await?;
+    let row = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT pipeline_run_id, job_key, state FROM pipeline_jobs
+         WHERE id = $1 AND repo_id = $2
+         FOR UPDATE",
+    )
+    .bind(job_id)
+    .bind(repo_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((run_id, job_key, job_state)) = row else {
+        return Err(AppError::NotFound);
+    };
+    if job_key == "deploy" {
+        return Err(AppError::Validation(
+            "deploy job cannot use generic retry".to_string(),
+        ));
+    }
+    if job_state != "failed" {
+        return Err(AppError::Validation(
+            "only failed jobs may be retried".to_string(),
+        ));
+    }
+    let run_row = sqlx::query_as::<_, (String,)>(
+        "SELECT state FROM pipeline_runs WHERE id = $1 AND repo_id = $2 FOR UPDATE",
+    )
+    .bind(run_id)
+    .bind(repo_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((run_state,)) = run_row else {
+        return Err(AppError::NotFound);
+    };
+    if run_state != "failed" {
+        return Err(AppError::Conflict(
+            "pipeline run must be failed to retry a failed job".to_string(),
+        ));
+    }
+    let job_up = sqlx::query(
+        "UPDATE pipeline_jobs SET state = 'queued', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND repo_id = $2 AND job_key <> 'deploy' AND state = 'failed'",
+    )
+    .bind(job_id)
+    .bind(repo_id)
+    .execute(&mut *tx)
+    .await?;
+    if job_up.rows_affected() == 0 {
+        return Err(AppError::Validation(
+            "only failed jobs may be retried".to_string(),
+        ));
+    }
+    let run_up = sqlx::query(
+        "UPDATE pipeline_runs SET state = 'queued', error_code = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND repo_id = $2 AND state = 'failed'",
+    )
+    .bind(run_id)
+    .bind(repo_id)
+    .execute(&mut *tx)
+    .await?;
+    if run_up.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "pipeline run state changed; job retry aborted".to_string(),
+        ));
+    }
+    let spawn = if !crate::runner_api::pipeline_executor_remote() {
+        let (storage_key, org_id): (Uuid, Uuid) =
+            sqlx::query_as("SELECT storage_key, org_id FROM repositories WHERE id = $1")
+                .bind(repo_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let source: (String,) =
+            sqlx::query_as("SELECT source_oid FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let run_kind: (String,) =
+            sqlx::query_as("SELECT run_kind FROM pipeline_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        Some((storage_key, org_id, source.0, run_kind.0))
+    } else {
+        None
+    };
+    tx.commit().await?;
+    if let Some((storage_key, org_id, source_oid, run_kind)) = spawn {
+        let pool = state.pool.clone();
+        let git_root = state.git_root.clone();
+        let artifact_root = state.artifact_root.clone();
+        let pipeline_bin = state.pipeline_adapter_bin.clone();
+        let supervisor = state.pipeline_supervisor.clone();
+        let instance_id = state.instance_id;
+        tokio::spawn(async move {
+            execute_pipeline_job(
+                pool,
+                git_root,
+                artifact_root,
+                pipeline_bin,
+                supervisor,
+                instance_id,
+                storage_key,
+                run_id,
+                job_id,
+                org_id,
+                repo_id,
+                source_oid,
+                run_kind,
+            )
+            .await;
+        });
+    }
+    Ok(PipelineJobView {
+        id: job_id,
+        pipeline_run_id: run_id,
+        job_key,
+        state: "queued".to_string(),
+        retry_allowed: false,
+    })
+}
+
+pub async fn retry_pipeline_job_http(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, job_id)): AxumPath<(String, String, Uuid)>,
+    Json(body): Json<RetryPipelineJobRequest>,
+) -> Result<Json<PipelineJobView>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id, _) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let attempt_id = body.attempt_id.ok_or_else(|| {
+        AppError::Validation("attempt_id is required for pipeline job retry".to_string())
+    })?;
+    let canonical = json!({
+        "job_id": job_id.to_string(),
+        "repo_id": repo_id.to_string(),
+    });
+    let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
+    let action = begin_idempotent_write(
+        &state.pool,
+        principal_id,
+        Some(org_id),
+        "http_pipeline_job_retry",
+        &attempt_id.to_string(),
+        &canonical_json,
+    )
+    .await?;
+    if let IdempotencyAction::Replay(stored) = action {
+        return Ok(Json(serde_json::from_value(stored).map_err(|_| {
+            AppError::Other("idempotency replay decode failed".to_string())
+        })?));
+    }
+    let IdempotencyAction::Proceed { record_id } = action else {
+        return Err(AppError::Other("idempotency".into()));
+    };
+    match retry_pipeline_job(&state, repo_id, job_id).await {
+        Ok(view) => {
+            let stored = serde_json::to_value(&view).map_err(|e| AppError::Other(e.to_string()))?;
+            let _ = complete_idempotent_write(&state.pool, record_id, &stored, Some(job_id)).await;
+            Ok(Json(view))
+        }
+        Err(e) => {
+            let _ = fail_idempotent_write(&state.pool, record_id).await;
+            Err(e)
+        }
+    }
 }
 
 pub async fn cancel_pipeline_run(

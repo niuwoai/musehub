@@ -23,6 +23,7 @@
 | DEP-02 | `[x]` 控制台 | 受保护环境会话审批 + ID 加载；`deployment_approval_console` / `deployment-view-epoch` Playwright |
 | DEP-02b | `[x]` 控制台 | 仓库范围列表：待审批发现 + **全部历史**分页（`offset`）、load more；`deployment_list_http_e2e` + `deployment-history-console` Playwright |
 | DEP-03 | `[x]` 控制台 | 失败摘要 + **回滚**（`POST .../deployments/rollback`，会话写权限，**attempt_id** 幂等）；`deployment_rollback_e2e` + `deployment-rollback-console` Playwright（**fixture**，非 live runner 审批链） |
+| CI-02b | `[x]` 控制台 | 流水线失败 **error_code** + job 列表；**build** job 显式重试（`GET .../pipeline-runs/{id}/jobs`，`POST .../pipeline-jobs/{id}/retry` + **attempt_id** 幂等，无自动重试）；`retry_pipeline_job` **事务 + job/run `FOR UPDATE`**：run 非 `failed`（含 **cancel**）→ **409** 回滚、job 不变；job+run **conditional UPDATE** 均验 `rows_affected` 后才 `commit`/spawn；`pipeline_job_retry_http_e2e`（含 run/job 状态错配 + 并发 distinct attempt）；`pipeline-job-retry-console` Playwright（**fixture**）；HTTP 证明 **requeue**，**非** live worker；与 MCP `musehub_job_retry` 共用核心 |
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
 | IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
