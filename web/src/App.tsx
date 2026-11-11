@@ -544,15 +544,17 @@ export default function App() {
     await refreshRepos()
   }
 
-  async function loadIssues(slug: string) {
+  async function loadIssues(slug: string, preservePrNumber?: number) {
     if (selectedRepoRef.current !== slug) {
       invalidateAgentRunWork()
     }
     invalidateDeploymentWork()
     selectedRepoRef.current = slug
     setSelectedRepo(slug)
-    setPrCiFailure(null)
-    setSelectedPrNumber(null)
+    if (preservePrNumber == null) {
+      setPrCiFailure(null)
+      setSelectedPrNumber(null)
+    }
     const op = captureDeploymentOp(slug)
     setError(null)
     try {
@@ -901,7 +903,7 @@ export default function App() {
       if (agentOpActive(op)) {
         setPrCiFailure(ctx)
       }
-      await loadIssues(selectedRepo)
+      await loadIssues(selectedRepo, prNumber)
     } catch (err) {
       if (agentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'agent fix failed')

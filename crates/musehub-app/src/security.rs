@@ -55,6 +55,21 @@ pub fn validate_agent_work_branch(branch: &str, default_branch: &str) -> Result<
     Ok(())
 }
 
+/// PR-agent-fix may work on the PR `source_branch` at a bound `head_oid` (not only `agent/` branches).
+pub fn validate_pr_agent_fix_work_branch(branch: &str) -> Result<(), String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("fix branch must not be empty".to_string());
+    }
+    if branch.contains("..") || branch.contains(' ') {
+        return Err("invalid fix branch".to_string());
+    }
+    if branch == "main" || branch == "master" {
+        return Err("cannot run PR fix directly on default branch name".to_string());
+    }
+    Ok(())
+}
+
 /// Artifact names must be a single path segment without traversal.
 pub fn validate_artifact_name(name: &str) -> Result<(), String> {
     let name = name.trim();

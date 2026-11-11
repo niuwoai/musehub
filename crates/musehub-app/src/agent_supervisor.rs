@@ -166,19 +166,44 @@ pub async fn run_agent_job(
         return;
     }
     if let Some(oid) = checkout_head_oid.as_deref() {
-        let _ = std::process::Command::new("git")
+        let checkout_ok = std::process::Command::new("git")
             .current_dir(work_dir.path())
             .args(["checkout", "-B", &branch])
-            .status();
-        let _ = std::process::Command::new("git")
+            .status()
+            .is_ok_and(|s| s.success());
+        let reset_ok = std::process::Command::new("git")
             .current_dir(work_dir.path())
             .args(["reset", "--hard", oid])
-            .status();
+            .status()
+            .is_ok_and(|s| s.success());
+        if !checkout_ok || !reset_ok {
+            fenced_fail(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "git_head_checkout_failed",
+            )
+            .await;
+            return;
+        }
     } else {
-        let _ = std::process::Command::new("git")
+        let checkout_ok = std::process::Command::new("git")
             .current_dir(work_dir.path())
             .args(["checkout", "-B", &branch, "main"])
-            .status();
+            .status()
+            .is_ok_and(|s| s.success());
+        if !checkout_ok {
+            fenced_fail(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "git_branch_checkout_failed",
+            )
+            .await;
+            return;
+        }
     }
 
     let message = if message.is_empty() {
@@ -281,10 +306,15 @@ pub async fn run_agent_job(
                 .await;
             } else if commit.is_some() {
                 if still_holds_lease(&pool, run_id, instance_id, epoch).await {
-                    let _ = std::process::Command::new("git")
+                    let push_ok = std::process::Command::new("git")
                         .current_dir(work_dir.path())
                         .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
-                        .status();
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if !push_ok {
+                        fenced_fail(&pool, run_id, instance_id, epoch, "git_push_failed").await;
+                        return;
+                    }
                 }
                 let _ = finalize_agent_run_state(
                     &pool,
