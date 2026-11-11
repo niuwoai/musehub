@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Panel } from '../components/Panel'
 import { DEFAULT_ORG } from '../app/paths'
 import { listGitCommits, listGitTree, readGitBlob } from '../api'
 
 export function RepoCodePage() {
+  const { t } = useTranslation()
   const { org = DEFAULT_ORG, slug } = useParams<{ org: string; slug: string }>()
   const [gitRef, setGitRef] = useState('main')
   const [commit, setCommit] = useState('')
@@ -33,10 +35,10 @@ export function RepoCodePage() {
           setCommit(head)
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'load failed')
+        setError(e instanceof Error ? e.message : t('code.loadFailed'))
       }
     })()
-  }, [org, slug, gitRef])
+  }, [org, slug, gitRef, t])
 
   useEffect(() => {
     if (commit) void loadTree().catch((e) => setError(String(e)))
@@ -49,7 +51,7 @@ export function RepoCodePage() {
     }
     const blob = await readGitBlob(org, slug!, commit, entryPath)
     if (blob.binary) {
-      setFileMeta(`binary @ ${entryPath}`)
+      setFileMeta(t('code.binaryFile', { path: entryPath }))
       setFileBody('')
     } else {
       setFileMeta(entryPath)
@@ -57,29 +59,38 @@ export function RepoCodePage() {
     }
   }
 
-  if (!slug) return <p role="status">select repo</p>
+  if (!slug) return <p role="status">{t('repo.selectFirst')}</p>
 
   return (
     <Panel data-testid="repo-code">
-      <h2>Code</h2>
+      <h2>{t('nav.repoCode')}</h2>
       <label>
-        ref{' '}
+        {t('code.refLabel')}{' '}
         <input
           data-testid="code-git-ref"
           value={gitRef}
           onChange={(e) => setGitRef(e.target.value)}
         />
       </label>
-      <p data-testid="code-pinned-commit">commit={commit || '…'}</p>
+      <p data-testid="code-pinned-commit">{t('code.pinnedCommit', { oid: commit || '…' })}</p>
       {error ? <p role="alert">{error}</p> : null}
       <ul data-testid="code-tree">
-        {entries.map((e) => (
-          <li key={e.path}>
-            <button type="button" data-testid={`code-entry-${e.kind}`} onClick={() => void openEntry(e.path, e.kind)}>
-              {e.kind === 'tree' ? '📁' : '📄'} {e.path.replace(`${path}${path ? '/' : ''}`, '') || e.path}
-            </button>
-          </li>
-        ))}
+        {entries.length === 0 ? (
+          <li role="status">{t('code.emptyTree')}</li>
+        ) : (
+          entries.map((e) => (
+            <li key={e.path}>
+              <button
+                type="button"
+                data-testid={`code-entry-${e.kind}`}
+                onClick={() => void openEntry(e.path, e.kind)}
+              >
+                {e.kind === 'tree' ? '📁' : '📄'}{' '}
+                {e.path.replace(`${path}${path ? '/' : ''}`, '') || e.path}
+              </button>
+            </li>
+          ))
+        )}
       </ul>
       {fileMeta ? (
         <pre data-testid="code-file-body" style={{ maxHeight: 360, overflow: 'auto' }}>

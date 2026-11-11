@@ -113,6 +113,42 @@
     "empty": "尚无仓库，点击上方按钮创建。",
     "noPulls": "暂无 Pull Request。"
   },
+  "code": {
+    "refLabel": "引用",
+    "pinnedCommit": "固定提交：{{oid}}",
+    "loadFailed": "无法加载仓库历史。",
+    "emptyTree": "此路径下无条目。",
+    "binaryFile": "二进制文件 @ {{path}}"
+  },
+  "pull": {
+    "syncHead": "同步 head",
+    "syncFailed": "无法同步 Pull Request head。",
+    "review": "评审",
+    "approve": "批准",
+    "selfApproveBlocked": "作者不能批准自己的 Pull Request。",
+    "outdatedAnchor": "（已过时）",
+    "addComment": "发表评论",
+    "commentFailed": "无法发表评论。"
+  },
+  "issues": {
+    "filterState": "状态",
+    "filterLabel": "标签",
+    "filterAssignee": "负责人",
+    "applyFilters": "应用筛选",
+    "loadMore": "加载更多",
+    "loadingMore": "正在加载更多…",
+    "loadFailed": "无法加载 Issue 列表。"
+  },
+  "sshKeys": {
+    "title": "SSH 密钥",
+    "transportGap": "为将来的 Git-over-SSH 管理公钥。产品级 SSH 克隆/推送传输在 0.1.0-rc4 服务端未启用 — 请使用 HTTPS + PAT。",
+    "name": "密钥名称",
+    "publicKey": "公钥",
+    "add": "添加 SSH 密钥",
+    "revoke": "撤销",
+    "addFailed": "无法添加 SSH 密钥。",
+    "empty": "尚无 SSH 密钥。"
+  },
   "repoSettings": {
     "grantsTitle": "仓库授权",
     "grantReader": "授予 reader"

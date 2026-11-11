@@ -521,41 +521,62 @@ pub async fn list_pull_requests(
     ))
 }
 
+#[derive(Deserialize)]
+pub struct SyncPullRequestBody {
+    pub expected_row_version: i64,
+}
+
 pub async fn sync_pull_request(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     AxumPath((org, repo, number)): AxumPath<(String, String, i64)>,
+    Json(body): Json<SyncPullRequestBody>,
 ) -> Result<Json<PullRequestView>, AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, storage_key) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let pr = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
-        "SELECT id, source_branch, target_branch, state, head_oid
+    let pr = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, i64)>(
+        "SELECT id, source_branch, target_branch, state, head_oid, row_version
          FROM pull_requests WHERE repo_id = $1 AND number = $2",
     )
     .bind(repo_id)
     .bind(number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, source_branch, target_branch, pr_state, _old_head)) = pr else {
+    let Some((pr_id, source_branch, target_branch, pr_state, _old_head, row_version)) = pr else {
         return Err(AppError::NotFound);
     };
+    if row_version != body.expected_row_version {
+        return Err(AppError::Validation(
+            "stale pull request revision".to_string(),
+        ));
+    }
     if pr_state != "open" {
         return Err(AppError::Validation("pull request is not open".to_string()));
     }
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let head_oid = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     let base_oid = git_rev_parse(&bare, &format!("refs/heads/{target_branch}"))?;
-    let new_row: (i64,) = sqlx::query_as(
+    let mut tx = state.pool.begin().await?;
+    let new_row: Option<(i64,)> = sqlx::query_as(
         "UPDATE pull_requests SET head_oid = $2, base_oid = $3, row_version = row_version + 1,
-         updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING row_version",
+         updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND row_version = $4
+         RETURNING row_version",
     )
     .bind(pr_id)
     .bind(&head_oid)
     .bind(&base_oid)
-    .fetch_one(&state.pool)
+    .bind(body.expected_row_version)
+    .fetch_optional(&mut *tx)
     .await?;
-    crate::discussion::mark_pr_comments_outdated(&state.pool, pr_id, new_row.0).await;
+    let Some((new_row_version,)) = new_row else {
+        return Err(AppError::Validation(
+            "stale pull request revision".to_string(),
+        ));
+    };
+    crate::discussion::mark_pr_comments_outdated(&mut *tx, pr_id, new_row_version).await?;
+    tx.commit().await?;
     insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
     let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT title, issue_id FROM pull_requests WHERE id = $1",
@@ -1220,11 +1241,10 @@ pub async fn get_pull_request(
     else {
         return Err(AppError::NotFound);
     };
-    let author: (String,) =
-        sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
-            .bind(author_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let author: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
+        .bind(author_id)
+        .fetch_one(&state.pool)
+        .await?;
     let head = head_oid.unwrap_or_default();
     let base = base_oid.unwrap_or_default();
     Ok(Json(PullRequestDetail {

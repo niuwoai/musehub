@@ -118,7 +118,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             "/api/v1/ssh-keys",
             get(ssh_keys::list_ssh_keys).post(ssh_keys::create_ssh_key),
         )
-        .route("/api/v1/ssh-keys/{key_id}", delete(ssh_keys::revoke_ssh_key))
+        .route(
+            "/api/v1/ssh-keys/{key_id}",
+            delete(ssh_keys::revoke_ssh_key),
+        )
         .route(
             "/api/v1/orgs/{org}/members",
             get(members::list_org_members).post(members::invite_member),

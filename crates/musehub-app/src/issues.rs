@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -43,6 +43,49 @@ fn default_limit() -> i64 {
     50
 }
 
+const MAX_LABELS: usize = 20;
+const MAX_LABEL_LEN: usize = 50;
+
+pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
+    if labels.len() > MAX_LABELS {
+        return Err(AppError::Validation(format!(
+            "at most {MAX_LABELS} labels allowed"
+        )));
+    }
+    for label in labels {
+        if label.is_empty() || label.len() > MAX_LABEL_LEN {
+            return Err(AppError::Validation("invalid label length".into()));
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(AppError::Validation("invalid label characters".into()));
+        }
+    }
+    Ok(())
+}
+
+async fn org_assignee_id(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    handle: &str,
+) -> Result<Uuid, AppError> {
+    let row = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT p.id FROM principals p
+         JOIN memberships m ON m.principal_id = p.id AND m.org_id = $2
+         WHERE p.handle_normalized = LOWER($1)
+           AND p.status = 'active'
+           AND m.status = 'active'",
+    )
+    .bind(handle)
+    .bind(org_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|(id,)| id)
+        .ok_or_else(|| AppError::Validation("assignee not eligible".into()))
+}
+
 #[derive(Serialize)]
 pub struct IssueDetail {
     pub id: Uuid,
@@ -75,7 +118,8 @@ pub async fn list_issues_page(
 ) -> Result<Json<IssueListPage>, AppError> {
     let limit = q.limit.clamp(1, 100);
     let principal_id = super::require_session(&state.pool, &headers).await?;
-    let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let (org_id, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
 
     let mut cursor_number: Option<i64> = None;
     let mut cursor_id: Option<Uuid> = None;
@@ -85,16 +129,11 @@ pub async fn list_issues_page(
         cursor_id = Some(id);
     }
 
-    let mut assignee_id: Option<Uuid> = None;
-    if let Some(handle) = &q.assignee {
-        let row = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT id FROM principals WHERE handle_normalized = LOWER($1)",
-        )
-        .bind(handle)
-        .fetch_optional(&state.pool)
-        .await?;
-        assignee_id = row.map(|r| r.0);
-    }
+    let assignee_id: Option<Uuid> = if let Some(handle) = &q.assignee {
+        Some(org_assignee_id(&state.pool, org_id, handle).await?)
+    } else {
+        None
+    };
 
     let rows = sqlx::query_as::<_, (Uuid, i64, String, String, Vec<String>, Option<String>)>(
         "SELECT i.id, i.number, i.title, i.state, i.labels,
@@ -121,21 +160,25 @@ pub async fn list_issues_page(
     let has_more = rows.len() as i64 > limit;
     let page_rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
     let next_cursor = if has_more {
-        page_rows.last().map(|(id, number, ..)| encode_issue_cursor(*number, *id))
+        page_rows
+            .last()
+            .map(|(id, number, ..)| encode_issue_cursor(*number, *id))
     } else {
         None
     };
     Ok(Json(IssueListPage {
         items: page_rows
             .into_iter()
-            .map(|(id, number, title, issue_state, labels, assignee_handle)| IssueListItem {
-                id,
-                number,
-                title,
-                state: issue_state,
-                labels,
-                assignee_handle,
-            })
+            .map(
+                |(id, number, title, issue_state, labels, assignee_handle)| IssueListItem {
+                    id,
+                    number,
+                    title,
+                    state: issue_state,
+                    labels,
+                    assignee_handle,
+                },
+            )
             .collect(),
         next_cursor,
         has_more,
@@ -212,29 +255,25 @@ pub async fn patch_issue(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id) =
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let issue = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM issues WHERE repo_id = $1 AND number = $2",
-    )
-    .bind(repo_id)
-    .bind(number)
-    .fetch_optional(&state.pool)
-    .await?;
+    let issue =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
+            .bind(repo_id)
+            .bind(number)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some((issue_id,)) = issue else {
         return Err(AppError::NotFound);
     };
 
     let mut assignee_id: Option<Uuid> = None;
+    if let Some(labels) = &body.labels {
+        validate_labels(labels)?;
+    }
     if let Some(handle) = &body.assignee_handle {
         if handle.is_empty() {
             assignee_id = None;
         } else {
-            let row = sqlx::query_as::<_, (Uuid,)>(
-                "SELECT id FROM principals WHERE handle_normalized = LOWER($1)",
-            )
-            .bind(handle)
-            .fetch_optional(&state.pool)
-            .await?;
-            assignee_id = Some(row.ok_or_else(|| AppError::Validation("unknown assignee".into()))?.0);
+            assignee_id = Some(org_assignee_id(&state.pool, org_id, handle).await?);
         }
     }
 
@@ -243,7 +282,9 @@ pub async fn patch_issue(
             return Err(AppError::Validation("invalid state".into()));
         }
         if state_val == "closed" && body.close_reason.is_none() {
-            return Err(AppError::Validation("close_reason required when closing".into()));
+            return Err(AppError::Validation(
+                "close_reason required when closing".into(),
+            ));
         }
     }
 
@@ -300,11 +341,12 @@ pub async fn patch_issue(
                 .bind(issue_id)
                 .fetch_one(&state.pool)
                 .await?;
-        let rev: (i64,) =
-            sqlx::query_as("SELECT COALESCE(MAX(revision), 0) + 1 FROM issue_revisions WHERE issue_id = $1")
-                .bind(issue_id)
-                .fetch_one(&state.pool)
-                .await?;
+        let rev: (i64,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(revision), 0) + 1 FROM issue_revisions WHERE issue_id = $1",
+        )
+        .bind(issue_id)
+        .fetch_one(&state.pool)
+        .await?;
         let revision_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO issue_revisions (id, org_id, repo_id, issue_id, revision, title, body, author_id)

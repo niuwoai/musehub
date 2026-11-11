@@ -100,8 +100,7 @@ pub async fn list_tree(
 ) -> Result<Json<Value>, AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let bare = bare_for_repo(&state, &org, &repo, principal_id).await?;
-    let (items, has_more) =
-        git_tree_entries(&bare, &q.commit, &q.path, q.limit.clamp(1, 500))?;
+    let (items, has_more) = git_tree_entries(&bare, &q.commit, &q.path, q.limit.clamp(1, 500))?;
     Ok(Json(serde_json::json!({
         "commit": q.commit,
         "path": q.path,
@@ -131,8 +130,7 @@ pub async fn compare_commits(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let bare = bare_for_repo(&state, &org, &repo, principal_id).await?;
     if q.path.is_empty() {
-        let (items, summary, has_more) =
-            git_commit_compare(&bare, &q.base, &q.head, None, 200)?;
+        let (items, summary, has_more) = git_commit_compare(&bare, &q.base, &q.head, None, 200)?;
         return Ok(Json(serde_json::json!({
             "base": q.base,
             "head": q.head,

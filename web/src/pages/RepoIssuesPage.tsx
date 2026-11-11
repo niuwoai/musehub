@@ -1,14 +1,15 @@
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
+import { listIssuesPage, type Issue } from '../api'
 
 export function RepoIssuesPage() {
   const { org = DEFAULT_ORG } = useParams<{ org: string }>()
   const {
     t,
     selectedRepo,
-    issues,
     lastRun,
     agentRunStarting,
     onCreateIssue,
@@ -18,6 +19,41 @@ export function RepoIssuesPage() {
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
+  const [items, setItems] = useState<Issue[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [filterState, setFilterState] = useState('')
+  const [filterLabel, setFilterLabel] = useState('')
+  const [filterAssignee, setFilterAssignee] = useState('')
+  const [listError, setListError] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  const fetchPage = useCallback(
+    async (cursor?: string, append = false) => {
+      if (!selectedRepo) return
+      setListError(null)
+      const page = await listIssuesPage(org, selectedRepo, {
+        state: filterState || undefined,
+        label: filterLabel || undefined,
+        assignee: filterAssignee || undefined,
+        cursor,
+        limit: 25,
+      })
+      setItems((prev) => (append ? [...prev, ...page.items] : page.items))
+      setHasMore(page.has_more)
+      setNextCursor(page.next_cursor)
+    },
+    [org, selectedRepo, filterState, filterLabel, filterAssignee],
+  )
+
+  useEffect(() => {
+    if (!selectedRepo) return
+    void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
+  }, [selectedRepo, fetchPage, t])
+
+  async function refreshAll() {
+    await Promise.all([loadIssues(selectedRepo!), fetchPage()])
+  }
 
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
@@ -26,14 +62,53 @@ export function RepoIssuesPage() {
   return (
     <Panel>
       <h2>{t('nav.repoIssues')}</h2>
-      <button type="button" data-testid="refresh-repo" onClick={() => void loadIssues(selectedRepo)}>
+      <div data-testid="issue-filters">
+        <label>
+          {t('issues.filterState')}
+          <input
+            data-testid="issue-filter-state"
+            value={filterState}
+            onChange={(e) => setFilterState(e.target.value)}
+            placeholder="open"
+          />
+        </label>
+        <label>
+          {t('issues.filterLabel')}
+          <input
+            data-testid="issue-filter-label"
+            value={filterLabel}
+            onChange={(e) => setFilterLabel(e.target.value)}
+          />
+        </label>
+        <label>
+          {t('issues.filterAssignee')}
+          <input
+            data-testid="issue-filter-assignee"
+            value={filterAssignee}
+            onChange={(e) => setFilterAssignee(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          data-testid="issue-apply-filters"
+          onClick={() =>
+            void fetchPage().catch((e) =>
+              setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
+            )
+          }
+        >
+          {t('issues.applyFilters')}
+        </button>
+      </div>
+      <button type="button" data-testid="refresh-repo" onClick={() => void refreshAll()}>
         {t('app.refreshRepo')}
       </button>
       <button type="button" onClick={() => void onCreateIssue()}>
         {t('app.createIssue')}
       </button>
-      <ul>
-        {issues.map((issue) => (
+      {listError ? <p role="alert">{listError}</p> : null}
+      <ul data-testid="issue-list">
+        {items.map((issue) => (
           <li key={issue.id} data-testid={`issue-row-${issue.number}`}>
             <Link
               to={paths.repoIssue(org, selectedRepo, issue.number)}
@@ -50,6 +125,22 @@ export function RepoIssuesPage() {
           </li>
         ))}
       </ul>
+      {hasMore ? (
+        <button
+          type="button"
+          data-testid="issue-load-more"
+          disabled={loadingMore}
+          onClick={() => {
+            if (!nextCursor) return
+            setLoadingMore(true)
+            void fetchPage(nextCursor, true)
+              .catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
+              .finally(() => setLoadingMore(false))
+          }}
+        >
+          {loadingMore ? t('issues.loadingMore') : t('issues.loadMore')}
+        </button>
+      ) : null}
       {lastRun || agentRunStarting ? (
         <div data-testid="last-agent-run" data-agent-run-id={lastRun?.id ?? ''}>
           <p>

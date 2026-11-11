@@ -31,7 +31,11 @@ fn validate_public_key(key: &str) -> Result<(), AppError> {
     let kind = trimmed.split_whitespace().next().unwrap_or("");
     if !matches!(
         kind,
-        "ssh-ed25519" | "ssh-rsa" | "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521"
+        "ssh-ed25519"
+            | "ssh-rsa"
+            | "ecdsa-sha2-nistp256"
+            | "ecdsa-sha2-nistp384"
+            | "ecdsa-sha2-nistp521"
     ) {
         return Err(AppError::Validation(
             "unsupported or invalid ssh public key type".into(),

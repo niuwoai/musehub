@@ -108,6 +108,42 @@
     "empty": "No repositories yet — use the button above to create one.",
     "noPulls": "No pull requests yet."
   },
+  "code": {
+    "refLabel": "Ref",
+    "pinnedCommit": "Pinned commit: {{oid}}",
+    "loadFailed": "Could not load repository history.",
+    "emptyTree": "No entries at this path.",
+    "binaryFile": "Binary file @ {{path}}"
+  },
+  "pull": {
+    "syncHead": "Sync head",
+    "syncFailed": "Could not sync pull request head.",
+    "review": "Review",
+    "approve": "Approve",
+    "selfApproveBlocked": "Authors cannot approve their own pull requests.",
+    "outdatedAnchor": "(outdated)",
+    "addComment": "Add comment",
+    "commentFailed": "Could not post comment."
+  },
+  "issues": {
+    "filterState": "State",
+    "filterLabel": "Label",
+    "filterAssignee": "Assignee",
+    "applyFilters": "Apply filters",
+    "loadMore": "Load more",
+    "loadingMore": "Loading more…",
+    "loadFailed": "Could not load issues."
+  },
+  "sshKeys": {
+    "title": "SSH keys",
+    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.",
+    "name": "Key name",
+    "publicKey": "Public key",
+    "add": "Add SSH key",
+    "revoke": "Revoke",
+    "addFailed": "Could not add SSH key.",
+    "empty": "No SSH keys yet."
+  },
   "common": {
     "loading": "Loading…",
     "notFoundTitle": "Page not found",

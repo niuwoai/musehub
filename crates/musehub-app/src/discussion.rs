@@ -1,5 +1,7 @@
 //! REST discussion threads for issues and pull requests.
 
+mod pr_anchor;
+
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -34,21 +36,22 @@ async fn issue_id_for_number(
     repo_id: Uuid,
     number: i64,
 ) -> Result<Uuid, AppError> {
-    let row = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
-        .bind(repo_id)
-        .bind(number)
-        .fetch_optional(pool)
-        .await?;
+    let row =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
+            .bind(repo_id)
+            .bind(number)
+            .fetch_optional(pool)
+            .await?;
     row.map(|r| r.0).ok_or(AppError::NotFound)
 }
 
-async fn pr_id_for_number(
+async fn pr_meta_for_number(
     pool: &sqlx::PgPool,
     repo_id: Uuid,
     number: i64,
-) -> Result<(Uuid, i64), AppError> {
-    let row = sqlx::query_as::<_, (Uuid, i64)>(
-        "SELECT id, row_version FROM pull_requests WHERE repo_id = $1 AND number = $2",
+) -> Result<(Uuid, i64, Option<String>, Option<String>), AppError> {
+    let row = sqlx::query_as::<_, (Uuid, i64, Option<String>, Option<String>)>(
+        "SELECT id, row_version, base_oid, head_oid FROM pull_requests WHERE repo_id = $1 AND number = $2",
     )
     .bind(repo_id)
     .bind(number)
@@ -101,7 +104,7 @@ pub async fn list_pr_comments(
 ) -> Result<Json<Vec<DiscussionCommentView>>, AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let (pr_id, _) = pr_id_for_number(&state.pool, repo_id, number).await?;
+    let (pr_id, _, _, _) = pr_meta_for_number(&state.pool, repo_id, number).await?;
     list_comments(&state.pool, repo_id, "pr", pr_id).await
 }
 
@@ -117,16 +120,23 @@ pub async fn post_pr_comment(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id) =
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let (pr_id, row_version) = pr_id_for_number(&state.pool, repo_id, number).await?;
-    let mut anchor = body.anchor.unwrap_or(Value::Null);
-    if anchor.is_object() {
-        if let Some(obj) = anchor.as_object_mut() {
-            obj.insert(
-                "pr_revision_id".to_string(),
-                Value::Number(row_version.into()),
-            );
-        }
-    }
+    let (_, _, storage_key) =
+        super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let (pr_id, row_version, base_oid, head_oid) =
+        pr_meta_for_number(&state.pool, repo_id, number).await?;
+    let base = base_oid.ok_or(AppError::Validation("pull request missing base_oid".into()))?;
+    let head = head_oid.ok_or(AppError::Validation("pull request missing head_oid".into()))?;
+    let bare = crate::git_http::bare_repo_path(&state.git_root, &storage_key);
+    let stored_anchor = match body.anchor {
+        None | Some(Value::Null) => None,
+        Some(anchor) => Some(pr_anchor::validate_and_normalize_pr_anchor(
+            &bare,
+            &base,
+            &head,
+            row_version,
+            anchor,
+        )?),
+    };
     insert_comment(
         &state.pool,
         org_id,
@@ -135,13 +145,20 @@ pub async fn post_pr_comment(
         pr_id,
         principal_id,
         &body.body,
-        Some(anchor),
+        stored_anchor,
     )
     .await
 }
 
-pub async fn mark_pr_comments_outdated(pool: &sqlx::PgPool, pr_id: Uuid, new_row_version: i64) {
-    let _ = sqlx::query(
+pub async fn mark_pr_comments_outdated<'e, E>(
+    executor: E,
+    pr_id: Uuid,
+    new_row_version: i64,
+) -> Result<(), AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
         "UPDATE discussion_comments SET outdated = true, updated_at = CURRENT_TIMESTAMP
          WHERE target_kind = 'pr' AND target_id = $1 AND outdated = false
            AND anchor IS NOT NULL
@@ -150,8 +167,9 @@ pub async fn mark_pr_comments_outdated(pool: &sqlx::PgPool, pr_id: Uuid, new_row
     )
     .bind(pr_id)
     .bind(new_row_version)
-    .execute(pool)
-    .await;
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 async fn list_comments(
@@ -160,7 +178,18 @@ async fn list_comments(
     target_kind: &str,
     target_id: Uuid,
 ) -> Result<Json<Vec<DiscussionCommentView>>, AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, String, String, Option<Value>, bool, bool, time::OffsetDateTime)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            Option<Value>,
+            bool,
+            bool,
+            time::OffsetDateTime,
+        ),
+    >(
         "SELECT c.id, c.body, p.handle, c.anchor, c.outdated, c.resolved, c.created_at
          FROM discussion_comments c
          JOIN principals p ON p.id = c.author_id
@@ -174,23 +203,26 @@ async fn list_comments(
     .await?;
     Ok(Json(
         rows.into_iter()
-            .map(|(id, body, author_handle, anchor, outdated, resolved, created_at)| {
-                DiscussionCommentView {
-                    id,
-                    body,
-                    author_handle,
-                    anchor,
-                    outdated,
-                    resolved,
-                    created_at: created_at
-                        .format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default(),
-                }
-            })
+            .map(
+                |(id, body, author_handle, anchor, outdated, resolved, created_at)| {
+                    DiscussionCommentView {
+                        id,
+                        body,
+                        author_handle,
+                        anchor,
+                        outdated,
+                        resolved,
+                        created_at: created_at
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap_or_default(),
+                    }
+                },
+            )
             .collect(),
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_comment(
     pool: &sqlx::PgPool,
     org_id: Uuid,
@@ -213,21 +245,20 @@ async fn insert_comment(
     .bind(target_id)
     .bind(author_id)
     .bind(body.trim())
-    .bind(anchor)
+    .bind(anchor.clone())
     .execute(pool)
     .await?;
-    let author: (String,) =
-        sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
-            .bind(author_id)
-            .fetch_one(pool)
-            .await?;
+    let author: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
+        .bind(author_id)
+        .fetch_one(pool)
+        .await?;
     Ok((
         StatusCode::CREATED,
         Json(DiscussionCommentView {
             id,
             body: body.trim().to_string(),
             author_handle: author.0,
-            anchor: None,
+            anchor,
             outdated: false,
             resolved: false,
             created_at: time::OffsetDateTime::now_utc()

@@ -11,7 +11,7 @@
 
 ### Added
 
-- **S1 协作切片（Web + REST）**：仓库 **Code** 浏览（提交/树/文本 blob @ commit）；Issue **详情**、标签/负责人、讨论与游标分页列表；PR **`/pulls/:number` 深链**、diff 文件列表、审查/讨论（`pr_revision_id` 锚点，sync 后标记 **outdated**）；账户 **SSH 公钥**增删（**不含**产品级 Git-over-SSH 守护进程）。
+- **S1 协作切片（Web + REST）**：Code 根树浏览 + git 输出上限；Issue 列表筛选/游标 UI、标签与组织内负责人校验；PR diff **行锚点校验**、`expected_row_version` sync CAS、outdated 与 sync 事务一致；SSH **活跃指纹唯一**（`0030`，撤销后可重加）；控制台 en/zh（**不含**产品级 Git-over-SSH 守护进程）。
 - `s1_collaboration_http_e2e`、`web/e2e/s1-collaboration.spec.ts`。
 - 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
 - `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。

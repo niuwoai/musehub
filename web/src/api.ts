@@ -241,18 +241,27 @@ export async function createRepo(org: string, slug: string) {
   })
 }
 
-export async function listIssues(
+export async function listIssuesPage(
   org: string,
   repo: string,
-  params?: { state?: string; label?: string; assignee?: string; cursor?: string },
+  params?: { state?: string; label?: string; assignee?: string; cursor?: string; limit?: number },
 ) {
   const qs = new URLSearchParams()
   if (params?.state) qs.set('state', params.state)
   if (params?.label) qs.set('label', params.label)
   if (params?.assignee) qs.set('assignee', params.assignee)
   if (params?.cursor) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
-  const page = await api<IssueListPage>(`/api/v1/orgs/${org}/repos/${repo}/issues${suffix}`)
+  return api<IssueListPage>(`/api/v1/orgs/${org}/repos/${repo}/issues${suffix}`)
+}
+
+export async function listIssues(
+  org: string,
+  repo: string,
+  params?: { state?: string; label?: string; assignee?: string; cursor?: string },
+) {
+  const page = await listIssuesPage(org, repo, params)
   return page.items
 }
 
@@ -375,9 +384,10 @@ export async function postPrComment(
   )
 }
 
-export async function syncPullRequest(org: string, repo: string, number: number) {
+export async function syncPullRequest(org: string, repo: string, number: number, expectedRowVersion: number) {
   return api<PullRequest>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests/${number}/sync`, {
     method: 'PATCH',
+    body: JSON.stringify({ expected_row_version: expectedRowVersion }),
   })
 }
 

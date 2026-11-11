@@ -32,7 +32,7 @@ export function AccountSecurityPage() {
       setPublicKey('')
       await reloadKeys()
     } catch (err) {
-      setSshError(err instanceof Error ? err.message : 'ssh key failed')
+      setSshError(err instanceof Error ? err.message : t('sshKeys.addFailed'))
     }
   }
 
@@ -68,12 +68,12 @@ export function AccountSecurityPage() {
       </form>
 
       <section data-testid="ssh-keys-section" style={{ marginTop: '2rem' }}>
-        <h3>SSH keys</h3>
-        <p role="note">
-          Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not
-          enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.
-        </p>
+        <h3>{t('sshKeys.title')}</h3>
+        <p role="note">{t('sshKeys.transportGap')}</p>
         <ul data-testid="ssh-key-list">
+          {keys.length === 0 ? (
+            <li role="status">{t('sshKeys.empty')}</li>
+          ) : null}
           {keys.map((k) => (
             <li key={k.id} data-testid="ssh-key-row">
               {k.name} ({k.fingerprint})
@@ -82,18 +82,18 @@ export function AccountSecurityPage() {
                 data-testid={`ssh-key-revoke-${k.id}`}
                 onClick={() => void revokeSshKey(k.id).then(reloadKeys)}
               >
-                revoke
+                {t('sshKeys.revoke')}
               </button>
             </li>
           ))}
         </ul>
         <form onSubmit={(e) => void onAddKey(e)}>
           <label>
-            name
+            {t('sshKeys.name')}
             <input data-testid="ssh-key-name" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
           </label>
           <label>
-            public key
+            {t('sshKeys.publicKey')}
             <textarea
               data-testid="ssh-key-public"
               value={publicKey}
@@ -103,7 +103,7 @@ export function AccountSecurityPage() {
           </label>
           {sshError ? <p role="alert">{sshError}</p> : null}
           <button type="submit" data-testid="ssh-key-add">
-            add SSH key
+            {t('sshKeys.add')}
           </button>
         </form>
       </section>
