@@ -3,6 +3,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod agent_adapter;
+pub mod agent_pr_fix;
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
 pub use git_http::{bare_repo_path, init_bare_repository};
@@ -206,6 +207,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/validation-runs",
             post(pipeline::start_pr_validation_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/ci-failure",
+            get(agent_pr_fix::get_pr_ci_failure),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pull-requests/{number}/agent-fix",
+            post(agent_pr_fix::start_pr_agent_fix),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs",
@@ -762,6 +771,7 @@ async fn start_agent_run(
                 message,
                 deadline,
                 budget_tokens,
+                None,
             )
             .await;
         });

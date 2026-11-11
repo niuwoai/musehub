@@ -90,6 +90,7 @@ async fn duplicate_worker_spawn_only_one_succeeds() {
             msg,
             Duration::from_secs(60),
             None,
+            None,
         )
         .await;
     });
@@ -106,6 +107,7 @@ async fn duplicate_worker_spawn_only_one_succeeds() {
             branch2,
             msg2,
             Duration::from_secs(60),
+            None,
             None,
         )
         .await;

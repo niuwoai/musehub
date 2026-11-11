@@ -324,6 +324,7 @@ async fn run_agent(
         claimed.task_message,
         Duration::from_secs(120),
         budget,
+        None,
     )
     .await;
     renew.abort();

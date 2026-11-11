@@ -97,7 +97,19 @@ pub async fn run_agent_job(
     message: String,
     deadline: Duration,
     budget_tokens: Option<u64>,
+    checkout_head_oid: Option<String>,
 ) {
+    let checkout_head_oid = if checkout_head_oid.is_some() {
+        checkout_head_oid
+    } else {
+        sqlx::query_as::<_, (Option<String>,)>("SELECT head_oid FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|(oid,)| oid)
+    };
     let work_lease = match crate::lease::try_begin_agent_work(&pool, run_id, instance_id).await {
         Ok(lease) => lease,
         Err(_) => {
@@ -153,10 +165,21 @@ pub async fn run_agent_job(
         fenced_fail(&pool, run_id, instance_id, epoch, "git_clone_failed").await;
         return;
     }
-    let _ = std::process::Command::new("git")
-        .current_dir(work_dir.path())
-        .args(["checkout", "-B", &branch, "main"])
-        .status();
+    if let Some(oid) = checkout_head_oid.as_deref() {
+        let _ = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["checkout", "-B", &branch])
+            .status();
+        let _ = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["reset", "--hard", oid])
+            .status();
+    } else {
+        let _ = std::process::Command::new("git")
+            .current_dir(work_dir.path())
+            .args(["checkout", "-B", &branch, "main"])
+            .status();
+    }
 
     let message = if message.is_empty() {
         sqlx::query_as::<_, (String,)>("SELECT task_message FROM agent_runs WHERE id = $1")
