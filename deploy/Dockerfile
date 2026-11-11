@@ -117,13 +117,15 @@ RUN apt-get update \
   && chown root:git /var/lib/musehub/git-ssh \
   && chown -R musehub:musehub-git /var/lib/musehub/git \
   && chmod 2775 /var/lib/musehub/git \
-  && chmod 700 /var/lib/musehub/git-ssh
+  && chmod 0750 /var/lib/musehub/git-ssh
 COPY --from=rust-builder /build/target/release/musehub-git-ssh /usr/local/bin/
 ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
+    MUSEHUB_GIT_STORAGE_GROUP=musehub-git \
     MUSEHUB_GIT_SSH_RUN_DIR=/var/lib/musehub/git-ssh \
     MUSEHUB_GIT_SSH_LISTEN=0.0.0.0 \
     MUSEHUB_GIT_SSH_PORT=2222 \
-    MUSEHUB_GIT_SSH_AKC_USER=git
+    MUSEHUB_GIT_SSH_AKC_USER=git \
+    MUSEHUB_GIT_SSH_RUNTIME_GROUP=git
 VOLUME ["/var/lib/musehub/git", "/var/lib/musehub/git-ssh"]
 EXPOSE 2222
 # sshd supervisor must start as root; AKC/gateway drop to `git` / unprivileged paths.

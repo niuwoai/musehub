@@ -25,6 +25,7 @@ pub struct GitSshFixture {
 
 pub async fn git_ssh_fixture(repo_prefix: &str) -> GitSshFixture {
     super::git_ssh_util::require_git_ssh_transport_prereqs();
+    super::git_ssh_sshd::ensure_git_storage_group();
     let bin = git_ssh_binary();
     let pool = super::migrated_pool().await;
     let database_url = std::env::var("MUSEHUB_TEST_DATABASE_URL").expect("db url");

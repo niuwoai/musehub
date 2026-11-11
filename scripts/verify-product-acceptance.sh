@@ -41,6 +41,13 @@ if id git >/dev/null 2>&1 && command -v sudo >/dev/null; then
   sudo passwd -d git 2>/dev/null || true
   sudo usermod -s /bin/false git 2>/dev/null || true
 fi
+getent group musehub-git >/dev/null 2>&1 || sudo groupadd -r musehub-git 2>/dev/null || true
+if command -v sudo >/dev/null; then
+  sudo usermod -aG musehub-git git 2>/dev/null || true
+  sudo usermod -aG musehub-git "$(whoami)" 2>/dev/null || true
+fi
+export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
+export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
 if ! test -x /usr/sbin/sshd && ! command -v sshd >/dev/null 2>&1; then
   echo "git_ssh=fail openssh-server (sshd) is required for product acceptance (install in CI setup)" >&2
   exit 1
@@ -57,7 +64,7 @@ echo "=== migrate up ==="
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 
 echo "=== product integration tests ==="
-for suite in product_slice security_db agent_cancel_e2e protected_branch_git auth_matrix plan_immutable pr_gates_e2e pr_security_e2e agent_budget pat_scope pipeline_delivery_e2e pipeline_security_e2e pipeline_runner_pat_e2e pipeline_cancel_e2e deployment_idempotency_e2e deployment_conflict_e2e startup_reconcile_e2e lease_reconcile_e2e worker_claim_e2e multi_instance_reconcile_e2e stale_worker_fencing_e2e s1_collaboration_http_e2e s1_pr_comment_sync_race_e2e ssh_keys_injection_e2e git_ssh_transport_e2e git_ssh_security_matrix_e2e git_ssh_packaging_secrets_e2e git_browse_limits_e2e; do
+for suite in product_slice security_db agent_cancel_e2e protected_branch_git auth_matrix plan_immutable pr_gates_e2e pr_security_e2e agent_budget pat_scope pipeline_delivery_e2e pipeline_security_e2e pipeline_runner_pat_e2e pipeline_cancel_e2e deployment_idempotency_e2e deployment_conflict_e2e startup_reconcile_e2e lease_reconcile_e2e worker_claim_e2e multi_instance_reconcile_e2e stale_worker_fencing_e2e s1_collaboration_http_e2e s1_pr_comment_sync_race_e2e ssh_keys_injection_e2e git_ssh_transport_e2e git_ssh_security_matrix_e2e git_ssh_packaging_secrets_e2e git_ssh_run_dir_permissions_e2e git_ssh_http_ssh_alternating_e2e git_browse_limits_e2e; do
   echo "--- musehub-app $suite ---"
   cargo test -p musehub-app --test "$suite" -- --test-threads=1
 done

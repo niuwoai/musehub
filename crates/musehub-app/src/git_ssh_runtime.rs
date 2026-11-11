@@ -14,6 +14,34 @@ pub fn default_git_ssh_run_dir() -> PathBuf {
     )
 }
 
+pub fn default_git_ssh_run_dir_mode() -> u32 {
+    std::env::var("MUSEHUB_GIT_SSH_RUN_DIR_MODE")
+        .ok()
+        .and_then(|m| u32::from_str_radix(m.trim_start_matches('0'), 8).ok())
+        .unwrap_or(0o750)
+}
+
+pub fn git_ssh_runtime_group() -> String {
+    std::env::var("MUSEHUB_GIT_SSH_RUNTIME_GROUP").unwrap_or_else(|_| "git".into())
+}
+
+pub fn git_storage_group() -> String {
+    std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "musehub-git".into())
+}
+
+/// Re-apply production ACL after writing keys/scripts into the run dir.
+#[cfg(unix)]
+pub fn finalize_git_ssh_run_dir(run_dir: &Path) -> Result<(), AppError> {
+    set_run_dir_root_git_group(run_dir)?;
+    validate_run_dir_git_traverse(run_dir)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn finalize_git_ssh_run_dir(_run_dir: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
 pub fn prepare_git_ssh_run_dir(run_dir: &Path) -> Result<(), AppError> {
     if run_dir.as_os_str().is_empty() {
         return Err(AppError::Validation("invalid git ssh run dir".into()));
@@ -24,12 +52,11 @@ pub fn prepare_git_ssh_run_dir(run_dir: &Path) -> Result<(), AppError> {
     fs::create_dir_all(run_dir).map_err(|e| AppError::Other(e.to_string()))?;
     #[cfg(unix)]
     {
-        let mode = std::env::var("MUSEHUB_GIT_SSH_RUN_DIR_MODE")
-            .ok()
-            .and_then(|m| u32::from_str_radix(m.trim_start_matches('0'), 8).ok())
-            .unwrap_or(0o700);
+        let mode = default_git_ssh_run_dir_mode();
         restrict_dir_mode(run_dir, mode)?;
+        set_run_dir_root_git_group(run_dir)?;
         validate_secure_ancestor_chain(run_dir)?;
+        validate_run_dir_git_traverse(run_dir)?;
     }
     Ok(())
 }
@@ -60,16 +87,19 @@ pub fn write_git_ssh_runtime_env(
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
             .map_err(|e| AppError::Other(e.to_string()))?;
-        let group = std::env::var("MUSEHUB_GIT_SSH_RUNTIME_GROUP").unwrap_or_else(|_| "git".into());
-        let p = path
-            .to_str()
-            .ok_or_else(|| AppError::Other("utf8".into()))?;
-        let _ = Command::new("chown")
-            .args([&format!("root:{group}"), p])
-            .status();
-        let _ = Command::new("sudo")
-            .args(["-n", "chown", &format!("root:{group}"), p])
-            .status();
+        chown_root_group(&path, &git_ssh_runtime_group())?;
+        let meta = fs::metadata(&path).map_err(|e| AppError::Other(e.to_string()))?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o007 != 0 {
+            return Err(AppError::Validation(
+                "runtime.env must not be world-accessible".into(),
+            ));
+        }
+        if mode & 0o040 == 0 {
+            return Err(AppError::Validation(
+                "runtime.env must be group-readable for git transport".into(),
+            ));
+        }
     }
     Ok(path)
 }
@@ -225,6 +255,169 @@ fn restrict_dir_mode(_path: &Path, _mode: u32) -> Result<(), AppError> {
 
 #[cfg(not(unix))]
 fn restrict_file_mode(_path: &Path, _mode: u32) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn chown_root_group(path: &Path, group: &str) -> Result<(), AppError> {
+    let p = path
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let spec = format!("root:{group}");
+    let direct = Command::new("chown")
+        .args([&spec, p])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let elevated = if direct {
+        true
+    } else {
+        Command::new("sudo")
+            .args(["-n", "chown", &spec, p])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !elevated {
+        return Err(AppError::Other(format!(
+            "chown {spec} failed for {}",
+            path.display()
+        )));
+    }
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(path).map_err(|e| AppError::Other(e.to_string()))?;
+    if meta.uid() != 0 {
+        return Err(AppError::Validation(format!(
+            "{} must be root-owned",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_run_dir_root_git_group(run_dir: &Path) -> Result<(), AppError> {
+    chown_root_group(run_dir, &git_ssh_runtime_group())?;
+    let mode = default_git_ssh_run_dir_mode();
+    restrict_dir_mode(run_dir, mode)?;
+    let p = run_dir
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let mode_s = format!("{mode:o}");
+    let chmod_ok = Command::new("chmod")
+        .args([&mode_s, p])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        || Command::new("sudo")
+            .args(["-n", "chmod", &mode_s, p])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    if !chmod_ok {
+        return Err(AppError::Other(format!("chmod {mode_s} on run dir failed")));
+    }
+    let meta = fs::metadata(run_dir).map_err(|e| AppError::Other(e.to_string()))?;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if meta.uid() != 0 {
+        return Err(AppError::Validation(
+            "git ssh run dir must be root-owned".into(),
+        ));
+    }
+    let perms = meta.permissions().mode() & 0o777;
+    if perms & 0o007 != 0 {
+        return Err(AppError::Validation(format!(
+            "git ssh run dir must not be world-accessible (mode={perms:o})"
+        )));
+    }
+    if perms & 0o002 != 0 || perms & 0o020 != 0 {
+        return Err(AppError::Validation(
+            "git ssh run dir must not be group- or world-writable".into(),
+        ));
+    }
+    if perms & 0o050 == 0 {
+        return Err(AppError::Validation(
+            "git ssh run dir must grant group traverse (e.g. 0750)".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn validate_git_ssh_runtime_readable(run_dir: &Path) -> Result<(), AppError> {
+    let runtime = git_ssh_runtime_env_path(run_dir);
+    if !runtime.exists() {
+        return Err(AppError::Validation(
+            "runtime.env required before validating git ssh readability".into(),
+        ));
+    }
+    let p = runtime
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let traverse = Command::new("sudo")
+        .args(["-u", "git", "test", "-x", run_dir.to_str().unwrap_or("")])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !traverse {
+        return Err(AppError::Validation(
+            "git user must traverse git ssh run dir".into(),
+        ));
+    }
+    let readable = Command::new("sudo")
+        .args(["-u", "git", "test", "-r", p])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !readable {
+        return Err(AppError::Validation(
+            "git user must read runtime.env under production run dir modes".into(),
+        ));
+    }
+    let writable = Command::new("sudo")
+        .args(["-u", "git", "test", "-w", p])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if writable {
+        return Err(AppError::Validation(
+            "git user must not write runtime.env".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn validate_git_ssh_runtime_readable(_run_dir: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_run_dir_git_traverse(run_dir: &Path) -> Result<(), AppError> {
+    let runtime = git_ssh_runtime_env_path(run_dir);
+    if runtime.exists() {
+        validate_git_ssh_runtime_readable(run_dir)?;
+    }
+    Ok(())
+}
+
+/// Idempotent shared-git volume layout (setgid root) for existing named volumes.
+#[cfg(unix)]
+pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
+    if !git_root.exists() {
+        return Ok(());
+    }
+    let group = git_storage_group();
+    let path = git_root
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let _ = Command::new("chgrp").args([&group, path]).status();
+    let _ = Command::new("chmod").args(["2775", path]).status();
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn ensure_shared_git_storage_root(_git_root: &Path) -> Result<(), AppError> {
     Ok(())
 }
 

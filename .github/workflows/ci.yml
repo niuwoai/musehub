@@ -31,6 +31,7 @@ jobs:
       DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
+      MUSEHUB_GIT_STORAGE_GROUP: musehub-git
       MUSEHUB_ARTIFACT_ROOT: /tmp/musehub-ci-artifacts
       MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
       MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
@@ -61,6 +62,9 @@ jobs:
           sudo passwd -d git 2>/dev/null || true
           sudo usermod -s /bin/false git 2>/dev/null || true
           sudo install -d -m 755 /run/sshd
+          getent group musehub-git >/dev/null || sudo groupadd -r musehub-git
+          sudo usermod -aG musehub-git git || true
+          sudo usermod -aG musehub-git "$(whoami)" || true
           cargo build -p musehub-git-ssh -q && sudo install -m 0755 target/debug/musehub-git-ssh /usr/local/bin/musehub-git-ssh
       - name: build agent adapter binaries
         run: |

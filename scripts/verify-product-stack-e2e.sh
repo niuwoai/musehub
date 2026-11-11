@@ -337,4 +337,12 @@ echo "upgrade_persistence=ok"
 CID=$(dc ps -q musehub-server)
 BINDS=$(docker inspect "$CID" --format '{{json .HostConfig.Binds}}')
 [[ "$BINDS" != *"docker.sock"* ]]
+
+echo "=== product compose git-ssh (default image permissions) ==="
+export MUSEHUB_STACK_DC
+# shellcheck disable=SC2068
+MUSEHUB_STACK_DC=$(printf '%q ' "${COMPOSE_BASE[@]}")
+chmod +x "$ROOT/scripts/verify-product-compose-git-ssh-e2e.sh"
+bash "$ROOT/scripts/verify-product-compose-git-ssh-e2e.sh"
+
 echo "product_stack_e2e=ok"

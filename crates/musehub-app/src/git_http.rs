@@ -48,44 +48,63 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
 /// Lets the dedicated `git` transport user mutate receive-pack state (group shared with API writer).
 #[cfg(unix)]
 fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
-    let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "git".into());
+    let group = crate::git_ssh_runtime::git_storage_group();
     let path = bare
         .to_str()
         .ok_or_else(|| AppError::Other("utf8 path".into()))?;
-    let chgrp = |sudo: bool| -> bool {
-        let mut cmd = if sudo {
-            let mut c = Command::new("sudo");
-            c.arg("-n");
-            c.arg("chgrp");
-            c
+    let chgrp_ok = Command::new("chgrp")
+        .args(["-R", &group, path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !chgrp_ok {
+        let allow_sudo = std::env::var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK")
+            .ok()
+            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
+        let sudo_ok = if allow_sudo {
+            Command::new("sudo")
+                .args(["-n", "chgrp", "-R", &group, path])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
         } else {
-            Command::new("chgrp")
+            false
         };
-        cmd.args(["-R", &group, path])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    };
-    if !chgrp(true) {
-        let _ = chgrp(false);
+        if !sudo_ok {
+            return Err(AppError::Other(format!(
+                "chgrp -R {group} failed for bare repo (join {group} or set MUSEHUB_GIT_STORAGE_SUDO_FALLBACK=1 for host CI only)"
+            )));
+        }
     }
-    let chmod = |extra: &[&str]| {
-        let mut cmd = Command::new("chmod");
-        cmd.args(extra).arg("-R").arg(path);
-        let _ = cmd.status();
-        let mut sudo = Command::new("sudo");
-        sudo.args(["-n", "chmod"]).args(extra).args(["-R", path]);
-        let _ = sudo.status();
-    };
-    chmod(&["g+rwX"]);
-    let _ = Command::new("find")
+    let chmod = Command::new("chmod")
+        .args(["-R", "g+rwX", path])
+        .status()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !chmod.success() {
+        return Err(AppError::Other("chmod g+rwX on bare repo failed".into()));
+    }
+    let setgid = Command::new("find")
         .args([path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";"])
-        .status();
-    let _ = Command::new("sudo")
+        .status()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !setgid.success() {
+        return Err(AppError::Other("chmod g+s on bare repo dirs failed".into()));
+    }
+    let shared = Command::new("git")
         .args([
-            "find", path, "-type", "d", "-exec", "chmod", "g+s", "{}", ";",
+            "--git-dir",
+            path,
+            "config",
+            "core.sharedRepository",
+            "group",
         ])
-        .status();
+        .status()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !shared.success() {
+        return Err(AppError::Other(
+            "git config core.sharedRepository=group failed".into(),
+        ));
+    }
     Ok(())
 }
 

@@ -321,24 +321,39 @@ async fn git_ssh_forbidden_shell_path_traversal_and_subshell() {
     }
     let pty = raw_ssh(&f.priv_key, f.sshd.port, "", true);
     assert!(!pty.status.success());
-    let fwd = Command::new("ssh")
+    let fwd_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let fwd_only = Command::new("ssh")
         .args([
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ExitOnForwardFailure=yes",
             "-i",
             f.priv_key.to_str().unwrap(),
             "-p",
             &f.sshd.port.to_string(),
+            "-N",
             "-L",
-            "9999:127.0.0.1:22",
+            &format!("{fwd_port}:127.0.0.1:22"),
             "git@127.0.0.1",
-            &format!("git-upload-pack 'demo/{}.git'", f.repo),
         ])
         .output()
         .unwrap();
-    assert!(!fwd.status.success());
+    assert!(
+        !fwd_only.status.success(),
+        "tcp forwarding must fail: {}",
+        String::from_utf8_lossy(&fwd_only.stderr)
+    );
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", fwd_port)).is_ok(),
+        "local forward port must remain free"
+    );
 }
 
 #[tokio::test]
