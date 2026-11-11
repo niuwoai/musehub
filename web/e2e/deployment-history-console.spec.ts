@@ -288,10 +288,10 @@ test.describe('deployment history console', () => {
     await page.getByTestId('refresh-deployments').click({ noWaitAfter: true })
     await listReq
 
-    await page.getByTestId('logout').click()
     const staleListDone = page.waitForResponse(
       (r) => r.url().includes('/deployments?') && r.request().method() === 'GET',
     )
+    await page.getByTestId('logout').click()
     release()
     await staleListDone
 
