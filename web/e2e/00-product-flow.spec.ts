@@ -6,9 +6,7 @@ import type { Page } from '@playwright/test'
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 
-function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
-}
+import { repoNavButtons } from './helpers/repo'
 
 test.describe('product slice browser flow', () => {
   test.skip(
@@ -17,7 +15,7 @@ test.describe('product slice browser flow', () => {
   )
 
   test('login, repo, issue, plan, agent poll', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByLabel(/password|密码/i).fill(password!)
     await page.getByRole('button', { name: /login|登录/i }).click()
     await expectLoggedInAs(page, 'admin')

@@ -3,7 +3,7 @@ import { expect, type Locator, type Page, type Response } from '@playwright/test
 const apiBase = () => process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 
 export function repoNavButtons(page: Page) {
-  return page.locator('section > ul').first().getByRole('button')
+  return page.getByTestId('repo-list').getByRole('button')
 }
 
 /** @internal exported for unit tests */
@@ -111,7 +111,7 @@ export async function openRepoBySlug(page: Page, slug: string): Promise<void> {
   await repoNavButtonForSlug(page, slug).click()
   const issuesResp = await issuesLoaded
   await expectResponseOk(issuesResp, `load issues for repo ${slug}`)
-  await expect(page.getByRole('heading', { level: 2, name: slug })).toBeVisible({
+  await expect(page.getByTestId('nav-repo-issues')).toBeVisible({
     timeout: 15_000,
   })
 }

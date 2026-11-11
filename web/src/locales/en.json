@@ -56,6 +56,58 @@
     "viewTrace": "View deployment trace",
     "mergeShortcut": "Approve, check, merge (demo; needs CI reporter in real gates)",
     "noMergedPr": "No merged PR with main tip yet — merge via review + checks first.",
-    "traceGaps": "Trace gaps (not fabricated)"
+    "traceGaps": "Trace gaps (not fabricated)",
+    "logout": "Log out",
+    "agentStarting": "Starting agent run…"
+  },
+  "nav": {
+    "orgLabel": "Organization: {{org}}",
+    "repos": "Repositories",
+    "orgSettings": "Organization settings",
+    "orgMembers": "Organization members",
+    "audit": "Audit",
+    "runner": "Runner status",
+    "accountSecurity": "Account security",
+    "accountTokens": "Personal access tokens",
+    "repoIssues": "Issues",
+    "repoPulls": "Pull requests",
+    "repoDelivery": "Delivery",
+    "repoSettings": "Repository settings"
+  },
+  "accountSecurity": {
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "changePassword": "Change password"
+  },
+  "audit": {
+    "empty": "No audit events yet."
+  },
+  "orgSettings": {
+    "displayName": "Org display name",
+    "save": "Save org settings"
+  },
+  "orgMembers": {
+    "adminRequired": "Member admin requires org owner/admin.",
+    "disable": "Disable",
+    "addMember": "Add member"
+  },
+  "pat": {
+    "mintedOnce": "Copy now (shown once):",
+    "mintedHint": "Minted tokens are shown once at creation only.",
+    "revoke": "Revoke",
+    "scopeMode": "Scope mode",
+    "create": "Create PAT"
+  },
+  "runner": {
+    "loadFailed": "Unable to load runner capabilities.",
+    "noTokens": "No runner tokens (masked list only)."
+  },
+  "repo": {
+    "selectFirst": "Select a repository from the list.",
+    "noPulls": "No pull requests yet."
+  },
+  "repoSettings": {
+    "grantsTitle": "Repo grants",
+    "grantReader": "Grant reader"
   }
 }
