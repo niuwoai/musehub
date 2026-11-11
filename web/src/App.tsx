@@ -46,11 +46,12 @@ import {
   listRepos,
   login,
   me,
+  cancelPipelineRun,
+  getPipeline,
   listPipelineJobs,
   mergePullRequest,
   PipelineJob,
   PipelineRun,
-  pollPipeline,
   retryPipelineJob,
   publishRelease,
   PullRequest,
@@ -87,7 +88,9 @@ export default function App() {
   const [pipelineRun, setPipelineRun] = useState<PipelineRun | null>(null)
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([])
   const [pipelineRetryBusy, setPipelineRetryBusy] = useState(false)
+  const [pipelineCancelBusy, setPipelineCancelBusy] = useState(false)
   const pipelineRetryFlightRef = useRef<{ jobId: string; attemptId: string } | null>(null)
+  const pipelinePollEpochRef = useRef(0)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [activeDeployment, setActiveDeployment] = useState<Deployment | null>(null)
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null)
@@ -179,6 +182,14 @@ export default function App() {
     )
   }
 
+  function bumpPipelinePollEpoch() {
+    pipelinePollEpochRef.current += 1
+  }
+
+  function pipelinePollEpochActive(epoch: number) {
+    return pipelinePollEpochRef.current === epoch
+  }
+
   function resetDeploymentUiState() {
     setActiveDeployment(null)
     setDeploymentId(null)
@@ -191,7 +202,9 @@ export default function App() {
     setPipelineRun(null)
     setPipelineJobs([])
     setPipelineRetryBusy(false)
+    setPipelineCancelBusy(false)
     pipelineRetryFlightRef.current = null
+    bumpPipelinePollEpoch()
     setDeploymentSummaries([])
     setDeploymentListMode('pending')
     deploymentListModeRef.current = 'pending'
@@ -780,19 +793,40 @@ export default function App() {
     setPipelineJobs(jobs)
   }
 
+  async function pollPipelineRun(runId: string, pollEpoch: number, op: PipelineOpContext) {
+    if (!selectedRepo) return null
+    const repo = selectedRepo
+    for (let i = 0; i < 240; i++) {
+      if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
+        return null
+      }
+      const run = await getPipeline(DEFAULT_ORG, repo, runId)
+      if (!pipelinePollEpochActive(pollEpoch) || !pipelineOpActive(op)) {
+        return null
+      }
+      setPipelineRun(run)
+      if (run.state === 'succeeded' || run.state === 'failed' || run.state === 'canceled') {
+        return run
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    throw new Error('pipeline timeout')
+  }
+
   async function onRunDeliveryPipeline() {
     if (!selectedRepo || !mergedPr?.head_oid) return
     const op = captureDeploymentOp()
     setError(null)
     setPipelineJobs([])
+    bumpPipelinePollEpoch()
+    const pollEpoch = pipelinePollEpochRef.current
     try {
       const run = await startPipeline(DEFAULT_ORG, selectedRepo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
       setPipelineRun(run)
       const pollOp = capturePipelineOp(run.id)
-      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, run.id)
-      if (!pipelineOpActive(pollOp)) return
-      setPipelineRun(done)
+      const done = await pollPipelineRun(run.id, pollEpoch, pollOp)
+      if (!done || !pipelineOpActive(pollOp)) return
       if (done.state === 'succeeded') {
         return
       }
@@ -803,10 +837,43 @@ export default function App() {
         }
         return
       }
+      if (done.state === 'canceled') {
+        await loadPipelineJobsForRun(done.id)
+        return
+      }
       throw new Error(done.error_code ?? done.state)
     } catch (err) {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'pipeline failed')
+      }
+    }
+  }
+
+  async function onCancelPipelineRun() {
+    if (!selectedRepo || !pipelineRun || pipelineCancelBusy) return
+    if (!['queued', 'running'].includes(pipelineRun.state)) return
+    const op = capturePipelineOp(pipelineRun.id)
+    setPipelineCancelBusy(true)
+    setError(null)
+    bumpPipelinePollEpoch()
+    const pollEpoch = pipelinePollEpochRef.current
+    const runId = pipelineRun.id
+    try {
+      const requested = await cancelPipelineRun(DEFAULT_ORG, selectedRepo, runId)
+      if (!pipelineOpActive(op)) return
+      setPipelineRun(requested)
+      const done = await pollPipelineRun(runId, pollEpoch, op)
+      if (!done || !pipelineOpActive(op)) return
+      if (done.state === 'canceled' || done.state === 'failed') {
+        await loadPipelineJobsForRun(done.id)
+      }
+    } catch (err) {
+      if (pipelineOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'pipeline cancel failed')
+      }
+    } finally {
+      if (pipelineOpActive(op)) {
+        setPipelineCancelBusy(false)
       }
     }
   }
@@ -823,8 +890,10 @@ export default function App() {
     try {
       await retryPipelineJob(DEFAULT_ORG, selectedRepo, jobId, attemptId)
       if (!pipelineOpActive(op)) return
-      const done = await pollPipeline(DEFAULT_ORG, selectedRepo, pipelineRun.id)
-      if (!pipelineOpActive(op)) return
+      bumpPipelinePollEpoch()
+      const pollEpoch = pipelinePollEpochRef.current
+      const done = await pollPipelineRun(pipelineRun.id, pollEpoch, op)
+      if (!done || !pipelineOpActive(op)) return
       setPipelineRun(done)
       setPipelineJobs([])
       if (done.state === 'failed') {
@@ -1605,6 +1674,38 @@ export default function App() {
                       <p data-testid="pipeline-state">
                         pipeline {pipelineRun.id.slice(0, 8)}… {pipelineRun.state}
                       </p>
+                    ) : null}
+                    {pipelineRun?.state === 'cancel_requested' ? (
+                      <p data-testid="pipeline-cancel-pending" style={{ color: '#9a6700' }}>
+                        {t('app.pipelineCancelPending')}
+                      </p>
+                    ) : null}
+                    {pipelineRun &&
+                    ['queued', 'running', 'cancel_requested', 'canceled'].includes(
+                      pipelineRun.state,
+                    ) ? (
+                      <p data-testid="pipeline-cancel-honesty" style={{ fontSize: '0.9rem' }}>
+                        {t('app.pipelineCancelHonesty')}
+                      </p>
+                    ) : null}
+                    {pipelineRun && ['queued', 'running'].includes(pipelineRun.state) ? (
+                      <button
+                        type="button"
+                        data-testid="pipeline-cancel"
+                        disabled={pipelineCancelBusy || pipelineRetryBusy}
+                        onClick={() => void onCancelPipelineRun()}
+                      >
+                        {t('app.pipelineCancelRun')}
+                      </button>
+                    ) : null}
+                    {pipelineRun?.state === 'canceled' && pipelineJobs.length > 0 ? (
+                      <ul data-testid="pipeline-cancel-job-list">
+                        {pipelineJobs.map((job) => (
+                          <li key={job.id}>
+                            {job.job_key} ({job.state})
+                          </li>
+                        ))}
+                      </ul>
                     ) : null}
                     {pipelineRun?.state === 'failed' ? (
                       <div data-testid="pipeline-failure-panel">
