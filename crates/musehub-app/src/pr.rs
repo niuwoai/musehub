@@ -543,22 +543,22 @@ pub async fn sync_pull_request(
     .bind(number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, source_branch, target_branch, pr_state, _old_head, _row_version)) = pr else {
+    let Some((pr_id, source_branch, target_branch, _, _old_head, _row_version)) = pr else {
         return Err(AppError::NotFound);
     };
-    if pr_state != "open" {
-        return Err(AppError::Validation("pull request is not open".to_string()));
-    }
     let mut tx = state.pool.begin().await?;
-    let locked = sqlx::query_as::<_, (i64,)>(
-        "SELECT row_version FROM pull_requests WHERE id = $1 FOR UPDATE",
+    let locked = sqlx::query_as::<_, (i64, String)>(
+        "SELECT row_version, state FROM pull_requests WHERE id = $1 FOR UPDATE",
     )
     .bind(pr_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((locked_row_version,)) = locked else {
+    let Some((locked_row_version, locked_state)) = locked else {
         return Err(AppError::NotFound);
     };
+    if locked_state != "open" {
+        return Err(AppError::Validation("pull request is not open".to_string()));
+    }
     if locked_row_version != body.expected_row_version {
         return Err(AppError::Validation(
             "stale pull request revision".to_string(),

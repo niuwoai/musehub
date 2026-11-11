@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
@@ -17,10 +17,10 @@ function issueMatchesFilters(
 
 export function RepoIssuesPage() {
   const { org = DEFAULT_ORG } = useParams<{ org: string }>()
-  const [searchParams] = useSearchParams()
+  const envLimit = import.meta.env.VITE_E2E_ISSUE_PAGE_LIMIT
   const pageLimit = Math.min(
     100,
-    Math.max(1, Number(searchParams.get('e2e_issue_limit')) || 25),
+    Math.max(1, envLimit ? Number(envLimit) : 25),
   )
   const {
     t,
@@ -47,10 +47,12 @@ export function RepoIssuesPage() {
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
   const fetchPage = useCallback(
-    async (cursor?: string, append = false) => {
+    async (cursor?: string, append = false, opts?: { keepNotice?: boolean }) => {
       if (!selectedRepo) return
       setListError(null)
-      setListNotice(null)
+      if (!opts?.keepNotice) {
+        setListNotice(null)
+      }
       const page = await listIssuesPage(org, selectedRepo, {
         state: filterState || undefined,
         label: filterLabel || undefined,
@@ -58,9 +60,18 @@ export function RepoIssuesPage() {
         cursor,
         limit: pageLimit,
       })
-      setItems((prev) => (append ? [...prev, ...page.items] : page.items))
+      setItems((prev) => {
+        const merged = append ? [...prev, ...page.items] : page.items
+        const seen = new Set<string>()
+        return merged.filter((i) => {
+          if (seen.has(i.id)) return false
+          seen.add(i.id)
+          return true
+        })
+      })
       setHasMore(page.has_more)
       setNextCursor(page.next_cursor)
+      return page
     },
     [org, selectedRepo, filterState, filterLabel, filterAssignee, pageLimit],
   )
@@ -81,11 +92,17 @@ export function RepoIssuesPage() {
         merged.sort((a, b) => b.number - a.number)
         return merged
       })
+      await loadIssues(selectedRepo)
+      void fetchPage(undefined, false).catch((e) =>
+        setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
+      )
     } else {
       setListNotice(t('issues.createdHiddenByFilters', { number: created.number }))
+      await loadIssues(selectedRepo)
+      void fetchPage(undefined, false, { keepNotice: true }).catch((e) =>
+        setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
+      )
     }
-    await loadIssues(selectedRepo)
-    void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
   }
 
   async function refreshAll() {

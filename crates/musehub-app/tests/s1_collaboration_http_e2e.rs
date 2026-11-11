@@ -466,6 +466,34 @@ async fn s1_collaboration_rest_slice() {
         .unwrap();
     assert_eq!(good_anchor.status(), StatusCode::CREATED);
 
+    let stale_revision = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/pull-requests/{pr_number}/comments"
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "body": "stale revision",
+                        "anchor": {
+                            "path": "feature.txt",
+                            "line": 1,
+                            "side": "RIGHT",
+                            "pr_revision_id": row_version.saturating_sub(1)
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_revision.status(), StatusCode::BAD_REQUEST);
+
     let stale_sync = app
         .clone()
         .oneshot(

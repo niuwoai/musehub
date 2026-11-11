@@ -84,14 +84,18 @@ pub async fn post_issue_comment(
     let (org_id, repo_id) =
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
     let issue_id = issue_id_for_number(&state.pool, repo_id, number).await?;
+    let author_handle: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
+        .bind(principal_id)
+        .fetch_one(&state.pool)
+        .await?;
     insert_comment(
-        &state.pool,
         &state.pool,
         org_id,
         repo_id,
         "issue",
         issue_id,
         principal_id,
+        &author_handle.0,
         &body.body,
         body.anchor,
     )
@@ -123,6 +127,10 @@ pub async fn post_pr_comment(
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
     let (_, _, storage_key) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let author_handle: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
+        .bind(principal_id)
+        .fetch_one(&state.pool)
+        .await?;
     let bare = crate::git_http::bare_repo_path(&state.git_root, &storage_key);
     let mut tx = state.pool.begin().await?;
     let locked = sqlx::query_as::<_, (Uuid, i64, Option<String>, Option<String>)>(
@@ -150,12 +158,12 @@ pub async fn post_pr_comment(
     };
     let view = insert_comment(
         &mut *tx,
-        &state.pool,
         org_id,
         repo_id,
         "pr",
         pr_id,
         principal_id,
+        &author_handle.0,
         &body.body,
         stored_anchor,
     )
@@ -239,12 +247,12 @@ async fn list_comments(
 #[allow(clippy::too_many_arguments)]
 async fn insert_comment<'e, E>(
     executor: E,
-    lookup_pool: &sqlx::PgPool,
     org_id: Uuid,
     repo_id: Uuid,
     target_kind: &str,
     target_id: Uuid,
     author_id: Uuid,
+    author_handle: &str,
     body: &str,
     anchor: Option<Value>,
 ) -> Result<(StatusCode, Json<DiscussionCommentView>), AppError>
@@ -266,16 +274,12 @@ where
     .bind(anchor.clone())
     .execute(executor)
     .await?;
-    let author: (String,) = sqlx::query_as("SELECT handle FROM principals WHERE id = $1")
-        .bind(author_id)
-        .fetch_one(lookup_pool)
-        .await?;
     Ok((
         StatusCode::CREATED,
         Json(DiscussionCommentView {
             id,
             body: body.trim().to_string(),
-            author_handle: author.0,
+            author_handle: author_handle.to_string(),
             anchor,
             outdated: false,
             resolved: false,
