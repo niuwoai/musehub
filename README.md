@@ -1,6 +1,6 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc5`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc4`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
@@ -108,7 +108,7 @@ musehub/
 - UI：<http://127.0.0.1:5173/login>（API <http://127.0.0.1:8080/readyz>）。  
 - macOS 生产安装脚本中的 `sed -i` 已改为 `scripts/lib/sed-portable.sh`（GNU/BSD 兼容）。
 
-CI 冒烟：`./scripts/verify-dev-local-stack.sh`（需 `DATABASE_URL`）。
+CI 冒烟：`./scripts/verify-dev-local-stack-negative.sh` + `./scripts/verify-dev-local-stack.sh`（需 `DATABASE_URL`、`pg_isready`、`jq`、`curl`、`openssl`；Linux CI 已验，macOS 未在 Agent 环境实测）。
 
 ## 本地验证（手工 / 高级）
 

@@ -1,32 +1,76 @@
 #!/usr/bin/env bash
-# Smoke: sed portable + dev stack init/start/status/stop/restart (Linux CI / local Postgres).
+# Smoke: dev stack init/start/stop/restart + permissions (Linux CI only; not macOS proof).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATABASE_URL="${DATABASE_URL:-${MUSEHUB_TEST_DATABASE_URL:-}}"
 : "${DATABASE_URL:?DATABASE_URL or MUSEHUB_TEST_DATABASE_URL required}"
 
-chmod +x "$ROOT/scripts/dev-local-stack.sh"
-chmod +x "$ROOT/scripts/verify-sed-portable.sh"
-
+chmod +x "$ROOT/scripts/dev-local-stack.sh" "$ROOT/scripts/verify-sed-portable.sh"
 "$ROOT/scripts/verify-sed-portable.sh"
 
 STATE="/tmp/musehub-dev-stack-verify-$$"
 export MUSEHUB_DEV_STATE_DIR="$STATE"
-trap 'test -x "$ROOT/scripts/dev-local-stack.sh" && "$ROOT/scripts/dev-local-stack.sh" stop 2>/dev/null || true; rm -rf "$STATE"' EXIT
+cleanup_verify() {
+  "$ROOT/scripts/dev-local-stack.sh" stop 2>/dev/null || true
+  rm -rf "$STATE"
+}
+trap cleanup_verify EXIT
+
+port_free() {
+  local port=$1
+  if command -v ss >/dev/null 2>&1; then
+    ! ss -ltn 2>/dev/null | grep -q ":${port} "
+    return
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  return 1
+}
+
+assert_mode_600() {
+  local f=$1
+  local mode
+  mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")
+  [[ "$mode" == "600" ]]
+}
+
+assert_stack_down() {
+  port_free 8080
+  port_free 5173
+  ! [[ -f "$STATE/pids/server.pid" ]] || ! kill -0 "$(tr -d '[:space:]' <"$STATE/pids/server.pid")" 2>/dev/null
+  ! [[ -f "$STATE/pids/vite.pid" ]] || ! kill -0 "$(tr -d '[:space:]' <"$STATE/pids/vite.pid")" 2>/dev/null
+}
 
 export DATABASE_URL
 
 "$ROOT/scripts/dev-local-stack.sh" init
+assert_mode_600 "$STATE/env"
+assert_mode_600 "$STATE/secrets/bootstrap-admin.password"
+
+MARKER="do_not_overwrite_$(date +%s)"
+printf '\n# %s\n' "$MARKER" >>"$STATE/env"
+BEFORE=$(wc -l <"$STATE/env")
+"$ROOT/scripts/dev-local-stack.sh" init
+AFTER=$(wc -l <"$STATE/env")
+[[ "$BEFORE" -eq "$AFTER" ]]
+grep -q "$MARKER" "$STATE/env"
+
 "$ROOT/scripts/dev-local-stack.sh" start
 curl -sf http://127.0.0.1:8080/readyz | jq -e '.ready == true' >/dev/null
-"$ROOT/scripts/dev-local-stack.sh" status >/dev/null
+curl -sf http://127.0.0.1:5173/login | grep -q 'id="root"'
+
 "$ROOT/scripts/dev-local-stack.sh" stop
-sleep 2
-test ! -f "$STATE/pids/server.pid" || test ! kill -0 "$(cat "$STATE/pids/server.pid")" 2>/dev/null
+sleep 1
+assert_stack_down
 
 "$ROOT/scripts/dev-local-stack.sh" start
-curl -sf http://127.0.0.1:8080/readyz | jq -e '.checks.product_api == "ok"' >/dev/null
-curl -sf http://127.0.0.1:5173/login | grep -q '<div id="root">'
+curl -sf http://127.0.0.1:8080/readyz | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null
+curl -sf http://127.0.0.1:5173/login | grep -q 'id="root"'
 "$ROOT/scripts/dev-local-stack.sh" stop
+sleep 1
+assert_stack_down
 
-echo "verify_dev_local_stack=ok state_dir=$STATE"
+echo "verify_dev_local_stack=ok platform=$(uname -s) state_dir=$STATE"
+echo "verify_note=macOS_not_verified_on_this_runner"

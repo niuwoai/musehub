@@ -2,24 +2,10 @@
 
 ## [Unreleased]
 
-## [0.1.0-rc5]
-
 ### Added
 
-- `./scripts/dev-local-stack.sh`：`init` / `start` / `status` / `stop` 本地 loopback 开发栈（migrate + readyz 门禁 + Vite）；`verify-dev-local-stack.sh` CI 冒烟。
-- `scripts/lib/sed-portable.sh`：macOS/Linux 兼容的 `sed_inplace`；生产 `install-production-compose` / runbook 验证已复用。
-
-### Fixed
-
-- Migration `0005_fk_indexes` for BOOT-02 schema check; Git HTTP route fix (`/git/{org}/{repo}.git/...`).
-- Bootstrap 强密码策略；Agent 分支 `agent/*` 校验；Git 路径穿越拒绝。
-- `verify-product-acceptance.sh`；CI 强 bootstrap 密码与 reference 二进制预构建。
-
-### Added
-
-- 产品垂直切片：`musehub-app`（登录/会话、bare 仓库、Git smart HTTP、Issue、**reference** Agent 运行）。
-- `musehub-agent-adapter` + ADR-008；`docs/PROGRESS.md`；migrations `0003`/`0004`。
-- GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。
+- `./scripts/dev-local-stack.sh`：本地 loopback `init` / `start` / `status` / `stop`（`pg_isready`、readyz 与 `/login` 门禁、失败时仅回收本次子进程）；`verify-dev-local-stack.sh` 与 `verify-dev-local-stack-negative.sh`（伪造 pidfile 不误杀）。macOS 本脚本未在 Agent 环境实测。
+- `scripts/lib/sed-portable.sh`：macOS/Linux `sed_inplace`；生产安装与 runbook 验证复用。
 
 ## [0.1.0-rc4]
 

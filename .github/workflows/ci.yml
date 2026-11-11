@@ -66,7 +66,10 @@ jobs:
         run: ./scripts/cargo-test-portable.sh
       - name: dev local stack smoke
         run: |
-          chmod +x ./scripts/dev-local-stack.sh ./scripts/verify-dev-local-stack.sh ./scripts/verify-sed-portable.sh
+          chmod +x ./scripts/dev-local-stack.sh ./scripts/lib/dev-local-pid.sh \
+            ./scripts/verify-dev-local-stack.sh ./scripts/verify-dev-local-stack-negative.sh \
+            ./scripts/verify-sed-portable.sh
+          ./scripts/verify-dev-local-stack-negative.sh
           ./scripts/verify-dev-local-stack.sh
       - name: product acceptance
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
