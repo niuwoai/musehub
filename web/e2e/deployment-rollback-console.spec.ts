@@ -17,9 +17,27 @@ function repoNavButtons(page: Page) {
 }
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
-  const loginForm = page.locator('form').filter({ has: page.getByTestId('login-handle-input') })
-  await loginForm.getByLabel(/password|密码/i).fill(pass)
+  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('login-handle-input').fill(handle)
+  await page.getByLabel(/password|密码/i).fill(pass)
+}
+
+async function switchDeploymentListToAll(page: Page) {
+  await expect(page.getByTestId('refresh-deployments')).toBeEnabled({ timeout: 30_000 })
+  const allList = page.waitForResponse(
+    (r) => {
+      const url = r.url()
+      return (
+        r.request().method() === 'GET' &&
+        url.includes('/deployments') &&
+        !url.includes('state=awaiting_approval')
+      )
+    },
+    { timeout: 30_000 },
+  )
+  await expect(page.getByTestId('deployment-view-all')).toBeEnabled()
+  await page.getByTestId('deployment-view-all').click()
+  await allList
 }
 
 function delayedGate() {
@@ -163,7 +181,10 @@ test.describe('deployment rollback console', () => {
     const { slug } = await createRepoViaUi(page)
     await openRepoDelivery(page, slug)
 
-    await page.getByTestId('deployment-view-all').click()
+    await switchDeploymentListToAll(page)
+    await expect(page.getByTestId(`deployment-pick-${FAILED_DEPLOY_ID}`)).toBeVisible({
+      timeout: 15_000,
+    })
     const detailGet = page.waitForResponse(
       (r) => r.url().includes(FAILED_DEPLOY_ID) && r.request().method() === 'GET',
     )
@@ -265,7 +286,7 @@ test.describe('deployment rollback console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await openRepoDelivery(page, slug)
-    await page.getByTestId('deployment-view-all').click()
+    await switchDeploymentListToAll(page)
     const rollbackBtn = page.getByTestId(`deployment-rollback-${GOOD_DEPLOY_ID}`)
     await expect(rollbackBtn).toBeVisible({ timeout: 15_000 })
 
