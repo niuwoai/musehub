@@ -187,8 +187,10 @@ export MUSEHUB_E2E_API=http://127.0.0.1:8080
 export MUSEHUB_E2E_BASE_URL=http://127.0.0.1:5173
 yarn --cwd web playwright install chromium
 
+export VITE_E2E_ISSUE_PAGE_LIMIT="${VITE_E2E_ISSUE_PAGE_LIMIT:-2}"
 (
-  yarn --cwd web dev --host 127.0.0.1 --port 5173 >>"$SERVER_LOG" 2>&1
+  env VITE_E2E_ISSUE_PAGE_LIMIT="$VITE_E2E_ISSUE_PAGE_LIMIT" \
+    yarn --cwd web dev --host 127.0.0.1 --port 5173 >>"$SERVER_LOG" 2>&1
 ) &
 echo $! >"$VITE_PIDFILE"
 for _ in $(seq 1 60); do

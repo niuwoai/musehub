@@ -30,25 +30,20 @@ test.describe('S1 collaboration console', () => {
     await expect(page.getByTestId('issue-link-1')).toBeVisible({ timeout: 15_000 })
     await page.getByTestId('create-issue').click()
     await expect(page.getByTestId('issue-link-2')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('create-issue').click()
+    await expect(page.getByTestId('issue-link-3')).toBeVisible({ timeout: 15_000 })
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await expect(page.getByTestId('issue-row-3')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('issue-row-2')).toBeVisible()
+    await expect(page.getByTestId('issue-row-1')).toHaveCount(0)
+    await expect(page.getByTestId('issue-load-more')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('issue-load-more').click()
+    await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
+    const rowCount = await page.locator('[data-testid^="issue-row-"]').count()
+    expect(rowCount).toBe(3)
     await page.getByTestId('issue-link-2').click()
     await expect(page.getByTestId('issue-detail-title')).toBeVisible()
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await apiJson(page, 'POST', `/api/v1/orgs/demo/repos/${slug}/issues`, { title: 'third' })
-    const p1 = await apiJson<{ items: { id: string; number: number }[]; next_cursor: string; has_more: boolean }>(
-      page,
-      'GET',
-      `/api/v1/orgs/demo/repos/${slug}/issues?limit=2`,
-    )
-    expect(p1.has_more).toBe(true)
-    expect(p1.next_cursor).toBeTruthy()
-    const p2 = await apiJson<{ items: { id: string }[]; has_more: boolean }>(
-      page,
-      'GET',
-      `/api/v1/orgs/demo/repos/${slug}/issues?limit=2&cursor=${encodeURIComponent(p1.next_cursor)}`,
-    )
-    const ids = [...p1.items, ...p2.items].map((i) => i.id)
-    expect(new Set(ids).size).toBe(ids.length)
-    expect(ids.length).toBeGreaterThanOrEqual(3)
     await apiJson(page, 'PATCH', `/api/v1/orgs/demo/repos/${slug}/issues/1`, { labels: ['bug'] })
     await page.getByTestId('issue-filter-label').fill('bug')
     await page.getByTestId('issue-apply-filters').click()
@@ -76,17 +71,17 @@ test.describe('S1 collaboration console', () => {
   test('code: PAT git seed, oid, tree, blob', async ({ page }) => {
     await loginAsAdmin(page)
     await waitForDemoRepoNavHydrated(page)
-    const pat = await mintGitPat(page, `s1-git-${Date.now()}`)
+    const { slug } = await createRepoViaUi(page)
+    const repos = await apiJson<{ id: string; slug: string; clone_url: string }[]>(
+      page,
+      'GET',
+      '/api/v1/orgs/demo/repos',
+    )
+    const repo = repos.find((r) => r.slug === slug)
+    expect(repo?.clone_url).toBeTruthy()
+    expect(repo!.clone_url).not.toMatch(/mhp_/)
+    const pat = await mintGitPat(page, `s1-git-${Date.now()}`, repo!.id)
     try {
-      const { slug } = await createRepoViaUi(page)
-      const repos = await apiJson<{ slug: string; clone_url: string }[]>(
-        page,
-        'GET',
-        '/api/v1/orgs/demo/repos',
-      )
-      const repo = repos.find((r) => r.slug === slug)
-      expect(repo?.clone_url).toBeTruthy()
-      expect(repo!.clone_url).not.toMatch(/mhp_/)
       gitPushBranch(repo!.clone_url, pat.token, 'feature/e2e', {
         'README.md': '# e2e\nline2\n',
       })
@@ -110,15 +105,15 @@ test.describe('S1 collaboration console', () => {
   test('pull request: deep link, line comment, sync outdated', async ({ page }) => {
     await loginAsAdmin(page)
     await waitForDemoRepoNavHydrated(page)
-    const pat = await mintGitPat(page, `s1-pr-${Date.now()}`)
+    const { slug } = await createRepoViaUi(page)
+    const repos = await apiJson<{ id: string; slug: string; clone_url: string }[]>(
+      page,
+      'GET',
+      '/api/v1/orgs/demo/repos',
+    )
+    const repo = repos.find((r) => r.slug === slug)!
+    const pat = await mintGitPat(page, `s1-pr-${Date.now()}`, repo.id)
     try {
-      const { slug } = await createRepoViaUi(page)
-      const repos = await apiJson<{ slug: string; clone_url: string }[]>(
-        page,
-        'GET',
-        '/api/v1/orgs/demo/repos',
-      )
-      const repo = repos.find((r) => r.slug === slug)!
       gitPushBranch(repo.clone_url, pat.token, 'feature/pr-e2e', {
         'pr.txt': 'hello\nworld\n',
       })

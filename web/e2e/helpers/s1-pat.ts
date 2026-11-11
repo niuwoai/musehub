@@ -3,8 +3,12 @@ import { apiBase, cookieHeader } from './s1-api'
 
 export type MintedPat = { id: string; token: string }
 
-/** Mint a scoped PAT for Git smart HTTP (repo read/write). Caller must revoke when done. */
-export async function mintGitPat(page: Page, name: string): Promise<MintedPat> {
+/** Mint a repo-scoped PAT for Git smart HTTP. Caller must revoke when done. */
+export async function mintGitPat(
+  page: Page,
+  name: string,
+  repoId: string,
+): Promise<MintedPat> {
   const headers = {
     ...(await cookieHeader(page)),
     'Content-Type': 'application/json',
@@ -15,7 +19,8 @@ export async function mintGitPat(page: Page, name: string): Promise<MintedPat> {
       name,
       org: 'demo',
       scopes: ['repo:read', 'repo:write'],
-      scope_mode: 'all_accessible',
+      scope_mode: 'selected',
+      repo_ids: [repoId],
     },
   })
   if (!r.ok()) {
