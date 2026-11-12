@@ -15,6 +15,17 @@ command -v git >/dev/null || { echo "git required" >&2; exit 1; }
 : "${COMPOSE_PROJECT_NAME:?}"
 : "${BASE:?}"
 : "${BOOTSTRAP_PW:?}"
+
+wait_gateway_ready() {
+  for _ in $(seq 1 90); do
+    if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "compose git-ssh: gateway not ready ($BASE/readyz)" >&2
+  return 1
+}
 : "${MUSEHUB_GATEWAY_HTTP_PORT:?}"
 : "${MUSEHUB_GIT_SSH_PORT:=2222}"
 
@@ -111,6 +122,8 @@ if dc exec -T -u git musehub-git-ssh sh -c "echo x >> '${SSH_RUN_DIR}/runtime.en
   echo "compose git-ssh: git user must not append runtime.env" >&2
   exit 1
 fi
+
+wait_gateway_ready
 
 COOKIE_JAR=$(mktemp)
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
