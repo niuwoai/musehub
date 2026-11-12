@@ -35,7 +35,7 @@ RUN yarn build
 
 FROM debian:${DEBIAN_VERSION} AS server-runtime
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git tini wget \
+  && apt-get install -y --no-install-recommends ca-certificates git tini wget openssh-client \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -r -g 998 musehub-git \
   && useradd -r -u 10001 -d /var/lib/musehub musehub \
