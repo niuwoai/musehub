@@ -19,27 +19,8 @@ command -v /usr/bin/timeout >/dev/null || { echo "/usr/bin/timeout required" >&2
 : "${POSTGRES_PASSWORD:?}"
 
 COMPOSE_GIT_TIMEOUT_SEC="${COMPOSE_GIT_TIMEOUT_SEC:-180}"
-
-compose_git_timeout() {
-  /usr/bin/timeout -k 15 "${COMPOSE_GIT_TIMEOUT_SEC}" "$@"
-}
-
-# dc is a shell function — timeout must wrap a real executable (docker compose or bash -c).
-compose_dc() {
-  if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
-    eval "$MUSEHUB_STACK_DC $(printf '%q ' "$@")"
-  else
-    docker compose -p "$COMPOSE_PROJECT_NAME" "$@"
-  fi
-}
-
-compose_dc_timeout() {
-  if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
-    compose_git_timeout bash -c "$(printf '%q' "$MUSEHUB_STACK_DC")$(printf ' %q' "$@")"
-  else
-    compose_git_timeout docker compose -p "$COMPOSE_PROJECT_NAME" "$@"
-  fi
-}
+# shellcheck source=lib/compose-dc-timeout.sh
+source "$ROOT/scripts/lib/compose-dc-timeout.sh"
 
 wait_gateway_ready() {
   for _ in $(seq 1 90); do

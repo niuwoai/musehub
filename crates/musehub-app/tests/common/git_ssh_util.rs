@@ -1,10 +1,14 @@
-use std::io::Read;
-use std::net::{SocketAddr, TcpListener};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+type PipedChild = (Child, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<Vec<u8>>);
+
+#[derive(Debug, Clone)]
 pub struct BoundedOutput {
     pub status: ExitStatus,
     pub stdout: Vec<u8>,
@@ -19,6 +23,10 @@ impl BoundedOutput {
             stdout: self.stdout,
             stderr: self.stderr,
         }
+    }
+
+    pub fn stderr_lossy_redacted(&self) -> String {
+        redact_test_output(&String::from_utf8_lossy(&self.stderr))
     }
 }
 
@@ -48,17 +56,88 @@ fn timed_out_status() -> ExitStatus {
     }
 }
 
-pub fn run_bounded(cmd: &mut Command, timeout_secs: u64) -> BoundedOutput {
+#[cfg(unix)]
+fn configure_new_session(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            let _ = libc::setsid();
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_new_session(_cmd: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_group(child: &mut Child) {
+    let pid = child.id() as i32;
+    unsafe {
+        let _ = libc::kill(-pid, libc::SIGTERM);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &mut Child) {
+    let _ = child.kill();
+}
+
+fn finish_child_pipes(
+    child: &mut Child,
+    stdout_rx: mpsc::Receiver<Vec<u8>>,
+    stderr_rx: mpsc::Receiver<Vec<u8>>,
+) -> (Vec<u8>, Vec<u8>) {
+    let _ = child.wait();
+    let stdout = stdout_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_default();
+    let stderr = stderr_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_default();
+    (stdout, stderr)
+}
+
+fn spawn_piped(mut cmd: Command) -> Result<PipedChild, String> {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    configure_new_session(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stdout pipe".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stderr pipe".to_string())?;
+    let (stx, srx) = mpsc::sync_channel::<Vec<u8>>(1);
+    let (etx, erx) = mpsc::sync_channel::<Vec<u8>>(1);
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut r = stdout;
+        r.read_to_end(&mut buf).ok();
+        let _ = stx.send(buf);
+    });
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut r = stderr;
+        r.read_to_end(&mut buf).ok();
+        let _ = etx.send(buf);
+    });
+    Ok((child, srx, erx))
+}
+
+/// Run subprocess with concurrent stdout/stderr drain (avoids pipe deadlock).
+pub fn run_bounded(cmd: Command, timeout_secs: u64) -> BoundedOutput {
+    let (mut child, srx, erx) = match spawn_piped(cmd) {
+        Ok(v) => v,
         Err(e) => {
             return BoundedOutput {
                 status: timed_out_status(),
                 stdout: Vec::new(),
-                stderr: format!("spawn failed: {e}\n").into_bytes(),
+                stderr: format!("{e}\n").into_bytes(),
                 timed_out: false,
             };
         }
@@ -67,14 +146,7 @@ pub fn run_bounded(cmd: &mut Command, timeout_secs: u64) -> BoundedOutput {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(mut out) = child.stdout.take() {
-                    out.read_to_end(&mut stdout).ok();
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    err.read_to_end(&mut stderr).ok();
-                }
+                let (stdout, stderr) = finish_child_pipes(&mut child, srx, erx);
                 return BoundedOutput {
                     status,
                     stdout,
@@ -84,26 +156,23 @@ pub fn run_bounded(cmd: &mut Command, timeout_secs: u64) -> BoundedOutput {
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let mut stderr = Vec::new();
-                    if let Some(mut err) = child.stderr.take() {
-                        err.read_to_end(&mut stderr).ok();
-                    }
-                    stderr.extend_from_slice(b"\n[bounded] ssh/git command timed out\n");
+                    kill_process_group(&mut child);
+                    let (stdout, stderr) = finish_child_pipes(&mut child, srx, erx);
                     return BoundedOutput {
                         status: timed_out_status(),
-                        stdout: Vec::new(),
+                        stdout,
                         stderr,
                         timed_out: true,
                     };
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
+                kill_process_group(&mut child);
+                let (stdout, _stderr) = finish_child_pipes(&mut child, srx, erx);
                 return BoundedOutput {
                     status: timed_out_status(),
-                    stdout: Vec::new(),
+                    stdout,
                     stderr: format!("wait failed: {e}\n").into_bytes(),
                     timed_out: false,
                 };
@@ -112,8 +181,225 @@ pub fn run_bounded(cmd: &mut Command, timeout_secs: u64) -> BoundedOutput {
     }
 }
 
+fn is_pat_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
 pub fn redact_test_output(text: &str) -> String {
-    text.replace("mhp_", "[REDACTED_PAT]_")
+    let mut text = text.to_string();
+    if let Ok(pat) = std::env::var("GIT_HTTP_SANDBOX_PAT") {
+        if !pat.is_empty() {
+            text = text.replace(&pat, "[REDACTED_PAT]");
+            let basic = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                format!("admin:{pat}"),
+            );
+            text = text.replace(&basic, "[REDACTED_BASIC]");
+        }
+    }
+    while let Some(start) = text.find("Authorization: Basic ") {
+        let rest = &text[start + "Authorization: Basic ".len()..];
+        let len = rest
+            .chars()
+            .take_while(|c| *c == '=' || c.is_ascii_alphanumeric() || *c == '+' || *c == '/')
+            .count();
+        text.replace_range(
+            start..start + "Authorization: Basic ".len() + len,
+            "Authorization: Basic [REDACTED]",
+        );
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(idx) = rest.find("mhp_") {
+        out.push_str(&rest[..idx]);
+        let tail = &rest[idx..];
+        let token_len = tail
+            .chars()
+            .take_while(|c| is_pat_token_char(*c))
+            .count()
+            .max(4);
+        out.push_str("[REDACTED_PAT]");
+        rest = &tail[token_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Explicit sshd/admin forward denial — not timeout, not unrelated stderr.
+pub fn ssh_forward_admin_denial(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("administratively prohibited")
+        || s.contains("port forwarding is disabled")
+        || s.contains("forwarding disabled")
+        || s.contains("open failed: administratively prohibited")
+        || (s.contains("port forwarding") && s.contains("disabled"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ForwardDenialVerdict {
+    Denied,
+    ChannelOpened,
+    Inconclusive,
+    TimedOut,
+}
+
+pub fn classify_forward_denial(
+    exited_before_deadline: bool,
+    timed_out_kill: bool,
+    forward_tcp_connected: bool,
+    stderr: &str,
+) -> ForwardDenialVerdict {
+    if forward_tcp_connected {
+        return ForwardDenialVerdict::ChannelOpened;
+    }
+    if timed_out_kill || !exited_before_deadline {
+        return ForwardDenialVerdict::TimedOut;
+    }
+    if ssh_forward_admin_denial(stderr) {
+        return ForwardDenialVerdict::Denied;
+    }
+    ForwardDenialVerdict::Inconclusive
+}
+
+fn spawn_tcp_target(port_hint: u16) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(format!("127.0.0.1:{port_hint}"))
+        .or_else(|_| TcpListener::bind("127.0.0.1:0"))
+        .expect("target bind");
+    let port = listener.local_addr().expect("target addr").port();
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).ok();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut sock, _)) => {
+                    let _ = sock.write_all(b"target-ok\n");
+                    let _ = sock.flush();
+                    return;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    (port, handle)
+}
+
+fn local_forward_tcp_probe(local_port: u16) -> bool {
+    let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");
+    match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
+        Ok(s) => s.set_read_timeout(Some(Duration::from_millis(200))).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Product negative: forward channel must be administratively denied with TCP probe to local listener.
+pub fn assert_ssh_port_forward_denied(priv_key: &Path, port: u16) {
+    let (target_port, _target) = spawn_tcp_target(19000);
+    let local_listener = TcpListener::bind("127.0.0.1:0").expect("local bind");
+    let local_port = local_listener.local_addr().expect("local").port();
+    drop(local_listener);
+
+    let mut cmd = Command::new("ssh");
+    cmd.args(ssh_base_args(priv_key, port));
+    cmd.arg("-o").arg("ExitOnForwardFailure=yes");
+    cmd.args([
+        "-N",
+        "-L",
+        &format!("127.0.0.1:{local_port}:127.0.0.1:{target_port}"),
+        "git@127.0.0.1",
+    ]);
+
+    let (mut child, srx, erx) = spawn_piped(cmd).expect("spawn forward ssh");
+    let probe_deadline = Instant::now() + Duration::from_secs(12);
+    let mut forward_connected = false;
+    let mut exited = false;
+    while Instant::now() < probe_deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            exited = true;
+            break;
+        }
+        if local_forward_tcp_probe(local_port) {
+            forward_connected = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let timed_out_kill = !exited;
+    if timed_out_kill {
+        kill_process_group(&mut child);
+    }
+    let (stdout, stderr) = finish_child_pipes(&mut child, srx, erx);
+    let _ = stdout;
+    let stderr_s = String::from_utf8_lossy(&stderr).into_owned();
+
+    let verdict = classify_forward_denial(exited, timed_out_kill, forward_connected, &stderr_s);
+    assert_eq!(
+        verdict,
+        ForwardDenialVerdict::Denied,
+        "forward negative: exited={exited} tcp_open={forward_connected} stderr={}",
+        redact_test_output(&stderr_s)
+    );
+    let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");
+    assert!(
+        TcpListener::bind(addr).is_ok(),
+        "forward local port {local_port} must remain free"
+    );
+}
+
+pub fn raw_ssh_bounded(
+    login: &str,
+    priv_key: &Path,
+    port: u16,
+    remote_cmd: &str,
+    allocate_tty: bool,
+) -> BoundedOutput {
+    let mut cmd = Command::new("ssh");
+    cmd.args(ssh_base_args(priv_key, port));
+    if allocate_tty {
+        cmd.arg("-tt");
+    }
+    cmd.arg(format!("{login}@127.0.0.1"));
+    if !remote_cmd.is_empty() {
+        cmd.arg(remote_cmd);
+    }
+    let cap = if allocate_tty && remote_cmd.is_empty() {
+        12
+    } else {
+        ssh_timeout_secs()
+    };
+    run_bounded(cmd, cap)
+}
+
+/// Negative ssh must fail with real denial before the bounded cap — never exit 124 / timeout.
+pub fn raw_ssh_expect_denied(
+    priv_key: &Path,
+    port: u16,
+    remote_cmd: &str,
+    allocate_tty: bool,
+) -> Output {
+    let login = "git";
+    let b = raw_ssh_bounded(login, priv_key, port, remote_cmd, allocate_tty);
+    assert!(
+        !b.timed_out,
+        "ssh {:?} must be denied before timeout (tty={allocate_tty}): {}",
+        remote_cmd,
+        b.stderr_lossy_redacted()
+    );
+    assert!(
+        !b.status.success(),
+        "ssh {:?} must not succeed: {}",
+        remote_cmd,
+        b.stderr_lossy_redacted()
+    );
+    if allocate_tty && remote_cmd.is_empty() {
+        assert!(
+            !b.stderr.is_empty() || b.status.code() == Some(255),
+            "interactive shell refusal must be visible in exit status/stderr"
+        );
+    }
+    b.into_output()
 }
 
 pub fn git_ssh_binary() -> PathBuf {
@@ -140,7 +426,6 @@ pub fn locate_sshd() -> Option<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
 }
 
-/// When `MUSEHUB_REQUIRE_GIT_SSH=1` (CI), missing sshd or binary is a hard failure.
 pub fn require_git_ssh_transport_prereqs() {
     let require = std::env::var("MUSEHUB_REQUIRE_GIT_SSH").ok().as_deref() == Some("1");
     let bin = git_ssh_binary();
@@ -206,7 +491,7 @@ pub fn git_ssh_cmd_in(
     cmd.arg("-c").arg(format!("core.sshCommand={ssh_cmd}"));
     cmd.args(git_args);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    run_bounded(&mut cmd, git_timeout_secs()).into_output()
+    run_bounded(cmd, git_timeout_secs()).into_output()
 }
 
 pub fn raw_ssh(priv_key: &Path, port: u16, remote_cmd: &str, allocate_tty: bool) -> Output {
@@ -228,7 +513,25 @@ pub fn raw_ssh_with_sendenv(
     if !remote_cmd.is_empty() {
         cmd.arg(remote_cmd);
     }
-    run_bounded(&mut cmd, ssh_timeout_secs()).into_output()
+    run_bounded(cmd, ssh_timeout_secs()).into_output()
+}
+
+pub fn raw_ssh_as_expect_denied(
+    login: &str,
+    priv_key: &Path,
+    port: u16,
+    remote_cmd: &str,
+    allocate_tty: bool,
+) -> Output {
+    let b = raw_ssh_bounded(login, priv_key, port, remote_cmd, allocate_tty);
+    assert!(
+        !b.timed_out,
+        "ssh as {login} {:?} must be denied before timeout: {}",
+        remote_cmd,
+        b.stderr_lossy_redacted()
+    );
+    assert!(!b.status.success());
+    b.into_output()
 }
 
 pub fn raw_ssh_as(
@@ -238,62 +541,7 @@ pub fn raw_ssh_as(
     remote_cmd: &str,
     allocate_tty: bool,
 ) -> Output {
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_base_args(priv_key, port));
-    if allocate_tty {
-        cmd.arg("-tt");
-    }
-    cmd.arg(format!("{login}@127.0.0.1"));
-    if !remote_cmd.is_empty() {
-        cmd.arg(remote_cmd);
-    }
-    let timeout = if allocate_tty && remote_cmd.is_empty() {
-        12
-    } else {
-        ssh_timeout_secs()
-    };
-    run_bounded(&mut cmd, timeout).into_output()
-}
-
-/// Negative test: `ssh -N -L` must fail closed (bounded; no unbounded `.output()` hang).
-pub fn assert_ssh_port_forward_denied(priv_key: &Path, port: u16) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
-    let local_port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");
-
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_base_args(priv_key, port));
-    cmd.arg("-o").arg("ExitOnForwardFailure=yes");
-    cmd.args([
-        "-N",
-        "-L",
-        &format!("127.0.0.1:{local_port}:127.0.0.1:1"),
-        "git@127.0.0.1",
-    ]);
-    let out = run_bounded(&mut cmd, 15);
-    assert!(
-        !out.status.success(),
-        "ssh -N -L must not succeed: {}",
-        redact_test_output(&String::from_utf8_lossy(&out.stderr))
-    );
-    assert!(
-        TcpListener::bind(addr).is_ok(),
-        "forward port {local_port} must be free after bounded ssh -L"
-    );
-    let stderr_s = redact_test_output(&String::from_utf8_lossy(&out.stderr));
-    let denied = stderr_s.to_ascii_lowercase();
-    if denied.contains("administratively prohibited")
-        || denied.contains("port forwarding")
-        || denied.contains("forwarding disabled")
-        || denied.contains("permission denied")
-    {
-        return;
-    }
-    assert!(
-        out.timed_out || !stderr_s.trim().is_empty(),
-        "expected admin forward denial stderr or bounded termination without listener"
-    );
+    raw_ssh_bounded(login, priv_key, port, remote_cmd, allocate_tty).into_output()
 }
 
 pub fn ed25519_keypair(prefix: &str) -> (PathBuf, String) {

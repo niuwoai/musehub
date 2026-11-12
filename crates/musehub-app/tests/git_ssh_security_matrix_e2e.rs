@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use common::git_ssh_fixture::git_ssh_fixture;
 use common::git_ssh_util::{
-    assert_ssh_port_forward_denied, git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as,
+    assert_ssh_port_forward_denied, git_ssh_cmd, git_ssh_cmd_in, raw_ssh_as_expect_denied,
+    raw_ssh_expect_denied,
 };
 
 fn commit_file(work: &std::path::Path, branch: &str, file: &str, contents: &[u8]) {
@@ -425,23 +426,16 @@ async fn git_ssh_forbidden_shell_path_traversal_and_subshell() {
         "git-upload-pack ../secret",
         "git-receive-pack demo/../../etc",
     ] {
-        let out = raw_ssh(&f.priv_key, f.sshd.port, cmd, false);
-        assert!(!out.status.success(), "cmd {:?} should fail", cmd);
+        raw_ssh_expect_denied(&f.priv_key, f.sshd.port, cmd, false);
     }
-    let pty = raw_ssh(&f.priv_key, f.sshd.port, "", true);
-    assert!(
-        !pty.status.success(),
-        "interactive shell must be denied: {}",
-        String::from_utf8_lossy(&pty.stderr)
-    );
+    raw_ssh_expect_denied(&f.priv_key, f.sshd.port, "", true);
     assert_ssh_port_forward_denied(&f.priv_key, f.sshd.port);
 }
 
 #[tokio::test]
 async fn git_ssh_wrong_os_login_user_denied() {
     let f = git_ssh_fixture("sshuser").await;
-    let out = raw_ssh_as("root", &f.priv_key, f.sshd.port, "", false);
-    assert!(!out.status.success());
+    raw_ssh_as_expect_denied("root", &f.priv_key, f.sshd.port, "", false);
 }
 
 #[tokio::test]
