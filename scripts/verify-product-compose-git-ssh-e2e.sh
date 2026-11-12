@@ -28,8 +28,7 @@ HTTP_DIR=""
 BAD_DIR=""
 
 if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
-  # shellcheck disable=SC2128
-  dc() { eval "$MUSEHUB_STACK_DC" "$@"; }
+  dc() { eval "$MUSEHUB_STACK_DC $(printf '%q ' "$@")"; }
 else
   dc() { docker compose -p "$COMPOSE_PROJECT_NAME" "$@"; }
 fi
@@ -85,8 +84,22 @@ wait_published_port || {
 echo "=== compose git-ssh: run dir ACL ==="
 SSH_RUN_DIR=/var/lib/musehub/git-ssh
 dc exec -T musehub-git-ssh test -f "${SSH_RUN_DIR}/runtime.env"
-dc exec -T musehub-git-ssh stat -c '%a %U:%G' "${SSH_RUN_DIR}" | grep -qE '^(2750|0750) root:git$'
-dc exec -T musehub-git-ssh stat -c '%a %U:%G' "${SSH_RUN_DIR}/runtime.env" | grep -qE '^640 root:git$'
+run_dir_mode="$(dc exec -T musehub-git-ssh stat -c %a "${SSH_RUN_DIR}")"
+run_dir_own="$(dc exec -T musehub-git-ssh stat -c %U:%G "${SSH_RUN_DIR}")"
+run_dir_mode="${run_dir_mode//$'\r'/}"
+run_dir_own="${run_dir_own//$'\r'/}"
+[[ "$run_dir_mode" =~ ^(2750|0750)$ && "$run_dir_own" == root:git ]] || {
+  echo "compose git-ssh: bad run dir ACL (want 2750|0750 root:git, got ${run_dir_mode} ${run_dir_own})" >&2
+  exit 1
+}
+env_mode="$(dc exec -T musehub-git-ssh stat -c %a "${SSH_RUN_DIR}/runtime.env")"
+env_own="$(dc exec -T musehub-git-ssh stat -c %U:%G "${SSH_RUN_DIR}/runtime.env")"
+env_mode="${env_mode//$'\r'/}"
+env_own="${env_own//$'\r'/}"
+[[ "$env_mode" == 640 && "$env_own" == root:git ]] || {
+  echo "compose git-ssh: bad runtime.env ACL (want 640 root:git, got ${env_mode} ${env_own})" >&2
+  exit 1
+}
 dc exec -T -u git musehub-git-ssh test -x "${SSH_RUN_DIR}"
 dc exec -T -u git musehub-git-ssh test -r "${SSH_RUN_DIR}/runtime.env"
 if dc exec -T -u git musehub-git-ssh test -w "${SSH_RUN_DIR}" 2>/dev/null; then
