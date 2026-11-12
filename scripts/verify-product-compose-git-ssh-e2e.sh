@@ -313,6 +313,17 @@ OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
 [[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
+echo "=== compose git-ssh: remigrate shared git after HTTP write ==="
+dc restart musehub-git-ssh
+for _ in $(seq 1 60); do
+  wait_published_port && break
+  sleep 2
+done
+wait_published_port || {
+  dc logs musehub-git-ssh --tail=60 >&2 || true
+  exit 1
+}
+
 # Re-clone over SSH after HTTP write (same branch); avoids PAT global config + stale worktree edge cases.
 GIT_SSH2=$(mktemp -d)
 (
@@ -329,8 +340,12 @@ git -C "$GIT_SSH2" commit -m ssh-3 --no-gpg-sign
 (
   unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_HTTP_SANDBOX_PAT
   export GIT_TERMINAL_PROMPT=0
-  timeout 180 git -C "$GIT_SSH2" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
-)
+  /usr/bin/timeout -k 15 180 git -C "$GIT_SSH2" push --no-thin origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+) || {
+  echo "compose git-ssh: ssh-3 push failed or timed out" >&2
+  dc logs musehub-git-ssh --tail=80 >&2 || true
+  exit 1
+}
 OID_SSH_3=$(git -C "$GIT_SSH2" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_3" ]]
 [[ "$OID_SSH_3" != "$OID_HTTP_2" ]]
