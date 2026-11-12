@@ -154,9 +154,33 @@ compose_git_ssh_login() {
   return 1
 }
 
-if [[ -n "${COOKIE_JAR:-}" ]] && [[ -f "$COOKIE_JAR" ]] &&
-  curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/me" | jq -e '.handle == "admin"' >/dev/null 2>&1; then
-  echo "=== compose git-ssh: reuse stack admin session ==="
+compose_api_json() {
+  local method="$1" url="$2" data="${3:-}" tmp code body
+  tmp=$(mktemp)
+  if [[ -n "$data" ]]; then
+    code=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" \
+      -H 'Content-Type: application/json' -d "$data" -o "$tmp" -w "%{http_code}" "$url")
+  else
+    code=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X "$method" \
+      -o "$tmp" -w "%{http_code}" "$url")
+  fi
+  body=$(cat "$tmp")
+  rm -f "$tmp"
+  if [[ "$code" -ge 400 ]]; then
+    echo "compose git-ssh: ${method} ${url} failed http=${code} body=${body}" >&2
+    dc logs musehub-server --tail=40 >&2 || true
+    exit 1
+  fi
+  printf '%s' "$body"
+}
+
+if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
+  : "${COOKIE_JAR:?embedded product-stack e2e must export COOKIE_JAR}"
+  [[ -f "$COOKIE_JAR" ]] || {
+    echo "compose git-ssh: missing session cookie jar (${COOKIE_JAR})" >&2
+    exit 1
+  }
+  echo "=== compose git-ssh: reuse stack admin session (embedded) ==="
 else
   COOKIE_JAR=$(mktemp)
   compose_git_ssh_login
@@ -166,22 +190,20 @@ KEY_DIR=$(mktemp -d)
 chmod 0700 "$KEY_DIR"
 ssh-keygen -t ed25519 -f "$KEY_DIR/id_ed25519" -N "" -q
 PUB=$(cat "$KEY_DIR/id_ed25519.pub")
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg k "$PUB" '{name:"compose-ssh",public_key:$k}')" \
-  "$BASE/api/v1/ssh-keys" | jq -e '.id' >/dev/null
+echo "=== compose git-ssh: register ssh key ==="
+compose_api_json POST "$BASE/api/v1/ssh-keys" \
+  "$(jq -n --arg k "$PUB" '{name:"compose-ssh",public_key:$k}')" | jq -e '.id' >/dev/null
 
 REPO_SLUG="compose-ssh-$(date +%s)"
-REPO_JSON=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg s "$REPO_SLUG" '{slug:$s}')" \
-  "$BASE/api/v1/orgs/demo/repos")
+REPO_JSON=$(compose_api_json POST "$BASE/api/v1/orgs/demo/repos" \
+  "$(jq -n --arg s "$REPO_SLUG" '{slug:$s}')")
 STORAGE_KEY=$(echo "$REPO_JSON" | jq -r .storage_key)
 REPO_ID=$(echo "$REPO_JSON" | jq -r .id)
 [[ -n "$STORAGE_KEY" && "$STORAGE_KEY" != null ]]
 [[ -n "$REPO_ID" && "$REPO_ID" != null ]]
 
-PAT_JSON=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg id "$REPO_ID" '{name:"compose-git",org:"demo",scope_mode:"selected",scopes:["repo:read","repo:write"],repo_ids:[$id]}')" \
-  "$BASE/api/v1/tokens")
+PAT_JSON=$(compose_api_json POST "$BASE/api/v1/tokens" \
+  "$(jq -n --arg id "$REPO_ID" '{name:"compose-git",org:"demo",scope_mode:"selected",scopes:["repo:read","repo:write"],repo_ids:[$id]}')")
 PAT=$(echo "$PAT_JSON" | jq -r .token)
 TOKEN_ID=$(echo "$PAT_JSON" | jq -r .id)
 [[ ${#PAT} -gt 10 ]]
