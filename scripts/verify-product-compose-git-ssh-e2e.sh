@@ -15,6 +15,7 @@ command -v git >/dev/null || { echo "git required" >&2; exit 1; }
 : "${COMPOSE_PROJECT_NAME:?}"
 : "${BASE:?}"
 : "${BOOTSTRAP_PW:?}"
+: "${POSTGRES_PASSWORD:?}"
 
 wait_gateway_ready() {
   for _ in $(seq 1 90); do
@@ -165,7 +166,8 @@ compose_api_json() {
   fi
   body=$(cat "$tmp")
   rm -f "$tmp"
-  if [[ "$code" -ge 400 ]]; then
+  code="${code//$'\r'/}"
+  if [[ "$code" -lt 200 || "$code" -ge 300 ]]; then
     echo "compose git-ssh: ${method} ${url} failed http=${code} body=${body}" >&2
     dc logs musehub-server --tail=40 >&2 || true
     exit 1
@@ -190,16 +192,29 @@ chmod 0700 "$KEY_DIR"
 ssh-keygen -t ed25519 -f "$KEY_DIR/id_ed25519" -N "" -q
 PUB=$(cat "$KEY_DIR/id_ed25519.pub")
 echo "=== compose git-ssh: register ssh key ==="
-compose_api_json POST "$BASE/api/v1/ssh-keys" \
-  "$(jq -n --arg k "$PUB" '{name:"compose-ssh",public_key:$k}')" | jq -e '.id' >/dev/null
+SSH_KEY_JSON=$(compose_api_json POST "$BASE/api/v1/ssh-keys" \
+  "$(jq -n --arg k "$PUB" '{name:"compose-ssh",public_key:$k}')")
+echo "$SSH_KEY_JSON" | jq -e '.id' >/dev/null || {
+  echo "compose git-ssh: unexpected ssh-keys response: ${SSH_KEY_JSON}" >&2
+  exit 1
+}
 
 REPO_SLUG="compose-ssh-$(date +%s)"
 REPO_JSON=$(compose_api_json POST "$BASE/api/v1/orgs/demo/repos" \
   "$(jq -n --arg s "$REPO_SLUG" '{slug:$s}')")
-STORAGE_KEY=$(echo "$REPO_JSON" | jq -r .storage_key)
 REPO_ID=$(echo "$REPO_JSON" | jq -r .id)
-[[ -n "$STORAGE_KEY" && "$STORAGE_KEY" != null ]]
-[[ -n "$REPO_ID" && "$REPO_ID" != null ]]
+[[ "$(echo "$REPO_JSON" | jq -r .id)" != null && -n "$REPO_ID" ]] || {
+  echo "compose git-ssh: repo create missing id: ${REPO_JSON}" >&2
+  exit 1
+}
+STORAGE_KEY=$(dc exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
+  psql -U musehub -d musehub -tAc \
+  "SELECT storage_key::text FROM repositories WHERE id = '${REPO_ID}'")
+STORAGE_KEY=$(echo "$STORAGE_KEY" | tr -d '[:space:]')
+[[ ${#STORAGE_KEY} -ge 32 ]] || {
+  echo "compose git-ssh: could not resolve storage_key for repo ${REPO_ID}" >&2
+  exit 1
+}
 
 PAT_JSON=$(compose_api_json POST "$BASE/api/v1/tokens" \
   "$(jq -n --arg id "$REPO_ID" '{name:"compose-git",org:"demo",scope_mode:"selected",scopes:["repo:read","repo:write"],repo_ids:[$id]}')")

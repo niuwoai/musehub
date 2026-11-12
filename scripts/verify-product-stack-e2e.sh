@@ -355,7 +355,7 @@ ss -tln 2>/dev/null | grep -qE ":${MUSEHUB_GIT_SSH_PORT}([[:space:]]|$)" || {
   dc logs musehub-git-ssh --tail=60 >&2 || true
   exit 1
 }
-export COOKIE_JAR
+export COOKIE_JAR POSTGRES_PASSWORD
 export MUSEHUB_STACK_DC
 # shellcheck disable=SC2068
 MUSEHUB_STACK_DC=$(printf '%q ' "${COMPOSE_BASE[@]}")
