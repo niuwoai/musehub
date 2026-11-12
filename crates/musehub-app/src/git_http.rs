@@ -18,12 +18,18 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
         return Ok(());
     }
     std::fs::create_dir_all(git_root).map_err(|error| AppError::Other(error.to_string()))?;
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args(["init", "--bare", path.to_str().expect("utf8 path")])
-        .status()
+        .output()
         .map_err(|error| AppError::Other(error.to_string()))?;
-    if !status.success() {
-        return Err(AppError::Other("git init --bare failed".to_string()));
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if detail.is_empty() {
+            "git init --bare failed".to_string()
+        } else {
+            format!("git init --bare failed: {detail}")
+        };
+        return Err(AppError::Other(msg));
     }
     seed_empty_main_branch(&path)?;
     let sym = Command::new("git")
