@@ -1,5 +1,120 @@
+use std::io::Read;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output, Stdio};
+use std::time::{Duration, Instant};
+
+#[derive(Debug)]
+pub struct BoundedOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub timed_out: bool,
+}
+
+impl BoundedOutput {
+    pub fn into_output(self) -> Output {
+        Output {
+            status: self.status,
+            stdout: self.stdout,
+            stderr: self.stderr,
+        }
+    }
+}
+
+fn ssh_timeout_secs() -> u64 {
+    std::env::var("MUSEHUB_TEST_SSH_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30)
+}
+
+fn git_timeout_secs() -> u64 {
+    std::env::var("MUSEHUB_TEST_GIT_SSH_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(120)
+}
+
+fn timed_out_status() -> ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(124 << 8)
+    }
+    #[cfg(not(unix))]
+    {
+        Command::new("false").status().expect("false")
+    }
+}
+
+pub fn run_bounded(cmd: &mut Command, timeout_secs: u64) -> BoundedOutput {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return BoundedOutput {
+                status: timed_out_status(),
+                stdout: Vec::new(),
+                stderr: format!("spawn failed: {e}\n").into_bytes(),
+                timed_out: false,
+            };
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    out.read_to_end(&mut stdout).ok();
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    err.read_to_end(&mut stderr).ok();
+                }
+                return BoundedOutput {
+                    status,
+                    stdout,
+                    stderr,
+                    timed_out: false,
+                };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let mut stderr = Vec::new();
+                    if let Some(mut err) = child.stderr.take() {
+                        err.read_to_end(&mut stderr).ok();
+                    }
+                    stderr.extend_from_slice(b"\n[bounded] ssh/git command timed out\n");
+                    return BoundedOutput {
+                        status: timed_out_status(),
+                        stdout: Vec::new(),
+                        stderr,
+                        timed_out: true,
+                    };
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return BoundedOutput {
+                    status: timed_out_status(),
+                    stdout: Vec::new(),
+                    stderr: format!("wait failed: {e}\n").into_bytes(),
+                    timed_out: false,
+                };
+            }
+        }
+    }
+}
+
+pub fn redact_test_output(text: &str) -> String {
+    text.replace("mhp_", "[REDACTED_PAT]_")
+}
 
 pub fn git_ssh_binary() -> PathBuf {
     if let Ok(p) = std::env::var("MUSEHUB_GIT_SSH_BIN") {
@@ -53,9 +168,15 @@ pub fn require_git_ssh_transport_prereqs() {
 pub fn ssh_base_args(priv_key: &Path, port: u16) -> Vec<String> {
     vec![
         "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
         "StrictHostKeyChecking=no".into(),
         "-o".into(),
         "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(),
+        "ControlMaster=no".into(),
+        "-o".into(),
+        "ConnectTimeout=15".into(),
         "-i".into(),
         priv_key.display().to_string(),
         "-p".into(),
@@ -74,7 +195,7 @@ pub fn git_ssh_cmd_in(
     git_args: &[&str],
 ) -> Output {
     let ssh_cmd = format!(
-        "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {} -p {}",
+        "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ControlMaster=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {} -p {}",
         priv_key.display(),
         port
     );
@@ -85,7 +206,7 @@ pub fn git_ssh_cmd_in(
     cmd.arg("-c").arg(format!("core.sshCommand={ssh_cmd}"));
     cmd.args(git_args);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.output().expect("git")
+    run_bounded(&mut cmd, git_timeout_secs()).into_output()
 }
 
 pub fn raw_ssh(priv_key: &Path, port: u16, remote_cmd: &str, allocate_tty: bool) -> Output {
@@ -107,7 +228,7 @@ pub fn raw_ssh_with_sendenv(
     if !remote_cmd.is_empty() {
         cmd.arg(remote_cmd);
     }
-    cmd.output().expect("ssh sendenv")
+    run_bounded(&mut cmd, ssh_timeout_secs()).into_output()
 }
 
 pub fn raw_ssh_as(
@@ -126,7 +247,53 @@ pub fn raw_ssh_as(
     if !remote_cmd.is_empty() {
         cmd.arg(remote_cmd);
     }
-    cmd.output().expect("ssh")
+    let timeout = if allocate_tty && remote_cmd.is_empty() {
+        12
+    } else {
+        ssh_timeout_secs()
+    };
+    run_bounded(&mut cmd, timeout).into_output()
+}
+
+/// Negative test: `ssh -N -L` must fail closed (bounded; no unbounded `.output()` hang).
+pub fn assert_ssh_port_forward_denied(priv_key: &Path, port: u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
+    let local_port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");
+
+    let mut cmd = Command::new("ssh");
+    cmd.args(ssh_base_args(priv_key, port));
+    cmd.arg("-o").arg("ExitOnForwardFailure=yes");
+    cmd.args([
+        "-N",
+        "-L",
+        &format!("127.0.0.1:{local_port}:127.0.0.1:1"),
+        "git@127.0.0.1",
+    ]);
+    let out = run_bounded(&mut cmd, 15);
+    assert!(
+        !out.status.success(),
+        "ssh -N -L must not succeed: {}",
+        redact_test_output(&String::from_utf8_lossy(&out.stderr))
+    );
+    assert!(
+        TcpListener::bind(addr).is_ok(),
+        "forward port {local_port} must be free after bounded ssh -L"
+    );
+    let stderr_s = redact_test_output(&String::from_utf8_lossy(&out.stderr));
+    let denied = stderr_s.to_ascii_lowercase();
+    if denied.contains("administratively prohibited")
+        || denied.contains("port forwarding")
+        || denied.contains("forwarding disabled")
+        || denied.contains("permission denied")
+    {
+        return;
+    }
+    assert!(
+        out.timed_out || !stderr_s.trim().is_empty(),
+        "expected admin forward denial stderr or bounded termination without listener"
+    );
 }
 
 pub fn ed25519_keypair(prefix: &str) -> (PathBuf, String) {

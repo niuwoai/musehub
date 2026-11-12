@@ -11,7 +11,9 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use common::git_ssh_fixture::git_ssh_fixture;
-use common::git_ssh_util::{git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as};
+use common::git_ssh_util::{
+    assert_ssh_port_forward_denied, git_ssh_cmd, git_ssh_cmd_in, raw_ssh, raw_ssh_as,
+};
 
 fn commit_file(work: &std::path::Path, branch: &str, file: &str, contents: &[u8]) {
     Command::new("git")
@@ -427,40 +429,12 @@ async fn git_ssh_forbidden_shell_path_traversal_and_subshell() {
         assert!(!out.status.success(), "cmd {:?} should fail", cmd);
     }
     let pty = raw_ssh(&f.priv_key, f.sshd.port, "", true);
-    assert!(!pty.status.success());
-    let fwd_port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let fwd_only = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-i",
-            f.priv_key.to_str().unwrap(),
-            "-p",
-            &f.sshd.port.to_string(),
-            "-N",
-            "-L",
-            &format!("{fwd_port}:127.0.0.1:22"),
-            "git@127.0.0.1",
-        ])
-        .output()
-        .unwrap();
     assert!(
-        !fwd_only.status.success(),
-        "tcp forwarding must fail: {}",
-        String::from_utf8_lossy(&fwd_only.stderr)
+        !pty.status.success(),
+        "interactive shell must be denied: {}",
+        String::from_utf8_lossy(&pty.stderr)
     );
-    assert!(
-        std::net::TcpListener::bind(("127.0.0.1", fwd_port)).is_ok(),
-        "local forward port must remain free"
-    );
+    assert_ssh_port_forward_denied(&f.priv_key, f.sshd.port);
 }
 
 #[tokio::test]

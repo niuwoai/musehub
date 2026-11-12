@@ -24,6 +24,23 @@ compose_git_timeout() {
   /usr/bin/timeout -k 15 "${COMPOSE_GIT_TIMEOUT_SEC}" "$@"
 }
 
+# dc is a shell function — timeout must wrap a real executable (docker compose or bash -c).
+compose_dc() {
+  if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
+    eval "$MUSEHUB_STACK_DC $(printf '%q ' "$@")"
+  else
+    docker compose -p "$COMPOSE_PROJECT_NAME" "$@"
+  fi
+}
+
+compose_dc_timeout() {
+  if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
+    compose_git_timeout bash -c "$(printf '%q' "$MUSEHUB_STACK_DC")$(printf ' %q' "$@")"
+  else
+    compose_git_timeout docker compose -p "$COMPOSE_PROJECT_NAME" "$@"
+  fi
+}
+
 wait_gateway_ready() {
   for _ in $(seq 1 90); do
     if curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null 2>&1; then
@@ -267,7 +284,7 @@ trap cleanup EXIT
 
 remote_ref_oid() {
   local ref="$1"
-  compose_git_timeout dc exec -T musehub-server git --git-dir="${BARE_REPO_PATH}" rev-parse "$ref"
+  compose_dc_timeout exec -T musehub-server git --git-dir="${BARE_REPO_PATH}" rev-parse "$ref"
 }
 
 echo "=== compose git-ssh: wait published port ${MUSEHUB_GIT_SSH_PORT} ==="
