@@ -1,10 +1,16 @@
+import { useState } from 'react'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
+import { getPipelineJobLogs, type PipelineJob } from '../api'
 
 export function RepoDeliveryPage() {
   const ws = useWorkspace()
+  const [jobLogText, setJobLogText] = useState<string | null>(null)
+  const [jobLogKey, setJobLogKey] = useState<string | null>(null)
+  const [jobLogError, setJobLogError] = useState<string | null>(null)
   const {
     t,
+    activeOrg,
     selectedRepo,
     mergedPr,
     pipelineRun,
@@ -26,6 +32,24 @@ export function RepoDeliveryPage() {
     deploymentId,
     trace,
   } = ws
+
+  async function loadJobLogs(job: PipelineJob) {
+    if (!selectedRepo || !pipelineRun) return
+    setJobLogError(null)
+    setJobLogKey(job.job_key)
+    try {
+      const chunk = await getPipelineJobLogs(
+        activeOrg,
+        selectedRepo,
+        job.id,
+        pipelineRun.run_attempt_id,
+      )
+      setJobLogText(chunk.text || t('app.prCiJobLogMissing'))
+    } catch (err) {
+      setJobLogError(err instanceof Error ? err.message : 'log fetch failed')
+      setJobLogText(null)
+    }
+  }
 
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
@@ -86,6 +110,13 @@ export function RepoDeliveryPage() {
                   {pipelineJobs.map((job) => (
                     <li key={job.id}>
                       {job.job_key} ({job.state})
+                      <button
+                        type="button"
+                        data-testid={`pipeline-job-logs-${job.job_key}`}
+                        onClick={() => void loadJobLogs(job)}
+                      >
+                        {t('app.pipelineViewJobLogs')}
+                      </button>
                       {job.retry_allowed ? (
                         <button
                           type="button"
@@ -99,6 +130,17 @@ export function RepoDeliveryPage() {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+            </div>
+          ) : null}
+          {jobLogKey ? (
+            <div data-testid="pipeline-job-log-panel">
+              <h4>{t('app.pipelineJobLogTitle', { job: jobLogKey })}</h4>
+              {jobLogError ? <p role="alert">{jobLogError}</p> : null}
+              {jobLogText ? (
+                <pre data-testid="pipeline-job-log-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {jobLogText}
+                </pre>
               ) : null}
             </div>
           ) : null}

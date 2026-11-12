@@ -35,11 +35,46 @@ export type IssueListPage = {
   next_cursor: string | null
   has_more: boolean
 }
+export type AcceptanceCriterion = {
+  ordinal: number
+  description: string
+  verification_method: string
+  required: boolean
+}
+
+export type IssuePlanSummary = {
+  id: string
+  version: number
+  state: string
+  body: string
+}
+
 export type IssueDetail = Issue & {
   body: string
   assignee_id?: string | null
   author_handle: string
   close_reason?: string | null
+  current_revision_id?: string | null
+  revision?: number | null
+  criteria?: AcceptanceCriterion[]
+  plan?: IssuePlanSummary | null
+}
+
+export type IssueDeliveryTrace = {
+  issue_id: string
+  issue_number: number
+  pull_requests: { id: string; number: number; state: string; merged_oid?: string | null }[]
+  pipeline_runs: { id: string; state: string; source_oid: string }[]
+  deployments: { id: string; environment_slug: string; state: string }[]
+  gaps: string[]
+}
+
+export type RepoEnvironment = {
+  id: string
+  slug: string
+  name: string
+  requires_approval: boolean
+  row_version: number
 }
 export type DiscussionComment = {
   id: string
@@ -333,6 +368,39 @@ export async function getAgentRun(runId: string) {
 
 export async function cancelAgentRun(runId: string) {
   return api<void>(`/api/v1/agent-runs/${runId}/cancel`, { method: 'POST' })
+}
+
+export async function respondAgentRun(runId: string, message: string) {
+  return api<{ id: string; state: string; message_sequence: number }>(
+    `/api/v1/agent-runs/${runId}/respond`,
+    { method: 'POST', body: JSON.stringify({ message }) },
+  )
+}
+
+export async function replaceIssueCriteria(
+  org: string,
+  repo: string,
+  issueNumber: number,
+  expectedVersion: number,
+  criteria: { description: string; verification_method?: string; required?: boolean }[],
+) {
+  return api<IssueDetail>(
+    `/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}/criteria`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ expected_version: expectedVersion, criteria }),
+    },
+  )
+}
+
+export async function getIssueDeliveryTrace(org: string, repo: string, issueNumber: number) {
+  return api<IssueDeliveryTrace>(
+    `/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}/delivery-trace`,
+  )
+}
+
+export async function listRepoEnvironments(org: string, repo: string) {
+  return api<RepoEnvironment[]>(`/api/v1/orgs/${org}/repos/${repo}/environments`)
 }
 
 export async function listPullRequests(org: string, repo: string) {

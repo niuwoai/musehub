@@ -58,7 +58,9 @@
     "noMergedPr": "尚无已合并 PR — 请先完成评审与检查合并。",
     "traceGaps": "追溯缺口（不编造）",
     "logout": "退出登录",
-    "agentStarting": "正在启动 Agent 运行…"
+    "agentStarting": "正在启动 Agent 运行…",
+    "pipelineViewJobLogs": "查看任务日志",
+    "pipelineJobLogTitle": "日志：{{job}}"
   },
   "nav": {
     "orgLabel": "组织：{{org}}",
@@ -148,7 +150,25 @@
     "discussion": "讨论",
     "noComments": "暂无评论。",
     "addComment": "发表评论",
-    "commentFailed": "无法发表评论。"
+    "commentFailed": "无法发表评论。",
+    "revision": "修订版 {{version}}",
+    "criteriaTitle": "验收标准",
+    "criteriaEmpty": "当前修订版尚无验收标准。",
+    "criteriaEdit": "验收标准（每行一条）",
+    "criteriaSave": "保存验收标准",
+    "criteriaRequired": "请至少添加一条验收标准。",
+    "planTitle": "计划与 Agent",
+    "planMissing": "当前修订版尚无实现计划。",
+    "planDefaultBody": "按验收标准实现；必要时补充测试。",
+    "planFailed": "无法创建或接受计划。",
+    "agentTask": "按已接受计划实现本 Issue（reference 适配器）。",
+    "agentFailed": "无法启动 Agent 运行。",
+    "agentRespond": "发送输入",
+    "agentRespondPlaceholder": "回复 Agent…",
+    "deliveryTraceTitle": "交付关联",
+    "deliveryPrs": "{{count}} 个关联 PR",
+    "deliveryPipelines": "{{count}} 次流水线",
+    "deliveryDeployments": "{{count}} 次部署"
   },
   "sshKeys": {
     "title": "SSH 密钥",
@@ -162,6 +182,8 @@
   },
   "repoSettings": {
     "grantsTitle": "仓库授权",
-    "grantReader": "授予 reader"
+    "grantReader": "授予 reader",
+    "environmentsTitle": "部署环境",
+    "approvalRequired": "需审批"
   }
 }

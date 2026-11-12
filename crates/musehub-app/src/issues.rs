@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::list_cursor::{decode_issue_cursor, encode_issue_cursor};
+use crate::mcp::RepoAccess;
+use crate::mcp::contract_domain::{self, CriterionInput};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -95,6 +97,22 @@ async fn repo_assignee_id(
 }
 
 #[derive(Serialize)]
+pub struct AcceptanceCriterion {
+    pub ordinal: i32,
+    pub description: String,
+    pub verification_method: String,
+    pub required: bool,
+}
+
+#[derive(Serialize)]
+pub struct IssuePlanSummary {
+    pub id: Uuid,
+    pub version: i32,
+    pub state: String,
+    pub body: String,
+}
+
+#[derive(Serialize)]
 pub struct IssueDetail {
     pub id: Uuid,
     pub number: i64,
@@ -106,6 +124,10 @@ pub struct IssueDetail {
     pub assignee_handle: Option<String>,
     pub author_handle: String,
     pub close_reason: Option<String>,
+    pub current_revision_id: Option<Uuid>,
+    pub revision: Option<i32>,
+    pub criteria: Vec<AcceptanceCriterion>,
+    pub plan: Option<IssuePlanSummary>,
 }
 
 #[derive(Deserialize)]
@@ -213,12 +235,14 @@ pub async fn get_issue(
             Option<String>,
             Option<String>,
             String,
+            Option<Uuid>,
         ),
     >(
         "SELECT i.id, i.number, i.title, i.body, i.state, i.labels, i.assignee_id,
                 (SELECT handle FROM principals WHERE id = i.assignee_id),
                 i.close_reason,
-                (SELECT handle FROM principals WHERE id = i.author_id)
+                (SELECT handle FROM principals WHERE id = i.author_id),
+                i.current_revision_id
          FROM issues i WHERE i.repo_id = $1 AND i.number = $2",
     )
     .bind(repo_id)
@@ -236,10 +260,12 @@ pub async fn get_issue(
         assignee_handle,
         close_reason,
         author_handle,
+        current_revision_id,
     )) = row
     else {
         return Err(AppError::NotFound);
     };
+    let (revision, criteria, plan) = issue_revision_meta(&state.pool, current_revision_id).await?;
     Ok(Json(IssueDetail {
         id,
         number: num,
@@ -251,7 +277,127 @@ pub async fn get_issue(
         assignee_handle,
         author_handle,
         close_reason,
+        current_revision_id,
+        revision,
+        criteria,
+        plan,
     }))
+}
+
+async fn issue_revision_meta(
+    pool: &sqlx::PgPool,
+    revision_id: Option<Uuid>,
+) -> Result<
+    (
+        Option<i32>,
+        Vec<AcceptanceCriterion>,
+        Option<IssuePlanSummary>,
+    ),
+    AppError,
+> {
+    let Some(revision_id) = revision_id else {
+        return Ok((None, Vec::new(), None));
+    };
+    let rev_row = sqlx::query_as::<_, (i32,)>("SELECT revision FROM issue_revisions WHERE id = $1")
+        .bind(revision_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some((revision,)) = rev_row else {
+        return Ok((None, Vec::new(), None));
+    };
+    let crit_values = contract_domain::criteria_for_revision(pool, revision_id).await?;
+    let criteria: Vec<AcceptanceCriterion> = crit_values
+        .into_iter()
+        .filter_map(|v| {
+            Some(AcceptanceCriterion {
+                ordinal: v.get("ordinal")?.as_i64()? as i32,
+                description: v.get("description")?.as_str()?.to_string(),
+                verification_method: v.get("verification_method")?.as_str()?.to_string(),
+                required: v.get("required")?.as_bool()?,
+            })
+        })
+        .collect();
+    let plan_row = sqlx::query_as::<_, (Uuid, i32, String, String)>(
+        "SELECT id, version, state, body FROM implementation_plans
+         WHERE issue_revision_id = $1 ORDER BY version DESC LIMIT 1",
+    )
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await?;
+    let plan = plan_row.map(|(id, version, state, body)| IssuePlanSummary {
+        id,
+        version,
+        state,
+        body,
+    });
+    Ok((Some(revision), criteria, plan))
+}
+
+#[derive(Deserialize)]
+pub struct CriterionBody {
+    pub description: String,
+    #[serde(default = "default_verification")]
+    pub verification_method: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_verification() -> String {
+    "manual".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+pub struct PutCriteriaRequest {
+    pub expected_version: i32,
+    pub criteria: Vec<CriterionBody>,
+}
+
+pub async fn put_issue_criteria(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo, number)): Path<(String, String, i64)>,
+    Json(body): Json<PutCriteriaRequest>,
+) -> Result<Json<IssueDetail>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let issue =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
+            .bind(repo_id)
+            .bind(number)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((issue_id,)) = issue else {
+        return Err(AppError::NotFound);
+    };
+    let access = RepoAccess {
+        org_id,
+        repo_id,
+        org_slug: org.clone(),
+        repo_slug: repo.clone(),
+    };
+    let inputs: Vec<CriterionInput> = body
+        .criteria
+        .into_iter()
+        .map(|c| CriterionInput {
+            description: c.description,
+            verification_method: c.verification_method,
+            required: c.required,
+        })
+        .collect();
+    contract_domain::issue_criteria_replace(
+        &state,
+        &access,
+        principal_id,
+        issue_id,
+        body.expected_version,
+        &inputs,
+    )
+    .await?;
+    get_issue(State(state), headers, Path((org, repo, number))).await
 }
 
 pub async fn patch_issue(
