@@ -5,6 +5,11 @@ cd "$(dirname "$0")/.."
 
 command -v docker >/dev/null || { echo "pipeline_oci_product=blocked no docker" >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "pipeline_oci_product=blocked docker info" >&2; exit 1; }
+if ! getent group musehub-git >/dev/null 2>&1; then
+  sudo groupadd -r musehub-git
+fi
+export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
+export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
 
 chmod +x ./scripts/start-ci-registry.sh
 ./scripts/start-ci-registry.sh

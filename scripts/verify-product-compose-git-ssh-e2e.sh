@@ -83,16 +83,20 @@ wait_published_port || {
 }
 
 echo "=== compose git-ssh: run dir ACL ==="
-dc exec -T musehub-git-ssh sh -c '
-  d=/var/lib/musehub/git-ssh
-  test -f "$d/runtime.env"
-  stat -c "%a %U:%G" "$d" | grep -qE "^(2750|0750) root:git$"
-  stat -c "%a %U:%G" "$d/runtime.env" | grep -qE "^640 root:git$"
-  su -s /bin/sh git -c "test -x \"$d\""
-  su -s /bin/sh git -c "test -r \"$d/runtime.env\""
-  ! su -s /bin/sh git -c "test -w \"$d\""
-  ! su -s /bin/sh git -c "echo x >> \"$d/runtime.env\"" 2>/dev/null
-'
+SSH_RUN_DIR=/var/lib/musehub/git-ssh
+dc exec -T musehub-git-ssh test -f "${SSH_RUN_DIR}/runtime.env"
+dc exec -T musehub-git-ssh stat -c '%a %U:%G' "${SSH_RUN_DIR}" | grep -qE '^(2750|0750) root:git$'
+dc exec -T musehub-git-ssh stat -c '%a %U:%G' "${SSH_RUN_DIR}/runtime.env" | grep -qE '^640 root:git$'
+dc exec -T -u git musehub-git-ssh test -x "${SSH_RUN_DIR}"
+dc exec -T -u git musehub-git-ssh test -r "${SSH_RUN_DIR}/runtime.env"
+if dc exec -T -u git musehub-git-ssh test -w "${SSH_RUN_DIR}" 2>/dev/null; then
+  echo "compose git-ssh: git user must not have write on ${SSH_RUN_DIR}" >&2
+  exit 1
+fi
+if dc exec -T -u git musehub-git-ssh sh -c "echo x >> '${SSH_RUN_DIR}/runtime.env'" 2>/dev/null; then
+  echo "compose git-ssh: git user must not append runtime.env" >&2
+  exit 1
+fi
 
 COOKIE_JAR=$(mktemp)
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \

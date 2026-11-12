@@ -124,10 +124,14 @@ jobs:
       MUSEHUB_OCI_REGISTRY: 127.0.0.1:5000
       MUSEHUB_REQUIRE_PIPELINE_OCI: "1"
       MUSEHUB_COMPOSE_ADAPTER_MODE: runner
+      MUSEHUB_GIT_STORAGE_GROUP: musehub-git
+      MUSEHUB_GIT_STORAGE_SUDO_FALLBACK: "1"
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: shared git volume group (bare repo ACL)
+        run: getent group musehub-git >/dev/null || sudo groupadd -r musehub-git
       - name: pipeline OCI product acceptance
         run: |
           chmod +x ./scripts/verify-pipeline-oci-product-e2e.sh
