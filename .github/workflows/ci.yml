@@ -33,6 +33,7 @@ jobs:
       MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
       MUSEHUB_GIT_ROOT: /tmp/musehub-ci-git
       MUSEHUB_GIT_STORAGE_GROUP: musehub-git
+      MUSEHUB_GIT_STORAGE_SUDO_FALLBACK: "1"
       MUSEHUB_ARTIFACT_ROOT: /tmp/musehub-ci-artifacts
       MUSEHUB_SESSION_SECRET: ci-session-secret-not-for-production
       MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD: 'Ci-Bootstrap-Strong!2026'
