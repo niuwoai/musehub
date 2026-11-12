@@ -45,14 +45,10 @@ async fn legacy_bare_repo_migrated_to_group_shared_layout() {
         assert_ne!(meta.gid(), 0, "objects must be group-owned after migration");
         assert_ne!(meta.mode() & 0o020, 0, "objects must be group-writable");
     }
+    let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "musehub-git".into());
+    let objects = bare.join("objects").to_str().unwrap().to_string();
     let can_write = Command::new("sudo")
-        .args([
-            "-u",
-            "git",
-            "test",
-            "-w",
-            bare.join("objects").to_str().unwrap(),
-        ])
+        .args(["-n", "-u", "git", "-g", &group, "test", "-w", &objects])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);

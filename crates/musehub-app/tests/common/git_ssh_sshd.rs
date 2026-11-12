@@ -251,13 +251,7 @@ pub fn activate_git_storage_group_membership() {
         return;
     }
     groups.push(gid);
-    let rc = unsafe { libc::setgroups(groups.len(), groups.as_ptr()) };
-    if rc != 0 {
-        eprintln!(
-            "setgroups({group}) failed: {}",
-            std::io::Error::last_os_error()
-        );
-    }
+    let _ = unsafe { libc::setgroups(groups.len(), groups.as_ptr()) };
 }
 
 #[cfg(not(unix))]
