@@ -83,8 +83,15 @@ git_ssh_run() {
   (
     unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_HTTP_SANDBOX_PAT
     export GIT_TERMINAL_PROMPT=0
-    git -C "$GIT_DIR" "$@"
+    timeout 180 git -C "$GIT_DIR" "$@"
   ) 2>"$err_file" || status=$?
+  if [[ "$status" -eq 124 ]]; then
+    echo "git ssh timed out (180s): $*" >&2
+    dc logs musehub-git-ssh --tail=60 >&2 || true
+    dc logs musehub-server --tail=40 >&2 || true
+    rm -f "$err_file"
+    return 124
+  fi
   if [[ "$status" -ne 0 ]]; then
     echo "git ssh failed (exit $status): $(redact_git_output "$(cat "$err_file")")" >&2
     rm -f "$err_file"
@@ -245,7 +252,7 @@ git_http_auth_sandbox_begin "$PAT"
 SSH_URL="ssh://git@127.0.0.1:${MUSEHUB_GIT_SSH_PORT}/demo/${REPO_SLUG}.git"
 HTTP_URL="$(git_http_credential_free_url "http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}" demo "$REPO_SLUG")"
 
-export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
+export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
 
 GIT_DIR=$(mktemp -d)
 git_http_run "" clone "$SSH_URL" "$GIT_DIR"
