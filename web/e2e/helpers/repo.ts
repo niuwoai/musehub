@@ -97,15 +97,30 @@ export async function createRepoViaUi(page: Page): Promise<{
 }> {
   await ensureRepoListPage(page)
 
-  const createWait = page.waitForResponse((r) => demoReposCreatePost(r), { timeout: 60_000 })
+  let createPostSettled = false
+  const createWait = page.waitForResponse(
+    (r) => {
+      if (!demoReposCreatePost(r)) {
+        return false
+      }
+      createPostSettled = true
+      return true
+    },
+    { timeout: 60_000 },
+  )
+  const listWait = page.waitForResponse(
+    (r) => demoReposListGet(r) && createPostSettled,
+    { timeout: 60_000 },
+  )
   await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
-  const createResp = await createWait
+  const [createResp, listResp] = await Promise.all([createWait, listWait])
   await expectResponseOk(createResp, 'create demo repo')
-  const listResp = await page.waitForResponse((r) => demoReposListGet(r), { timeout: 60_000 })
   await expectResponseOk(listResp, 'refresh demo repos after create')
 
   const { slug } = (await createResp.json()) as { slug: string }
   expect(slug.length).toBeGreaterThan(0)
+  const listed = (await listResp.json()) as { slug: string }[]
+  expect(listed.some((r) => r.slug === slug)).toBe(true)
 
   await expect(page).toHaveURL(new RegExp(`/org/demo/repos/${slug}/issues`), { timeout: 15_000 })
   await ensureRepoListPage(page)

@@ -53,21 +53,31 @@ git_http_credential_free_url() {
   printf 'http://%s/git/%s/%s.git' "$host_port" "$org" "$repo"
 }
 
+GIT_HTTP_TIMEOUT_SEC="${GIT_HTTP_TIMEOUT_SEC:-180}"
+
 git_http_run() {
   local dir="${1:-}"; shift
   local err_file
   err_file=$(mktemp)
   local status=0
+  if ! command -v /usr/bin/timeout >/dev/null 2>&1; then
+    echo "git_http_run: /usr/bin/timeout required" >&2
+    return 1
+  fi
   if [[ -n "$dir" ]]; then
-    git -C "$dir" "$@" 2>"$err_file" || status=$?
+    /usr/bin/timeout -k 15 "${GIT_HTTP_TIMEOUT_SEC}" git -C "$dir" "$@" 2>"$err_file" || status=$?
   else
-    git "$@" 2>"$err_file" || status=$?
+    /usr/bin/timeout -k 15 "${GIT_HTTP_TIMEOUT_SEC}" git "$@" 2>"$err_file" || status=$?
   fi
   if [[ "$status" -ne 0 ]]; then
     local err
     err="$(redact_git_output "$(cat "$err_file")")"
     rm -f "$err_file"
-    echo "git failed (exit $status): $err" >&2
+    if [[ "$status" -eq 124 ]]; then
+      echo "git failed (timeout after ${GIT_HTTP_TIMEOUT_SEC}s): $err" >&2
+    else
+      echo "git failed (exit $status): $err" >&2
+    fi
     return "$status"
   fi
   rm -f "$err_file"

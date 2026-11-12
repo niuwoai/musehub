@@ -155,7 +155,11 @@ log_bare_repo_transport_state() {
 }
 
 assert_port_forward_denied() {
-  local err_file pid port_local=19999 w=0 traffic=0
+  local err_file pid port_local=19999 w=0 traffic=0 nc_out
+  if ! command -v nc >/dev/null 2>&1; then
+    echo "compose git-ssh: nc required for port-forward denial probe" >&2
+    return 1
+  fi
   err_file=$(mktemp)
   compose_git_timeout ssh "${GIT_SSH_CLI_OPTS[@]}" \
     -o ExitOnForwardFailure=yes \
@@ -166,12 +170,13 @@ assert_port_forward_denied() {
     if ! kill -0 "$pid" 2>/dev/null; then
       break
     fi
-    if command -v nc >/dev/null 2>&1; then
-      if echo | nc -w 1 127.0.0.1 "$port_local" >/dev/null 2>&1; then
-        traffic=1
-        break
-      fi
+    nc_out=$(mktemp)
+    if echo | nc -w 1 127.0.0.1 "$port_local" >"$nc_out" 2>&1; then
+      traffic=1
+      rm -f "$nc_out"
+      break
     fi
+    rm -f "$nc_out"
     sleep 1
     w=$((w + 1))
   done
@@ -190,11 +195,15 @@ assert_port_forward_denied() {
     echo "compose git-ssh: local forward port ${port_local} accepted traffic" >&2
     return 1
   fi
+  if [[ -z "${msg// }" ]]; then
+    echo "compose git-ssh: port forward negative test requires ssh stderr after nc probe" >&2
+    return 1
+  fi
   if grep -qiE 'administratively prohibited|port forwarding|forwarding disabled|Permission denied' <<<"$msg"; then
-    echo "compose git-ssh: port forward denied as expected" >&2
+    echo "compose git-ssh: port forward denied as expected (nc probe traffic=${traffic})" >&2
     return 0
   fi
-  echo "compose git-ssh: port forward negative test inconclusive (sanitized): ${msg:-<empty>}" >&2
+  echo "compose git-ssh: port forward negative test inconclusive (sanitized): ${msg}" >&2
   return 1
 }
 
