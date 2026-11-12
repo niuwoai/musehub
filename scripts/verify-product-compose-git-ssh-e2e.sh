@@ -32,7 +32,6 @@ wait_gateway_ready() {
 FEATURE_BRANCH="feature/compose-roundtrip"
 STORAGE_KEY=""
 TOKEN_ID=""
-COOKIE_JAR=""
 KEY_DIR=""
 GIT_DIR=""
 HTTP_DIR=""
