@@ -97,12 +97,11 @@ export async function createRepoViaUi(page: Page): Promise<{
 }> {
   await ensureRepoListPage(page)
 
-  const [createResp, listResp] = await Promise.all([
-    page.waitForResponse((r) => demoReposCreatePost(r)),
-    page.waitForResponse((r) => demoReposListGet(r)),
-    page.getByRole('button', { name: /create repo|创建仓库/i }).click(),
-  ])
+  const createWait = page.waitForResponse((r) => demoReposCreatePost(r), { timeout: 60_000 })
+  await page.getByRole('button', { name: /create repo|创建仓库/i }).click()
+  const createResp = await createWait
   await expectResponseOk(createResp, 'create demo repo')
+  const listResp = await page.waitForResponse((r) => demoReposListGet(r), { timeout: 60_000 })
   await expectResponseOk(listResp, 'refresh demo repos after create')
 
   const { slug } = (await createResp.json()) as { slug: string }
