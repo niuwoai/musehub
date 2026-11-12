@@ -157,6 +157,7 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
 
     musehub_app::git_ssh_runtime::ensure_shared_git_storage_root(&f.git_root)
         .expect("shared git storage root before HTTP");
+    // SSH receive-pack writes refs as `git`; HTTP receive-pack runs via `sg musehub-git`.
     let bare_s = bare.to_str().unwrap();
     assert!(
         std::process::Command::new("sudo")
