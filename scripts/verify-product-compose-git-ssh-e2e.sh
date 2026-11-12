@@ -35,6 +35,7 @@ STORAGE_KEY=""
 TOKEN_ID=""
 KEY_DIR=""
 GIT_DIR=""
+GIT_SSH2=""
 HTTP_DIR=""
 BAD_DIR=""
 
@@ -62,6 +63,7 @@ cleanup() {
   git_http_auth_sandbox_end
   [[ -n "${KEY_DIR:-}" ]] && rm -rf "$KEY_DIR"
   [[ -n "${GIT_DIR:-}" ]] && rm -rf "$GIT_DIR" "${GIT_DIR}.bad" 2>/dev/null || true
+  [[ -n "${GIT_SSH2:-}" ]] && rm -rf "$GIT_SSH2" 2>/dev/null || true
   [[ -n "${HTTP_DIR:-}" ]] && rm -rf "$HTTP_DIR"
   [[ -n "${BAD_DIR:-}" ]] && rm -rf "$BAD_DIR"
   # Embedded in product-stack-e2e: COOKIE_JAR is owned by the parent script.
@@ -311,14 +313,25 @@ OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
 [[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
-git_ssh_run fetch origin "$FEATURE_BRANCH"
-git_ssh_run checkout "$FEATURE_BRANCH"
-git_ssh_run merge --ff-only "origin/${FEATURE_BRANCH}"
-echo "ssh-3" >>"$GIT_DIR/roundtrip.txt"
-git -C "$GIT_DIR" add roundtrip.txt
-git -C "$GIT_DIR" commit -m ssh-3 --no-gpg-sign
-git_ssh_run push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
-OID_SSH_3=$(git -C "$GIT_DIR" rev-parse HEAD)
+# Re-clone over SSH after HTTP write (same branch); avoids PAT global config + stale worktree edge cases.
+GIT_SSH2=$(mktemp -d)
+(
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_HTTP_SANDBOX_PAT
+  export GIT_TERMINAL_PROMPT=0
+  timeout 180 git clone "$SSH_URL" "$GIT_SSH2"
+)
+git -C "$GIT_SSH2" config user.email ci@musehub.test
+git -C "$GIT_SSH2" config user.name ci
+git -C "$GIT_SSH2" checkout "$FEATURE_BRANCH"
+echo "ssh-3" >>"$GIT_SSH2/roundtrip.txt"
+git -C "$GIT_SSH2" add roundtrip.txt
+git -C "$GIT_SSH2" commit -m ssh-3 --no-gpg-sign
+(
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_HTTP_SANDBOX_PAT
+  export GIT_TERMINAL_PROMPT=0
+  timeout 180 git -C "$GIT_SSH2" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+)
+OID_SSH_3=$(git -C "$GIT_SSH2" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_3" ]]
 [[ "$OID_SSH_3" != "$OID_HTTP_2" ]]
 
