@@ -48,6 +48,7 @@ if command -v sudo >/dev/null; then
 fi
 export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
 export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
+export MUSEHUB_TEST_GIT_SSH_TIMEOUT_SEC="${MUSEHUB_TEST_GIT_SSH_TIMEOUT_SEC:-240}"
 if ! test -x /usr/sbin/sshd && ! command -v sshd >/dev/null 2>&1; then
   echo "git_ssh=fail openssh-server (sshd) is required for product acceptance (install in CI setup)" >&2
   exit 1

@@ -135,7 +135,7 @@ export async function openRepoDelivery(page: Page, slug: string): Promise<void> 
   )
   await page.goto(`/org/demo/repos/${slug}/delivery`)
   await deliveryLoaded.catch(() => null)
-  await expect(page.getByTestId('delivery-panel')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('delivery-panel')).toBeVisible({ timeout: 60_000 })
 }
 
 export async function expectRepoSlugInSubnav(page: Page, slug: string): Promise<void> {

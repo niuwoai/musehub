@@ -155,7 +155,16 @@ impl GitHttpPatSandbox {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
             .args(args);
-        run_bounded(cmd, git_timeout_secs()).into_output()
+        let bounded = run_bounded(cmd, git_timeout_secs());
+        let mut out = bounded.into_output();
+        if bounded.timed_out {
+            let note = format!(
+                "\n[git subprocess timed out after {}s]\n",
+                git_timeout_secs()
+            );
+            out.stderr.extend_from_slice(note.as_bytes());
+        }
+        out
     }
 
     pub fn run_git_ok(&self, cwd: Option<&Path>, args: &[&str]) {
