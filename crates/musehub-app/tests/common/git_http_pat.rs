@@ -156,8 +156,9 @@ impl GitHttpPatSandbox {
             .env("GIT_ASKPASS", "")
             .args(args);
         let bounded = run_bounded(cmd, git_timeout_secs());
+        let timed_out = bounded.timed_out;
         let mut out = bounded.into_output();
-        if bounded.timed_out {
+        if timed_out {
             let note = format!(
                 "\n[git subprocess timed out after {}s]\n",
                 git_timeout_secs()
