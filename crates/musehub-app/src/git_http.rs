@@ -96,42 +96,72 @@ fn seed_empty_main_branch(bare: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Proxies a Git smart-HTTP request to `git http-backend`.
+fn storage_group_http_backend_command(
+    git_root: &str,
+    request_method: &str,
+    path_info: &str,
+    query: &str,
+    content_type: &str,
+    content_length: usize,
+    remote_user: &str,
+) -> Command {
+    let content_length = content_length.to_string();
+    let mut cmd = if let Some(group) = std::env::var("MUSEHUB_GIT_STORAGE_GROUP")
+        .ok()
+        .filter(|g| !g.is_empty())
+    {
+        let mut wrapped = Command::new("sg");
+        wrapped.arg(group).arg("-c").arg("git http-backend");
+        wrapped
+    } else {
+        let mut direct = Command::new("git");
+        direct.arg("http-backend");
+        direct
+    };
+    cmd.env("GIT_HTTP_EXPORT_ALL", "1")
+        .env("GIT_PROJECT_ROOT", git_root)
+        .env("REQUEST_METHOD", request_method)
+        .env("PATH_INFO", path_info)
+        .env("QUERY_STRING", query)
+        .env("CONTENT_TYPE", content_type)
+        .env("CONTENT_LENGTH", content_length)
+        .env("REMOTE_USER", remote_user);
+    cmd
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn git_http_backend(
+fn run_git_http_backend_blocking(
     method: &Method,
     storage_key: &uuid::Uuid,
     git_suffix: &str,
     query: &str,
-    headers: &HeaderMap,
-    body: Bytes,
+    content_type: &str,
+    body: &[u8],
     git_root: &Path,
     remote_user: &str,
 ) -> Result<Response, AppError> {
     let path_info = format!("/{}.git{}", storage_key, git_suffix);
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let mut child = Command::new("git")
-        .arg("http-backend")
-        .env("GIT_HTTP_EXPORT_ALL", "1")
-        .env("GIT_PROJECT_ROOT", git_root)
-        .env("REQUEST_METHOD", method.as_str())
-        .env("PATH_INFO", &path_info)
-        .env("QUERY_STRING", query)
-        .env("CONTENT_TYPE", content_type)
-        .env("CONTENT_LENGTH", body.len().to_string())
-        .env("REMOTE_USER", remote_user)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| AppError::Other(error.to_string()))?;
+    let git_root_s = git_root
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 git root".into()))?;
+    let mut child = storage_group_http_backend_command(
+        git_root_s,
+        method.as_str(),
+        &path_info,
+        query,
+        content_type,
+        body.len(),
+        remote_user,
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|error| AppError::Other(error.to_string()))?;
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         stdin
-            .write_all(&body)
+            .write_all(body)
             .map_err(|error| AppError::Other(error.to_string()))?;
     }
     let output = child
@@ -152,6 +182,46 @@ pub async fn git_http_backend(
     }
     let body = Body::from(body_start);
     Ok(response.body(body).unwrap())
+}
+
+/// Proxies a Git smart-HTTP request to `git http-backend`.
+#[allow(clippy::too_many_arguments)]
+pub async fn git_http_backend(
+    method: &Method,
+    storage_key: &uuid::Uuid,
+    git_suffix: &str,
+    query: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+    git_root: &Path,
+    remote_user: &str,
+) -> Result<Response, AppError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let method = method.clone();
+    let storage_key = *storage_key;
+    let git_suffix = git_suffix.to_string();
+    let query = query.to_string();
+    let body_vec = body.to_vec();
+    let git_root = git_root.to_path_buf();
+    let remote_user = remote_user.to_string();
+    tokio::task::spawn_blocking(move || {
+        run_git_http_backend_blocking(
+            &method,
+            &storage_key,
+            &git_suffix,
+            &query,
+            &content_type,
+            &body_vec,
+            &git_root,
+            &remote_user,
+        )
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))?
 }
 
 fn parse_cgi_output(stdout: &[u8]) -> Result<(u16, Vec<(String, String)>, Bytes), AppError> {

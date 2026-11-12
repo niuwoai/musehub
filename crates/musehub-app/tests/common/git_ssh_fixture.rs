@@ -30,6 +30,8 @@ pub async fn git_ssh_fixture(repo_prefix: &str) -> GitSshFixture {
     let pool = super::migrated_pool().await;
     let database_url = std::env::var("MUSEHUB_TEST_DATABASE_URL").expect("db url");
     let git_root = tempfile::tempdir().expect("git root").path().to_path_buf();
+    musehub_app::git_ssh_runtime::ensure_shared_git_storage_root(&git_root)
+        .expect("shared git storage root");
     let boot = super::bootstrap_password();
     let app = super::product_app(pool.clone(), &git_root, &boot).await;
     let cookie = super::login_cookie(&app, "admin", &boot).await;

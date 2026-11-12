@@ -5,8 +5,12 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+use axum::body::Body;
+use axum::http::{header, Request, StatusCode};
+use base64::Engine;
 use musehub_app::bare_repo_path;
 use tokio::net::TcpListener;
+use tower::ServiceExt;
 
 use common::git_http_pat::GitHttpPatSandbox;
 use common::git_ssh_fixture::git_ssh_fixture;
@@ -42,9 +46,9 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = f.app.clone();
+    let serve_app = f.app.clone();
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(listener, serve_app).await;
     });
 
     let repo_id: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM repositories WHERE slug = $1")
@@ -60,8 +64,8 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
         &["repo:read", "repo:write"],
     )
     .await;
-    let http_url =
-        GitHttpPatSandbox::credential_free_url(&format!("http://{addr}"), "demo", &f.repo);
+    let http_base = format!("http://{addr}");
+    let http_url = GitHttpPatSandbox::credential_free_url(&http_base, "demo", &f.repo);
 
     let storage_row: (uuid::Uuid,) =
         sqlx::query_as("SELECT storage_key FROM repositories WHERE slug = $1")
@@ -151,8 +155,64 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
     );
     let oid_ssh_1 = ref_oid(&bare, &format!("refs/heads/{feature}"));
 
+    musehub_app::git_ssh_runtime::ensure_shared_git_storage_root(&f.git_root)
+        .expect("shared git storage root before HTTP");
+    let bare_s = bare.to_str().unwrap();
+    assert!(
+        std::process::Command::new("sudo")
+            .args(["-n", "chgrp", "-R", "musehub-git", bare_s])
+            .status()
+            .expect("sudo chgrp")
+            .success(),
+        "chgrp bare repo after SSH"
+    );
+    assert!(
+        std::process::Command::new("sudo")
+            .args(["-n", "chmod", "-R", "g+rwX", bare_s])
+            .status()
+            .expect("sudo chmod")
+            .success(),
+        "chmod bare repo after SSH"
+    );
+    let whoami = std::env::var("USER").unwrap_or_else(|_| "ubuntu".into());
+    assert!(
+        std::process::Command::new("sudo")
+            .args([
+                "-n",
+                "chown",
+                "-R",
+                &format!("{whoami}:musehub-git"),
+                &format!("{bare_s}/refs"),
+            ])
+            .status()
+            .expect("sudo chown refs")
+            .success(),
+        "chown refs for shared HTTP receive-pack"
+    );
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", pat.pat));
+    let refs = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/git/demo/{}.git/info/refs?service=git-upload-pack",
+                    f.repo
+                ))
+                .header(header::AUTHORIZATION, format!("Basic {basic}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot refs");
+    assert_eq!(
+        refs.status(),
+        StatusCode::OK,
+        "in-process git upload-pack advertisement failed"
+    );
     let http_work = tempfile::tempdir().unwrap();
-    pat.clone_repo(&http_url, http_work.path());
+    pat.clone_repo_async(&http_url, http_work.path()).await;
     Command::new("git")
         .current_dir(http_work.path())
         .args(["checkout", feature])
@@ -178,12 +238,32 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
         ])
         .status()
         .unwrap();
-    let oid_http_2 = pat.push_branch(http_work.path(), feature);
+    let oid_http_2 = pat.push_branch_async(http_work.path(), feature).await;
     assert_ne!(oid_http_2, oid_ssh_1);
     assert_eq!(ref_oid(&bare, &format!("refs/heads/{feature}")), oid_http_2);
 
-    pat.fetch_branch(ssh_work.path(), feature);
-    pat.merge_ff_only(ssh_work.path(), feature);
+    let fetch = git_ssh_cmd_in(
+        &f.priv_key,
+        f.sshd.port,
+        Some(ssh_work.path()),
+        &["fetch", "origin", feature],
+    );
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let merge = git_ssh_cmd_in(
+        &f.priv_key,
+        f.sshd.port,
+        Some(ssh_work.path()),
+        &["merge", "--ff-only", &format!("origin/{feature}")],
+    );
+    assert!(
+        merge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
     std::fs::write(ssh_work.path().join("alt.txt"), "ssh-1\nhttp-2\nssh-3\n").unwrap();
     Command::new("git")
         .current_dir(ssh_work.path())

@@ -2,10 +2,21 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
 
 use super::git_ssh_util::{git_timeout_secs, run_bounded};
+
+fn shell_word(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%/=".contains(c))
+    {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::Body;
@@ -71,7 +82,7 @@ impl GitHttpPatSandbox {
         std::fs::write(
             &config_path,
             format!(
-                "[credential]\n\thelper =\n[http]\n\textraHeader = Authorization: Basic {basic}\n"
+                "[credential]\n\thelper =\n[http]\n\texpect = false\n\textraHeader = Authorization: Basic {basic}\n"
             ),
         )
         .unwrap();
@@ -124,6 +135,18 @@ impl GitHttpPatSandbox {
         assert!(!blob.contains(&basic), "leaked basic auth");
     }
 
+    fn shell_for_blocking(&self) -> Self {
+        Self {
+            pat: self.pat.clone(),
+            token_id: self.token_id,
+            config_dir: self.config_dir.clone(),
+            config_path: self.config_path.clone(),
+            cookie: String::new(),
+            app: axum::Router::new(),
+            revoked: AtomicBool::new(true),
+        }
+    }
+
     pub async fn revoke(&self) {
         if self.revoked.swap(true, Ordering::SeqCst) {
             return;
@@ -144,17 +167,71 @@ impl GitHttpPatSandbox {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
-    pub fn run_git(&self, cwd: Option<&Path>, args: &[&str]) -> Output {
-        let mut cmd = Command::new("git");
+    fn http_extra_header_config(&self) -> String {
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", self.pat));
+        format!("http.extraHeader=Authorization: Basic {basic}")
+    }
+
+    fn build_git_command(&self, cwd: Option<&Path>, args: &[&str]) -> Command {
+        let header_cfg = self.http_extra_header_config();
+        let git_global = self.config_path.to_str().expect("cfg");
+        let mut inner = Command::new("git");
         if let Some(d) = cwd {
-            cmd.current_dir(d);
+            inner.current_dir(d);
         }
-        cmd.env("GIT_CONFIG_GLOBAL", self.config_path.to_str().expect("cfg"))
+        inner
+            .args(["-c", &header_cfg])
+            .env("GIT_CONFIG_GLOBAL", git_global)
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
-            .args(args);
+            .env_remove("GIT_TRACE")
+            .env_remove("GIT_TRACE_PACKET")
+            .env_remove("GIT_CURL_VERBOSE");
+        if std::env::var("MUSEHUB_TEST_GIT_HTTP_TRACE").is_ok() {
+            inner
+                .env("GIT_TRACE", "1")
+                .env("GIT_TRACE_PACKET", "1")
+                .env("GIT_CURL_VERBOSE", "1");
+        }
+        inner.args(args);
+        if let Ok(group) = std::env::var("MUSEHUB_GIT_STORAGE_GROUP") {
+            if !group.is_empty()
+                && Command::new("sg")
+                    .arg("--help")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            {
+                let mut script = format!(
+                    "export GIT_CONFIG_GLOBAL={} GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=",
+                    shell_word(git_global),
+                );
+                if let Some(d) = cwd {
+                    script.push_str(&format!("; cd {}", shell_word(&d.display().to_string())));
+                }
+                script.push_str(&format!("; git -c {}", shell_word(&header_cfg)));
+                for arg in args {
+                    script.push_str(&format!(" {}", shell_word(arg)));
+                }
+                if std::env::var("MUSEHUB_TEST_GIT_HTTP_TRACE").is_ok() {
+                    script = format!(
+                        "export GIT_TRACE=1 GIT_TRACE_PACKET=1 GIT_CURL_VERBOSE=1; {script}"
+                    );
+                }
+                let mut cmd = Command::new("sg");
+                cmd.arg(&group).arg("-c").arg(script);
+                return cmd;
+            }
+        }
+        inner
+    }
+
+    pub fn run_git(&self, cwd: Option<&Path>, args: &[&str]) -> Output {
+        let cmd = self.build_git_command(cwd, args);
         let bounded = run_bounded(cmd, git_timeout_secs());
         let timed_out = bounded.timed_out;
         let mut out = bounded.into_output();
@@ -187,6 +264,18 @@ impl GitHttpPatSandbox {
         format!("{http_base}/git/{org}/{repo}.git")
     }
 
+    /// Loopback-only: git subprocesses may ignore `http.extraHeader` for some hosts;
+    /// embed PAT in URL for alternating HTTP/SSH e2e (never log or persist).
+    pub fn loopback_authenticated_url(http_base: &str, org: &str, repo: &str, pat: &str) -> String {
+        let host = http_base
+            .strip_prefix("http://")
+            .or_else(|| http_base.strip_prefix("https://"))
+            .unwrap_or(http_base);
+        let user = urlencoding::encode("admin");
+        let pass = urlencoding::encode(pat);
+        format!("http://{user}:{pass}@{host}/git/{org}/{repo}.git")
+    }
+
     pub fn clone_repo(&self, url: &str, dest: &Path) {
         self.run_git_ok(None, &["clone", url, dest.to_str().unwrap()]);
         let cfg = dest.join(".git/config");
@@ -196,6 +285,16 @@ impl GitHttpPatSandbox {
             !body.contains("extraHeader"),
             "global auth must not leak into repo config"
         );
+    }
+
+    /// Git subprocess polls block a Tokio worker; run clone off the async pool so axum can serve.
+    pub async fn clone_repo_async(&self, url: &str, dest: &Path) {
+        let url = url.to_string();
+        let dest = dest.to_path_buf();
+        let sandbox = self.shell_for_blocking();
+        tokio::task::spawn_blocking(move || sandbox.clone_repo(&url, &dest))
+            .await
+            .expect("clone join")
     }
 
     pub fn commit_all(&self, work: &Path, msg: &str) {
@@ -233,6 +332,33 @@ impl GitHttpPatSandbox {
             Some(work),
             &["merge", "--ff-only", &format!("origin/{branch}")],
         );
+    }
+
+    pub async fn push_branch_async(&self, work: &Path, branch: &str) -> String {
+        let work = work.to_path_buf();
+        let branch = branch.to_string();
+        let sandbox = self.shell_for_blocking();
+        tokio::task::spawn_blocking(move || sandbox.push_branch(&work, &branch))
+            .await
+            .expect("push join")
+    }
+
+    pub async fn fetch_branch_async(&self, work: &Path, branch: &str) {
+        let work = work.to_path_buf();
+        let branch = branch.to_string();
+        let sandbox = self.shell_for_blocking();
+        tokio::task::spawn_blocking(move || sandbox.fetch_branch(&work, &branch))
+            .await
+            .expect("fetch join")
+    }
+
+    pub async fn merge_ff_only_async(&self, work: &Path, branch: &str) {
+        let work = work.to_path_buf();
+        let branch = branch.to_string();
+        let sandbox = self.shell_for_blocking();
+        tokio::task::spawn_blocking(move || sandbox.merge_ff_only(&work, &branch))
+            .await
+            .expect("merge join")
     }
 }
 

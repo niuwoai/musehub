@@ -219,7 +219,49 @@ pub fn ensure_git_storage_group() {
     }
     std::env::set_var("MUSEHUB_GIT_STORAGE_GROUP", "musehub-git");
     std::env::set_var("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK", "1");
+    activate_git_storage_group_membership();
 }
+
+/// `usermod -aG` does not refresh the current process; add the storage GID for HTTP git writes.
+#[cfg(unix)]
+pub fn activate_git_storage_group_membership() {
+    let group =
+        std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "musehub-git".to_string());
+    let gid_out = match Command::new("getent").args(["group", &group]).output() {
+        Ok(out) if out.status.success() => out,
+        _ => return,
+    };
+    let line = String::from_utf8_lossy(&gid_out.stdout);
+    let Some(gid) = line
+        .split(':')
+        .nth(2)
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    let groups_out = match Command::new("id").arg("-G").output() {
+        Ok(out) if out.status.success() => out,
+        _ => return,
+    };
+    let mut groups: Vec<u32> = String::from_utf8_lossy(&groups_out.stdout)
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if groups.contains(&gid) {
+        return;
+    }
+    groups.push(gid);
+    let rc = unsafe { libc::setgroups(groups.len(), groups.as_ptr()) };
+    if rc != 0 {
+        eprintln!(
+            "setgroups({group}) failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+pub fn activate_git_storage_group_membership() {}
 
 pub fn ensure_git_os_user() {
     ensure_git_storage_group();

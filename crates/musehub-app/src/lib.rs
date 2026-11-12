@@ -6,7 +6,7 @@ pub mod agent_adapter;
 pub mod agent_pr_fix;
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
-pub use git_http::{bare_repo_path, init_bare_repository};
+pub use git_http::{apply_bare_repo_group_acl, bare_repo_path, init_bare_repository};
 mod artifacts;
 mod audit;
 mod auth;
