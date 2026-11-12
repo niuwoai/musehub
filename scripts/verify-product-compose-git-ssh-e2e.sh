@@ -88,7 +88,8 @@ run_dir_mode="$(dc exec -T musehub-git-ssh stat -c %a "${SSH_RUN_DIR}")"
 run_dir_own="$(dc exec -T musehub-git-ssh stat -c %U:%G "${SSH_RUN_DIR}")"
 run_dir_mode="${run_dir_mode//$'\r'/}"
 run_dir_own="${run_dir_own//$'\r'/}"
-[[ "$run_dir_mode" =~ ^(2750|0750)$ && "$run_dir_own" == root:git ]] || {
+# stat(1) may print 750/2750 without a leading 0 (octal 0750 / 2750).
+[[ "$run_dir_mode" =~ ^(2750|0750|750)$ && "$run_dir_own" == root:git ]] || {
   echo "compose git-ssh: bad run dir ACL (want 2750|0750 root:git, got ${run_dir_mode} ${run_dir_own})" >&2
   exit 1
 }
