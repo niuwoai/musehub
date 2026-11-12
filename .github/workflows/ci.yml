@@ -91,6 +91,7 @@ jobs:
         env:
           MUSEHUB_REQUIRE_GIT_SSH: "1"
           MUSEHUB_GIT_SSH_BIN: ${{ github.workspace }}/target/debug/musehub-git-ssh
+          MUSEHUB_GIT_STORAGE_SUDO_FALLBACK: "1"
         run: chmod +x ./scripts/verify-product-acceptance.sh && ./scripts/verify-product-acceptance.sh
       - name: backup restore verification
         run: chmod +x ./scripts/verify-backup-restore.sh && ./scripts/verify-backup-restore.sh

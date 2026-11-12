@@ -21,7 +21,7 @@ command -v /usr/bin/timeout >/dev/null || { echo "/usr/bin/timeout required" >&2
 COMPOSE_GIT_TIMEOUT_SEC="${COMPOSE_GIT_TIMEOUT_SEC:-180}"
 
 compose_git_timeout() {
-  /usr/bin/timeout -k 15 "${COMPOSE_GIT_TIMEOUT_SEC}"
+  /usr/bin/timeout -k 15 "${COMPOSE_GIT_TIMEOUT_SEC}" "$@"
 }
 
 wait_gateway_ready() {
