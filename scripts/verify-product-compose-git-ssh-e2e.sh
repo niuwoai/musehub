@@ -76,6 +76,24 @@ remote_ref_oid() {
   dc exec -T musehub-server git --git-dir="/var/lib/musehub/git/${STORAGE_KEY}.git" rev-parse "$ref"
 }
 
+git_ssh_run() {
+  local err_file status
+  err_file=$(mktemp)
+  status=0
+  (
+    unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_HTTP_SANDBOX_PAT
+    export GIT_TERMINAL_PROMPT=0
+    git -C "$GIT_DIR" "$@"
+  ) 2>"$err_file" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    echo "git ssh failed (exit $status): $(redact_git_output "$(cat "$err_file")")" >&2
+    rm -f "$err_file"
+    return "$status"
+  fi
+  rm -f "$err_file"
+  return 0
+}
+
 echo "=== compose git-ssh: wait published port ${MUSEHUB_GIT_SSH_PORT} ==="
 wait_published_port() {
   if command -v ss >/dev/null 2>&1; then
@@ -227,7 +245,7 @@ git_http_auth_sandbox_begin "$PAT"
 SSH_URL="ssh://git@127.0.0.1:${MUSEHUB_GIT_SSH_PORT}/demo/${REPO_SLUG}.git"
 HTTP_URL="$(git_http_credential_free_url "http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}" demo "$REPO_SLUG")"
 
-export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
+export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i $KEY_DIR/id_ed25519 -p ${MUSEHUB_GIT_SSH_PORT}"
 
 GIT_DIR=$(mktemp -d)
 git_http_run "" clone "$SSH_URL" "$GIT_DIR"
@@ -269,7 +287,7 @@ git -C "$GIT_DIR" checkout -B "$FEATURE_BRANCH"
 echo "ssh-1" >"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
 git -C "$GIT_DIR" commit -m ssh-1 --no-gpg-sign
-git_http_run "$GIT_DIR" push -u origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+git_ssh_run push -u origin "HEAD:refs/heads/${FEATURE_BRANCH}"
 OID_SSH_1=$(git -C "$GIT_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_1" ]]
 
@@ -286,13 +304,13 @@ OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
 [[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
-git_http_run "$GIT_DIR" fetch origin "$FEATURE_BRANCH"
-git_http_run "$GIT_DIR" checkout "$FEATURE_BRANCH"
-git_http_run "$GIT_DIR" merge --ff-only "origin/${FEATURE_BRANCH}"
+git_ssh_run fetch origin "$FEATURE_BRANCH"
+git_ssh_run checkout "$FEATURE_BRANCH"
+git_ssh_run merge --ff-only "origin/${FEATURE_BRANCH}"
 echo "ssh-3" >>"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
 git -C "$GIT_DIR" commit -m ssh-3 --no-gpg-sign
-git_http_run "$GIT_DIR" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+git_ssh_run push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
 OID_SSH_3=$(git -C "$GIT_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_3" ]]
 [[ "$OID_SSH_3" != "$OID_HTTP_2" ]]
