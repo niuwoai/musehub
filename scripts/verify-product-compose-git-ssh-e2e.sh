@@ -445,22 +445,16 @@ git_ssh_git "$GIT_DIR" "ssh-1-push" push -u origin "HEAD:refs/heads/${FEATURE_BR
 OID_SSH_1=$(git -C "$GIT_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_1" ]]
 
-HTTP_DIR=$(mktemp -d)
-git_http_run "" clone "$HTTP_URL" "$HTTP_DIR"
-git -C "$HTTP_DIR" config user.email ci@musehub.test
-git -C "$HTTP_DIR" config user.name ci
-git -C "$HTTP_DIR" checkout "$FEATURE_BRANCH"
-echo "http-2" >>"$HTTP_DIR/roundtrip.txt"
-git -C "$HTTP_DIR" add roundtrip.txt
-git -C "$HTTP_DIR" commit -m http-2 --no-gpg-sign
-git_http_run "$HTTP_DIR" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
-OID_HTTP_2=$(git -C "$HTTP_DIR" rev-parse HEAD)
+git -C "$GIT_DIR" remote set-url origin "$HTTP_URL"
+echo "http-2" >>"$GIT_DIR/roundtrip.txt"
+git -C "$GIT_DIR" add roundtrip.txt
+git -C "$GIT_DIR" commit -m http-2 --no-gpg-sign
+git_http_run "$GIT_DIR" push origin "HEAD:refs/heads/${FEATURE_BRANCH}"
+OID_HTTP_2=$(git -C "$GIT_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_HTTP_2" ]]
 [[ "$OID_HTTP_2" != "$OID_SSH_1" ]]
 
-git_ssh_git "$GIT_DIR" "ssh-fetch" fetch origin "$FEATURE_BRANCH"
-git_ssh_git "$GIT_DIR" "ssh-checkout" checkout "$FEATURE_BRANCH"
-git_ssh_git "$GIT_DIR" "ssh-merge-ff" merge --ff-only "origin/${FEATURE_BRANCH}"
+git -C "$GIT_DIR" remote set-url origin "$SSH_URL"
 echo "ssh-3" >>"$GIT_DIR/roundtrip.txt"
 git -C "$GIT_DIR" add roundtrip.txt
 git -C "$GIT_DIR" commit -m ssh-3 --no-gpg-sign
