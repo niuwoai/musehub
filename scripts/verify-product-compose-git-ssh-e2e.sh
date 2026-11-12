@@ -64,7 +64,10 @@ cleanup() {
   [[ -n "${GIT_DIR:-}" ]] && rm -rf "$GIT_DIR" "${GIT_DIR}.bad" 2>/dev/null || true
   [[ -n "${HTTP_DIR:-}" ]] && rm -rf "$HTTP_DIR"
   [[ -n "${BAD_DIR:-}" ]] && rm -rf "$BAD_DIR"
-  [[ -n "${COOKIE_JAR:-}" ]] && rm -f "$COOKIE_JAR"
+  # Embedded in product-stack-e2e: COOKIE_JAR is owned by the parent script.
+  if [[ -z "${MUSEHUB_STACK_DC:-}" ]] && [[ -n "${COOKIE_JAR:-}" ]]; then
+    rm -f "$COOKIE_JAR"
+  fi
 }
 trap cleanup EXIT
 
@@ -125,10 +128,39 @@ fi
 
 wait_gateway_ready
 
-COOKIE_JAR=$(mktemp)
-curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
-  "$BASE/api/v1/auth/login" | jq -e '.ok == true' >/dev/null
+compose_git_ssh_login() {
+  local tmp code body
+  tmp=$(mktemp)
+  for _ in $(seq 1 30); do
+    code=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
+      -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
+      -o "$tmp" -w "%{http_code}" "$BASE/api/v1/auth/login" || echo "000")
+    body=$(cat "$tmp")
+    if [[ "$code" == "200" ]] && jq -e '.ok == true' <<<"$body" >/dev/null 2>&1; then
+      rm -f "$tmp"
+      return 0
+    fi
+    if [[ "$code" =~ ^[45] ]]; then
+      echo "compose git-ssh: login retry (http=$code)" >&2
+      sleep 2
+      continue
+    fi
+    echo "compose git-ssh: login failed http=$code body=$(head -c 400 "$body")" >&2
+    rm -f "$tmp"
+    return 1
+  done
+  echo "compose git-ssh: login gave up after retries" >&2
+  rm -f "$tmp"
+  return 1
+}
+
+if [[ -n "${COOKIE_JAR:-}" ]] && [[ -f "$COOKIE_JAR" ]] &&
+  curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE/api/v1/me" | jq -e '.handle == "admin"' >/dev/null 2>&1; then
+  echo "=== compose git-ssh: reuse stack admin session ==="
+else
+  COOKIE_JAR=$(mktemp)
+  compose_git_ssh_login
+fi
 
 KEY_DIR=$(mktemp -d)
 chmod 0700 "$KEY_DIR"

@@ -340,6 +340,7 @@ BINDS=$(docker inspect "$CID" --format '{{json .HostConfig.Binds}}')
 
 echo "=== product compose git-ssh (default image permissions) ==="
 wait_ready
+export COOKIE_JAR
 export MUSEHUB_STACK_DC
 # shellcheck disable=SC2068
 MUSEHUB_STACK_DC=$(printf '%q ' "${COMPOSE_BASE[@]}")
