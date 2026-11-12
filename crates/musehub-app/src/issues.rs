@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::list_cursor::{decode_issue_cursor, encode_issue_cursor};
-use crate::mcp::RepoAccess;
 use crate::mcp::contract_domain::{self, CriterionInput};
+use crate::mcp::RepoAccess;
 use crate::AppState;
 
 #[derive(Serialize)]
