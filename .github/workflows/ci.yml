@@ -78,6 +78,12 @@ jobs:
           cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
       - name: portable tests
         run: ./scripts/cargo-test-portable.sh
+      - name: git-ssh helper regressions
+        env:
+          MUSEHUB_REQUIRE_GIT_SSH: "1"
+          MUSEHUB_GIT_SSH_BIN: ${{ github.workspace }}/target/debug/musehub-git-ssh
+          MUSEHUB_TEST_DATABASE_URL: postgres://musehub:musehub@localhost:5432/musehub
+        run: chmod +x ./scripts/run-git-ssh-helper-regressions.sh && ./scripts/run-git-ssh-helper-regressions.sh
       - name: dev local stack smoke
         run: |
           chmod +x ./scripts/dev-local-stack.sh ./scripts/lib/dev-local-pid.sh \

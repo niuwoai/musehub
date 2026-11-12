@@ -70,16 +70,39 @@ fn configure_new_session(cmd: &mut Command) {
 #[cfg(not(unix))]
 fn configure_new_session(_cmd: &mut Command) {}
 
+const KILL_GRACE_SECS: u64 = 2;
+const PIPE_DRAIN_SECS: u64 = 8;
+
 #[cfg(unix)]
-fn kill_process_group(child: &mut Child) {
-    let pid = child.id() as i32;
+fn signal_process_group(pid: i32, sig: i32) {
     unsafe {
-        let _ = libc::kill(-pid, libc::SIGTERM);
+        let _ = libc::kill(-pid, sig);
+    }
+}
+
+#[cfg(unix)]
+fn terminate_child_group(child: &mut Child) {
+    let pid = child.id() as i32;
+    signal_process_group(pid, libc::SIGTERM);
+    let grace = Instant::now() + Duration::from_secs(KILL_GRACE_SECS);
+    while Instant::now() < grace {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    signal_process_group(pid, libc::SIGKILL);
+    let final_wait = Instant::now() + Duration::from_secs(KILL_GRACE_SECS);
+    while Instant::now() < final_wait {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[cfg(not(unix))]
-fn kill_process_group(child: &mut Child) {
+fn terminate_child_group(child: &mut Child) {
     let _ = child.kill();
 }
 
@@ -88,12 +111,19 @@ fn finish_child_pipes(
     stdout_rx: mpsc::Receiver<Vec<u8>>,
     stderr_rx: mpsc::Receiver<Vec<u8>>,
 ) -> (Vec<u8>, Vec<u8>) {
+    let wait_deadline = Instant::now() + Duration::from_secs(KILL_GRACE_SECS + 2);
+    while Instant::now() < wait_deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     let _ = child.wait();
     let stdout = stdout_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(PIPE_DRAIN_SECS))
         .unwrap_or_default();
     let stderr = stderr_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(PIPE_DRAIN_SECS))
         .unwrap_or_default();
     (stdout, stderr)
 }
@@ -156,7 +186,7 @@ pub fn run_bounded(cmd: Command, timeout_secs: u64) -> BoundedOutput {
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    kill_process_group(&mut child);
+                    terminate_child_group(&mut child);
                     let (stdout, stderr) = finish_child_pipes(&mut child, srx, erx);
                     return BoundedOutput {
                         status: timed_out_status(),
@@ -168,7 +198,7 @@ pub fn run_bounded(cmd: Command, timeout_secs: u64) -> BoundedOutput {
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                kill_process_group(&mut child);
+                terminate_child_group(&mut child);
                 let (stdout, _stderr) = finish_child_pipes(&mut child, srx, erx);
                 return BoundedOutput {
                     status: timed_out_status(),
@@ -246,34 +276,42 @@ pub enum ForwardDenialVerdict {
 pub fn classify_forward_denial(
     exited_before_deadline: bool,
     timed_out_kill: bool,
-    forward_tcp_connected: bool,
+    forward_echo_validated: bool,
     stderr: &str,
 ) -> ForwardDenialVerdict {
-    if forward_tcp_connected {
+    if forward_echo_validated {
         return ForwardDenialVerdict::ChannelOpened;
-    }
-    if timed_out_kill || !exited_before_deadline {
-        return ForwardDenialVerdict::TimedOut;
     }
     if ssh_forward_admin_denial(stderr) {
         return ForwardDenialVerdict::Denied;
     }
+    if timed_out_kill || !exited_before_deadline {
+        return ForwardDenialVerdict::TimedOut;
+    }
     ForwardDenialVerdict::Inconclusive
 }
 
-fn spawn_tcp_target(port_hint: u16) -> (u16, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind(format!("127.0.0.1:{port_hint}"))
-        .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-        .expect("target bind");
+/// Echo target for forward probe: returns bytes sent by client (one connection).
+pub fn spawn_nonce_echo_target() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("target bind");
     let port = listener.local_addr().expect("target addr").port();
     let handle = thread::spawn(move || {
         listener.set_nonblocking(true).ok();
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(25);
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut sock, _)) => {
-                    let _ = sock.write_all(b"target-ok\n");
-                    let _ = sock.flush();
+                    let mut buf = [0u8; 64];
+                    sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                    sock.set_write_timeout(Some(Duration::from_secs(2))).ok();
+                    match sock.read(&mut buf) {
+                        Ok(0) => return,
+                        Ok(n) => {
+                            let _ = sock.write_all(&buf[..n]);
+                            let _ = sock.flush();
+                        }
+                        Err(_) => return,
+                    }
                     return;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -286,20 +324,37 @@ fn spawn_tcp_target(port_hint: u16) -> (u16, thread::JoinHandle<()>) {
     (port, handle)
 }
 
-fn local_forward_tcp_probe(local_port: u16) -> bool {
-    let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");
-    match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
-        Ok(s) => s.set_read_timeout(Some(Duration::from_millis(200))).is_ok(),
-        Err(_) => false,
+/// True only when nonce bytes echo back through `local_port` (proves direct-tcpip tunnel).
+pub fn forward_channel_echo_proven(local_port: u16, nonce: &[u8]) -> bool {
+    if nonce.is_empty() || nonce.len() > 48 {
+        return false;
     }
+    let addr: SocketAddr = format!("127.0.0.1:{local_port}")
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap());
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
+        return false;
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    if stream.write_all(nonce).is_err() {
+        return false;
+    }
+    let mut got = vec![0u8; nonce.len()];
+    if stream.read_exact(&mut got).is_err() {
+        return false;
+    }
+    got == nonce
 }
 
 /// Product negative: forward channel must be administratively denied with TCP probe to local listener.
 pub fn assert_ssh_port_forward_denied(priv_key: &Path, port: u16) {
-    let (target_port, _target) = spawn_tcp_target(19000);
+    let (target_port, target_handle) = spawn_nonce_echo_target();
     let local_listener = TcpListener::bind("127.0.0.1:0").expect("local bind");
     let local_port = local_listener.local_addr().expect("local").port();
     drop(local_listener);
+    let nonce = format!("musehub-fwd-{}", std::process::id());
+    let nonce_bytes = nonce.as_bytes();
 
     let mut cmd = Command::new("ssh");
     cmd.args(ssh_base_args(priv_key, port));
@@ -313,32 +368,32 @@ pub fn assert_ssh_port_forward_denied(priv_key: &Path, port: u16) {
 
     let (mut child, srx, erx) = spawn_piped(cmd).expect("spawn forward ssh");
     let probe_deadline = Instant::now() + Duration::from_secs(12);
-    let mut forward_connected = false;
+    let mut forward_echo_validated = false;
     let mut exited = false;
     while Instant::now() < probe_deadline {
         if let Ok(Some(_)) = child.try_wait() {
             exited = true;
             break;
         }
-        if local_forward_tcp_probe(local_port) {
-            forward_connected = true;
+        if forward_channel_echo_proven(local_port, nonce_bytes) {
+            forward_echo_validated = true;
             break;
         }
         thread::sleep(Duration::from_millis(100));
     }
     let timed_out_kill = !exited;
-    if timed_out_kill {
-        kill_process_group(&mut child);
-    }
+    terminate_child_group(&mut child);
     let (stdout, stderr) = finish_child_pipes(&mut child, srx, erx);
     let _ = stdout;
+    let _ = target_handle.join();
     let stderr_s = String::from_utf8_lossy(&stderr).into_owned();
 
-    let verdict = classify_forward_denial(exited, timed_out_kill, forward_connected, &stderr_s);
+    let verdict =
+        classify_forward_denial(exited, timed_out_kill, forward_echo_validated, &stderr_s);
     assert_eq!(
         verdict,
         ForwardDenialVerdict::Denied,
-        "forward negative: exited={exited} tcp_open={forward_connected} stderr={}",
+        "forward negative: exited={exited} echo_ok={forward_echo_validated} stderr={}",
         redact_test_output(&stderr_s)
     );
     let addr: SocketAddr = format!("127.0.0.1:{local_port}").parse().expect("addr");

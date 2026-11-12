@@ -152,29 +152,44 @@ log_bare_repo_transport_state() {
   dc exec -T musehub-git-ssh sh -c "id git; test -w '$bare' && echo '  git write bare=ok' || echo '  git write bare=denied'" >&2 || true
 }
 
+# shellcheck source=lib/forward-echo-probe.sh
+source "$ROOT/scripts/lib/forward-echo-probe.sh"
+
 assert_port_forward_denied() {
-  local err_file pid port_local=19999 w=0 traffic=0 nc_out
-  if ! command -v nc >/dev/null 2>&1; then
-    echo "compose git-ssh: nc required for port-forward denial probe" >&2
+  local err_file pid port_local=19999 w=0 echo_ok=0 target_port target_pid target_log nonce
+  command -v python3 >/dev/null 2>&1 || {
+    echo "compose git-ssh: python3 required for forward echo probe" >&2
     return 1
-  fi
+  }
+  target_log=$(mktemp)
+  target_pid=$(forward_echo_start_target "$target_log")
+  for _ in $(seq 1 30); do
+    [[ -s "$target_log" ]] && break
+    sleep 0.1
+  done
+  target_port="$(cat "$target_log")"
+  [[ -n "$target_port" ]] || {
+    echo "compose git-ssh: echo target failed to bind" >&2
+    kill "$target_pid" 2>/dev/null || true
+    wait "$target_pid" 2>/dev/null || true
+    rm -f "$target_log"
+    return 1
+  }
   err_file=$(mktemp)
+  nonce="musehub-compose-probe-$RANDOM"
   compose_git_timeout ssh "${GIT_SSH_CLI_OPTS[@]}" \
     -o ExitOnForwardFailure=yes \
-    -L "127.0.0.1:${port_local}:127.0.0.1:22" \
+    -L "127.0.0.1:${port_local}:127.0.0.1:${target_port}" \
     git@127.0.0.1 -N 2>"$err_file" &
   pid=$!
   while [[ "$w" -lt 8 ]]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       break
     fi
-    nc_out=$(mktemp)
-    if echo | nc -w 1 127.0.0.1 "$port_local" >"$nc_out" 2>&1; then
-      traffic=1
-      rm -f "$nc_out"
+    if forward_echo_probe "$port_local" "$nonce"; then
+      echo_ok=1
       break
     fi
-    rm -f "$nc_out"
     sleep 1
     w=$((w + 1))
   done
@@ -184,24 +199,25 @@ assert_port_forward_denied() {
   else
     wait "$pid" 2>/dev/null || true
   fi
-  kill -TERM "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  local msg st=0
+  kill -TERM "$target_pid" 2>/dev/null || true
+  wait "$target_pid" 2>/dev/null || true
+  rm -f "$target_log"
+  local msg
   msg="$(redact_git_output "$(cat "$err_file")")"
   rm -f "$err_file"
-  if [[ "$traffic" -eq 1 ]]; then
-    echo "compose git-ssh: local forward port ${port_local} accepted traffic" >&2
+  if [[ "$echo_ok" -eq 1 ]]; then
+    echo "compose git-ssh: forward echo roundtrip succeeded (channel opened)" >&2
     return 1
   fi
   if [[ -z "${msg// }" ]]; then
-    echo "compose git-ssh: port forward negative test requires ssh stderr after nc probe" >&2
+    echo "compose git-ssh: port forward negative requires ssh stderr after echo probe" >&2
     return 1
   fi
-  if grep -qiE 'administratively prohibited|port forwarding|forwarding disabled|Permission denied' <<<"$msg"; then
-    echo "compose git-ssh: port forward denied as expected (nc probe traffic=${traffic})" >&2
+  if grep -qiE 'administratively prohibited|port forwarding disabled|forwarding disabled' <<<"$msg"; then
+    echo "compose git-ssh: port forward denied as expected (echo_ok=${echo_ok})" >&2
     return 0
   fi
-  echo "compose git-ssh: port forward negative test inconclusive (sanitized): ${msg}" >&2
+  echo "compose git-ssh: port forward negative inconclusive (sanitized): ${msg}" >&2
   return 1
 }
 
