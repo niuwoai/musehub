@@ -37,7 +37,7 @@ fn ssh_timeout_secs() -> u64 {
         .unwrap_or(30)
 }
 
-fn git_timeout_secs() -> u64 {
+pub fn git_timeout_secs() -> u64 {
     std::env::var("MUSEHUB_TEST_GIT_SSH_TIMEOUT_SEC")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -111,14 +111,23 @@ fn finish_child_pipes(
     stdout_rx: mpsc::Receiver<Vec<u8>>,
     stderr_rx: mpsc::Receiver<Vec<u8>>,
 ) -> (Vec<u8>, Vec<u8>) {
-    let wait_deadline = Instant::now() + Duration::from_secs(KILL_GRACE_SECS + 2);
+    let wait_deadline = Instant::now() + Duration::from_secs(PIPE_DRAIN_SECS);
     while Instant::now() < wait_deadline {
         if child.try_wait().ok().flatten().is_some() {
             break;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    let _ = child.wait();
+    if child.try_wait().ok().flatten().is_none() {
+        terminate_child_group(child);
+        let hard = Instant::now() + Duration::from_secs(KILL_GRACE_SECS + 1);
+        while Instant::now() < hard {
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
     let stdout = stdout_rx
         .recv_timeout(Duration::from_secs(PIPE_DRAIN_SECS))
         .unwrap_or_default();

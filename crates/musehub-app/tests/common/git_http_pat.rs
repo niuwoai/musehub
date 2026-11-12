@@ -2,7 +2,10 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
+use std::process::Output;
+
+use super::git_ssh_util::{git_timeout_secs, run_bounded};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::body::Body;
@@ -152,7 +155,7 @@ impl GitHttpPatSandbox {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
             .args(args);
-        cmd.output().expect("spawn git")
+        run_bounded(cmd, git_timeout_secs()).into_output()
     }
 
     pub fn run_git_ok(&self, cwd: Option<&Path>, args: &[&str]) {

@@ -237,7 +237,8 @@ assert_unknown_ssh_key_rejected() {
   fi
   local msg
   msg="$(redact_git_output "$(cat "$err_file")")"
-  rm -f "$err_file" "$dest"
+  rm -f "$err_file"
+  rm -rf "$dest" "$BAD_DIR"
   if [[ "$st" -eq 0 ]]; then
     echo "compose git-ssh: unregistered key must not clone" >&2
     return 1
