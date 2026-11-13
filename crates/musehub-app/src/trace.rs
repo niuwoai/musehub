@@ -211,3 +211,127 @@ pub async fn get_deployment_trace(
         gaps,
     }))
 }
+
+#[derive(Serialize)]
+pub struct IssueDeliveryLinkPr {
+    pub id: Uuid,
+    pub number: i64,
+    pub state: String,
+    pub merged_oid: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct IssueDeliveryLinkPipeline {
+    pub id: Uuid,
+    pub state: String,
+    pub source_oid: String,
+}
+
+#[derive(Serialize)]
+pub struct IssueDeliveryLinkDeployment {
+    pub id: Uuid,
+    pub environment_slug: String,
+    pub state: String,
+}
+
+#[derive(Serialize)]
+pub struct IssueDeliveryTrace {
+    pub issue_id: Uuid,
+    pub issue_number: i64,
+    pub pull_requests: Vec<IssueDeliveryLinkPr>,
+    pub pipeline_runs: Vec<IssueDeliveryLinkPipeline>,
+    pub deployments: Vec<IssueDeliveryLinkDeployment>,
+    pub gaps: Vec<String>,
+}
+
+pub async fn get_issue_delivery_trace(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo, issue_number)): AxumPath<(String, String, i64)>,
+) -> Result<Json<IssueDeliveryTrace>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let issue =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
+            .bind(repo_id)
+            .bind(issue_number)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((issue_id,)) = issue else {
+        return Err(AppError::NotFound);
+    };
+    let mut gaps = Vec::new();
+    let prs = sqlx::query_as::<_, (Uuid, i64, String, Option<String>)>(
+        "SELECT id, number, state, merged_oid FROM pull_requests
+         WHERE repo_id = $1 AND issue_id = $2 ORDER BY number DESC LIMIT 20",
+    )
+    .bind(repo_id)
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if prs.is_empty() {
+        gaps.push("no_pull_requests".to_string());
+    }
+    let pipelines = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT id, state, source_oid FROM pipeline_runs
+         WHERE repo_id = $1 AND issue_id = $2 ORDER BY created_at DESC LIMIT 20",
+    )
+    .bind(repo_id)
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if pipelines.is_empty() {
+        gaps.push("no_pipeline_runs".to_string());
+    }
+    let deployments = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT d.id, e.slug, d.state FROM deployments d
+         JOIN environments e ON e.id = d.environment_id
+         WHERE d.repo_id = $1 AND d.id IN (
+           SELECT dep.id FROM deployments dep
+           JOIN releases r ON r.id = dep.release_id
+           JOIN pipeline_runs pr ON pr.id = r.pipeline_run_id
+           WHERE pr.issue_id = $2
+         )
+         ORDER BY d.created_at DESC LIMIT 20",
+    )
+    .bind(repo_id)
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if deployments.is_empty() {
+        gaps.push("no_deployments".to_string());
+    }
+    Ok(Json(IssueDeliveryTrace {
+        issue_id,
+        issue_number,
+        pull_requests: prs
+            .into_iter()
+            .map(|(id, number, state, merged_oid)| IssueDeliveryLinkPr {
+                id,
+                number,
+                state,
+                merged_oid,
+            })
+            .collect(),
+        pipeline_runs: pipelines
+            .into_iter()
+            .map(|(id, state, source_oid)| IssueDeliveryLinkPipeline {
+                id,
+                state,
+                source_oid,
+            })
+            .collect(),
+        deployments: deployments
+            .into_iter()
+            .map(
+                |(id, environment_slug, state)| IssueDeliveryLinkDeployment {
+                    id,
+                    environment_slug,
+                    state,
+                },
+            )
+            .collect(),
+        gaps,
+    }))
+}

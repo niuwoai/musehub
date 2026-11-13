@@ -58,7 +58,9 @@
     "noMergedPr": "No merged PR with main tip yet — merge via review + checks first.",
     "traceGaps": "Trace gaps (not fabricated)",
     "logout": "Log out",
-    "agentStarting": "Starting agent run…"
+    "agentStarting": "Starting agent run…",
+    "pipelineViewJobLogs": "View job log",
+    "pipelineJobLogTitle": "Log: {{job}}"
   },
   "nav": {
     "orgLabel": "Organization: {{org}}",
@@ -125,7 +127,9 @@
     "selfApproveBlocked": "Authors cannot approve their own pull requests.",
     "outdatedAnchor": "(outdated)",
     "addComment": "Add comment",
-    "commentFailed": "Could not post comment."
+    "commentFailed": "Could not post comment.",
+    "linkedIssue": "Linked issue",
+    "noLinkedIssue": "No issue linked to this pull request."
   },
   "issues": {
     "filterState": "State",
@@ -140,12 +144,47 @@
   "issueDetail": {
     "labels": "Labels",
     "assignee": "Assignee",
+    "assigneeNone": "Unassigned",
     "save": "Save",
     "saveFailed": "Could not save issue.",
     "discussion": "Discussion",
     "noComments": "No comments yet.",
     "addComment": "Add comment",
-    "commentFailed": "Could not post comment."
+    "commentFailed": "Could not post comment.",
+    "revision": "revision {{version}}",
+    "criteriaTitle": "Acceptance criteria",
+    "criteriaEmpty": "No criteria on this revision yet.",
+    "criteriaEdit": "Criteria (one line each)",
+    "criteriaSave": "Save criteria",
+    "criteriaRequired": "Add at least one criterion.",
+    "planTitle": "Plan & agent",
+    "planMissing": "No implementation plan for the current revision.",
+    "planDefaultBody": "Implement per acceptance criteria; add tests where applicable.",
+    "planFailed": "Could not create or accept plan.",
+    "agentTask": "Implement the accepted plan for this issue (reference adapter).",
+    "agentFailed": "Could not start agent run.",
+    "agentRespond": "Send input",
+    "agentRespondPlaceholder": "Reply to agent…",
+    "deliveryTraceTitle": "Delivery links",
+    "deliveryPrs": "{{count}} linked pull request(s)",
+    "deliveryPipelines": "{{count}} pipeline run(s)",
+    "deliveryDeployments": "{{count}} deployment(s)",
+    "deliveryTraceEmptyPrs": "No linked pull requests yet.",
+    "deliveryTraceEmptyPipelines": "No pipeline runs linked to this issue yet.",
+    "deliveryTraceEmptyDeployments": "No deployments traced from this issue yet.",
+    "deliveryViewDelivery": "Open delivery console",
+    "lifecycleTitle": "State",
+    "closeReason": "Close reason",
+    "closeReasonPlaceholder": "completed",
+    "closeIssue": "Close issue",
+    "reopenIssue": "Reopen",
+    "markInProgress": "Mark in progress",
+    "closeReasonRequired": "Enter a close reason.",
+    "closedAs": "Closed: {{reason}}"
+  },
+  "delivery": {
+    "linkedIssue": "Trace → issue",
+    "linkedPull": "Trace → pull request"
   },
   "sshKeys": {
     "title": "SSH keys",
@@ -164,6 +203,8 @@
   },
   "repoSettings": {
     "grantsTitle": "Repo grants",
-    "grantReader": "Grant reader"
+    "grantReader": "Grant reader",
+    "environmentsTitle": "Deployment environments",
+    "approvalRequired": "approval required"
   }
 }

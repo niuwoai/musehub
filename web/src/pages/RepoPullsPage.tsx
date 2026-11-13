@@ -31,6 +31,17 @@ export function RepoPullsPage() {
               #{pr.number} {pr.title}
             </Link>{' '}
             ({pr.state}) {pr.source_branch} → {pr.target_branch}
+            {pr.issue_number != null ? (
+              <>
+                {' '}
+                <Link
+                  to={paths.repoIssue(org, selectedRepo, pr.issue_number)}
+                  data-testid={`pull-issue-link-${pr.number}`}
+                >
+                  issue #{pr.issue_number}
+                </Link>
+              </>
+            ) : null}
             {pr.state === 'open' ? (
               <>
                 <button type="button" onClick={() => void onInspectPrCi(pr)}>

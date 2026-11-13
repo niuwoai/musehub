@@ -192,8 +192,9 @@ if [[ "$PRODUCT_OCI" == "1" ]]; then
 fi
 
 yarn --cwd web install
-export MUSEHUB_E2E_API=http://127.0.0.1:8080
 export MUSEHUB_E2E_BASE_URL=http://127.0.0.1:5173
+export MUSEHUB_E2E_SERVER=http://127.0.0.1:8080
+export MUSEHUB_E2E_API="${MUSEHUB_E2E_BASE_URL}"
 yarn --cwd web playwright install chromium
 
 export VITE_E2E_ISSUE_PAGE_LIMIT="${VITE_E2E_ISSUE_PAGE_LIMIT:-2}"

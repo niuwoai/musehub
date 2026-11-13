@@ -8,10 +8,12 @@ import {
   openRepoBySlug,
   waitForDemoRepoNavHydrated,
 } from './helpers/repo'
-import { expectLoggedInAs } from './helpers/session'
+import { e2eBrowserApiOrigin, e2eServerOrigin } from './helpers/origin'
+import { loginAsAdmin } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
-const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
+const apiBase = () => e2eBrowserApiOrigin()
+const serverApi = () => e2eServerOrigin()
 
 test.describe('delivery chain browser flow', () => {
   test.skip(
@@ -27,10 +29,7 @@ test.describe('delivery chain browser flow', () => {
     const reviewerPass = 'E2e-Reviewer-Delivery-12!'
     const ciPass = 'E2e-Ci-Delivery-12!'
 
-    await page.goto('/login')
-    await page.getByLabel(/password|密码/i).fill(password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
-    await expectLoggedInAs(page, 'admin')
+    await loginAsAdmin(page, password!)
 
     const adminSession = (await page.context().cookies()).find((c) =>
       c.name.includes('musehub'),
@@ -39,7 +38,7 @@ test.describe('delivery chain browser flow', () => {
     const adminCookieHeader = `${adminSession!.name}=${adminSession!.value}`
 
     const invite = async (handle: string, pass: string, role: string) => {
-      const r = await page.request.post(`${apiBase}/api/v1/orgs/demo/members`, {
+      const r = await page.request.post(`${apiBase()}/api/v1/orgs/demo/members`, {
         headers: {
           'Content-Type': 'application/json',
           Cookie: adminCookieHeader,
@@ -74,9 +73,13 @@ test.describe('delivery chain browser flow', () => {
     await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
     await goRepoPulls(page)
     await expect(page.getByTestId('pull-request-list')).toContainText(/open/i, { timeout: 30_000 })
+    await page.getByTestId('pull-link-1').click()
+    await expect(page.getByTestId('pull-linked-issue')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('pull-linked-issue')).toContainText(/#1/)
+    await goRepoPulls(page)
 
     const loginApiCookie = async (handle: string, pass: string) => {
-      const ctx = await playwrightRequest.newContext({ baseURL: apiBase })
+      const ctx = await playwrightRequest.newContext({ baseURL: serverApi() })
       const r = await ctx.post('/api/v1/auth/login', { data: { handle, password: pass } })
       expect(r.ok()).toBeTruthy()
       const setCookie = r.headers()['set-cookie'] ?? ''
@@ -88,7 +91,7 @@ test.describe('delivery chain browser flow', () => {
 
     expect(slug).not.toEqual('')
     const collab = await page.request.post(
-      `${apiBase}/api/v1/orgs/demo/repos/${slug}/collaborators`,
+      `${apiBase()}/api/v1/orgs/demo/repos/${slug}/collaborators`,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -99,14 +102,14 @@ test.describe('delivery chain browser flow', () => {
     )
     expect(collab.ok()).toBeTruthy()
     const prs = await page.request
-      .get(`${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
+      .get(`${apiBase()}/api/v1/orgs/demo/repos/${slug}/pull-requests`, {
         headers: { Cookie: adminCookieHeader },
       })
       .then((r) => r.json() as Promise<{ number: number }[]>)
     const prNumber = prs[0]!.number
 
     const review = await page.request.post(
-      `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/reviews`,
+      `${apiBase()}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/reviews`,
       {
         headers: { 'Content-Type': 'application/json', Cookie: revCookie },
         data: { decision: 'approve' },
@@ -115,7 +118,7 @@ test.describe('delivery chain browser flow', () => {
     expect(review.ok()).toBeTruthy()
 
     const check = await page.request.patch(
-      `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/checks/product-ci`,
+      `${apiBase()}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/checks/product-ci`,
       {
         headers: { 'Content-Type': 'application/json', Cookie: ciCookie },
         data: { state: 'success', attempt_id: randomUUID() },
@@ -124,7 +127,7 @@ test.describe('delivery chain browser flow', () => {
     expect(check.ok()).toBeTruthy()
 
     const merge = await page.request.post(
-      `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/merge`,
+      `${apiBase()}/api/v1/orgs/demo/repos/${slug}/pull-requests/${prNumber}/merge`,
       { headers: { Cookie: revCookie } },
     )
     expect(merge.ok()).toBeTruthy()
@@ -135,7 +138,7 @@ test.describe('delivery chain browser flow', () => {
       .poll(
         async () => {
           const list = await page.request.get(
-            `${apiBase}/api/v1/orgs/demo/repos/${slug}/pull-requests`,
+            `${apiBase()}/api/v1/orgs/demo/repos/${slug}/pull-requests`,
             { headers: { Cookie: adminCookieHeader } },
           )
           const body = (await list.json()) as { number: number; state: string }[]
@@ -149,6 +152,9 @@ test.describe('delivery chain browser flow', () => {
     await refreshRepoAndOpenDelivery(page)
     const deliveryPanel = page.getByTestId('delivery-panel')
     await expect(deliveryPanel).toContainText(/main @/, { timeout: 15_000 })
+    await expect(page.getByTestId('delivery-merged-issue-link')).toContainText('#1', {
+      timeout: 15_000,
+    })
     await page.getByRole('button', { name: /run pipeline|流水线/i }).click()
     const pipelineTimeout = productOci ? 300_000 : 120_000
     await expect(page.getByTestId('pipeline-state')).toContainText(/succeeded/i, {
@@ -160,6 +166,9 @@ test.describe('delivery chain browser flow', () => {
     await expect(page.getByTestId('delivery-trace')).toBeVisible({
       timeout: productOci ? 240_000 : 90_000,
     })
+    await expect(page.getByTestId('delivery-trace-issue-link')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('delivery-trace-issue-link')).toContainText(/#1/)
+    await expect(page.getByTestId('delivery-trace-pr-link')).toContainText(/#1/)
     if (productOci) {
       await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
         timeout: 120_000,

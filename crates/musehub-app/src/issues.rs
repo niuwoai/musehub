@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::list_cursor::{decode_issue_cursor, encode_issue_cursor};
+use crate::mcp::contract_domain::{self, CriterionInput};
+use crate::mcp::RepoAccess;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -29,6 +31,11 @@ pub struct IssueListPage {
     pub has_more: bool,
 }
 
+#[derive(Serialize)]
+pub struct IssueAssigneeOption {
+    pub handle: String,
+}
+
 #[derive(Deserialize)]
 pub struct IssueListQuery {
     pub state: Option<String>,
@@ -45,6 +52,15 @@ fn default_limit() -> i64 {
 
 const MAX_LABELS: usize = 20;
 const MAX_LABEL_LEN: usize = 50;
+
+const MAX_CLOSE_REASON_LEN: usize = 200;
+
+pub(crate) fn validate_close_reason(reason: &str) -> Result<(), AppError> {
+    if reason.is_empty() || reason.len() > MAX_CLOSE_REASON_LEN {
+        return Err(AppError::Validation("invalid close_reason".into()));
+    }
+    Ok(())
+}
 
 pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
     if labels.len() > MAX_LABELS {
@@ -95,6 +111,22 @@ async fn repo_assignee_id(
 }
 
 #[derive(Serialize)]
+pub struct AcceptanceCriterion {
+    pub ordinal: i32,
+    pub description: String,
+    pub verification_method: String,
+    pub required: bool,
+}
+
+#[derive(Serialize)]
+pub struct IssuePlanSummary {
+    pub id: Uuid,
+    pub version: i32,
+    pub state: String,
+    pub body: String,
+}
+
+#[derive(Serialize)]
 pub struct IssueDetail {
     pub id: Uuid,
     pub number: i64,
@@ -106,6 +138,10 @@ pub struct IssueDetail {
     pub assignee_handle: Option<String>,
     pub author_handle: String,
     pub close_reason: Option<String>,
+    pub current_revision_id: Option<Uuid>,
+    pub revision: Option<i32>,
+    pub criteria: Vec<AcceptanceCriterion>,
+    pub plan: Option<IssuePlanSummary>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +152,39 @@ pub struct PatchIssueRequest {
     pub labels: Option<Vec<String>>,
     pub assignee_handle: Option<String>,
     pub close_reason: Option<String>,
+}
+
+/// Active org members who may be assigned (repo grant or org owner/admin), same rule as PATCH assignee.
+pub async fn list_issue_assignee_options(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+) -> Result<Json<Vec<IssueAssigneeOption>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT DISTINCT p.handle FROM principals p
+         JOIN memberships m ON m.principal_id = p.id AND m.org_id = $2 AND m.status = 'active'
+         WHERE p.status = 'active'
+           AND (
+             m.role IN ('owner', 'admin')
+             OR EXISTS (
+               SELECT 1 FROM repository_grants g
+               WHERE g.repo_id = $1 AND g.principal_id = p.id
+             )
+           )
+         ORDER BY p.handle",
+    )
+    .bind(repo_id)
+    .bind(org_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(handle,)| IssueAssigneeOption { handle })
+            .collect(),
+    ))
 }
 
 pub async fn list_issues_page(
@@ -213,12 +282,14 @@ pub async fn get_issue(
             Option<String>,
             Option<String>,
             String,
+            Option<Uuid>,
         ),
     >(
         "SELECT i.id, i.number, i.title, i.body, i.state, i.labels, i.assignee_id,
                 (SELECT handle FROM principals WHERE id = i.assignee_id),
                 i.close_reason,
-                (SELECT handle FROM principals WHERE id = i.author_id)
+                (SELECT handle FROM principals WHERE id = i.author_id),
+                i.current_revision_id
          FROM issues i WHERE i.repo_id = $1 AND i.number = $2",
     )
     .bind(repo_id)
@@ -236,10 +307,12 @@ pub async fn get_issue(
         assignee_handle,
         close_reason,
         author_handle,
+        current_revision_id,
     )) = row
     else {
         return Err(AppError::NotFound);
     };
+    let (revision, criteria, plan) = issue_revision_meta(&state.pool, current_revision_id).await?;
     Ok(Json(IssueDetail {
         id,
         number: num,
@@ -251,7 +324,127 @@ pub async fn get_issue(
         assignee_handle,
         author_handle,
         close_reason,
+        current_revision_id,
+        revision,
+        criteria,
+        plan,
     }))
+}
+
+async fn issue_revision_meta(
+    pool: &sqlx::PgPool,
+    revision_id: Option<Uuid>,
+) -> Result<
+    (
+        Option<i32>,
+        Vec<AcceptanceCriterion>,
+        Option<IssuePlanSummary>,
+    ),
+    AppError,
+> {
+    let Some(revision_id) = revision_id else {
+        return Ok((None, Vec::new(), None));
+    };
+    let rev_row = sqlx::query_as::<_, (i32,)>("SELECT revision FROM issue_revisions WHERE id = $1")
+        .bind(revision_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some((revision,)) = rev_row else {
+        return Ok((None, Vec::new(), None));
+    };
+    let crit_values = contract_domain::criteria_for_revision(pool, revision_id).await?;
+    let criteria: Vec<AcceptanceCriterion> = crit_values
+        .into_iter()
+        .filter_map(|v| {
+            Some(AcceptanceCriterion {
+                ordinal: v.get("ordinal")?.as_i64()? as i32,
+                description: v.get("description")?.as_str()?.to_string(),
+                verification_method: v.get("verification_method")?.as_str()?.to_string(),
+                required: v.get("required")?.as_bool()?,
+            })
+        })
+        .collect();
+    let plan_row = sqlx::query_as::<_, (Uuid, i32, String, String)>(
+        "SELECT id, version, state, body FROM implementation_plans
+         WHERE issue_revision_id = $1 ORDER BY version DESC LIMIT 1",
+    )
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await?;
+    let plan = plan_row.map(|(id, version, state, body)| IssuePlanSummary {
+        id,
+        version,
+        state,
+        body,
+    });
+    Ok((Some(revision), criteria, plan))
+}
+
+#[derive(Deserialize)]
+pub struct CriterionBody {
+    pub description: String,
+    #[serde(default = "default_verification")]
+    pub verification_method: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_verification() -> String {
+    "manual".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+pub struct PutCriteriaRequest {
+    pub expected_version: i32,
+    pub criteria: Vec<CriterionBody>,
+}
+
+pub async fn put_issue_criteria(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo, number)): Path<(String, String, i64)>,
+    Json(body): Json<PutCriteriaRequest>,
+) -> Result<Json<IssueDetail>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let issue =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE repo_id = $1 AND number = $2")
+            .bind(repo_id)
+            .bind(number)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((issue_id,)) = issue else {
+        return Err(AppError::NotFound);
+    };
+    let access = RepoAccess {
+        org_id,
+        repo_id,
+        org_slug: org.clone(),
+        repo_slug: repo.clone(),
+    };
+    let inputs: Vec<CriterionInput> = body
+        .criteria
+        .into_iter()
+        .map(|c| CriterionInput {
+            description: c.description,
+            verification_method: c.verification_method,
+            required: c.required,
+        })
+        .collect();
+    contract_domain::issue_criteria_replace(
+        &state,
+        &access,
+        principal_id,
+        issue_id,
+        body.expected_version,
+        &inputs,
+    )
+    .await?;
+    get_issue(State(state), headers, Path((org, repo, number))).await
 }
 
 pub async fn patch_issue(
@@ -289,9 +482,22 @@ pub async fn patch_issue(
         if !matches!(state_val.as_str(), "open" | "closed" | "in_progress") {
             return Err(AppError::Validation("invalid state".into()));
         }
-        if state_val == "closed" && body.close_reason.is_none() {
+        if state_val == "closed" {
+            let reason = body
+                .close_reason
+                .as_deref()
+                .ok_or_else(|| AppError::Validation("close_reason required when closing".into()))?;
+            validate_close_reason(reason)?;
+        }
+    } else if let Some(reason) = &body.close_reason {
+        validate_close_reason(reason)?;
+        let (current_state,): (String,) = sqlx::query_as("SELECT state FROM issues WHERE id = $1")
+            .bind(issue_id)
+            .fetch_one(&state.pool)
+            .await?;
+        if current_state != "closed" {
             return Err(AppError::Validation(
-                "close_reason required when closing".into(),
+                "close_reason requires issue state closed".into(),
             ));
         }
     }
@@ -311,8 +517,9 @@ pub async fn patch_issue(
                 state = COALESCE($5, state),
                 labels = COALESCE($6, labels),
                 close_reason = CASE
+                    WHEN $5 IN ('open', 'in_progress') THEN NULL
                     WHEN $5 = 'closed' THEN COALESCE($7, close_reason)
-                    WHEN $5 = 'open' THEN NULL
+                    WHEN $7 IS NOT NULL THEN $7
                     ELSE close_reason
                 END,
                 updated_at = CURRENT_TIMESTAMP
@@ -378,4 +585,27 @@ pub async fn patch_issue(
     }
 
     get_issue(State(state), headers, Path((org, repo, number))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_validation() {
+        assert!(validate_labels(&["bug".into(), "p0".into()]).is_ok());
+        assert!(validate_labels(&["ok_label".into()]).is_ok());
+        assert!(validate_labels(&["".into()]).is_err());
+        assert!(validate_labels(&["bad!".into()]).is_err());
+        assert!(validate_labels(&["x".repeat(51)]).is_err());
+        let too_many: Vec<String> = (0..21).map(|_| "l".repeat(50)).collect();
+        assert!(validate_labels(&too_many).is_err());
+    }
+
+    #[test]
+    fn close_reason_validation() {
+        assert!(validate_close_reason("completed").is_ok());
+        assert!(validate_close_reason("").is_err());
+        assert!(validate_close_reason(&"x".repeat(201)).is_err());
+    }
 }

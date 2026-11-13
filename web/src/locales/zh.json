@@ -58,7 +58,9 @@
     "noMergedPr": "尚无已合并 PR — 请先完成评审与检查合并。",
     "traceGaps": "追溯缺口（不编造）",
     "logout": "退出登录",
-    "agentStarting": "正在启动 Agent 运行…"
+    "agentStarting": "正在启动 Agent 运行…",
+    "pipelineViewJobLogs": "查看任务日志",
+    "pipelineJobLogTitle": "日志：{{job}}"
   },
   "nav": {
     "orgLabel": "组织：{{org}}",
@@ -130,7 +132,9 @@
     "selfApproveBlocked": "作者不能批准自己的 Pull Request。",
     "outdatedAnchor": "（已过时）",
     "addComment": "发表评论",
-    "commentFailed": "无法发表评论。"
+    "commentFailed": "无法发表评论。",
+    "linkedIssue": "关联 Issue",
+    "noLinkedIssue": "此 PR 未关联 Issue。"
   },
   "issues": {
     "filterState": "状态",
@@ -145,12 +149,47 @@
   "issueDetail": {
     "labels": "标签",
     "assignee": "负责人",
+    "assigneeNone": "未指定",
     "save": "保存",
     "saveFailed": "无法保存 Issue。",
     "discussion": "讨论",
     "noComments": "暂无评论。",
     "addComment": "发表评论",
-    "commentFailed": "无法发表评论。"
+    "commentFailed": "无法发表评论。",
+    "revision": "修订版 {{version}}",
+    "criteriaTitle": "验收标准",
+    "criteriaEmpty": "当前修订版尚无验收标准。",
+    "criteriaEdit": "验收标准（每行一条）",
+    "criteriaSave": "保存验收标准",
+    "criteriaRequired": "请至少添加一条验收标准。",
+    "planTitle": "计划与 Agent",
+    "planMissing": "当前修订版尚无实现计划。",
+    "planDefaultBody": "按验收标准实现；必要时补充测试。",
+    "planFailed": "无法创建或接受计划。",
+    "agentTask": "按已接受计划实现本 Issue（reference 适配器）。",
+    "agentFailed": "无法启动 Agent 运行。",
+    "agentRespond": "发送输入",
+    "agentRespondPlaceholder": "回复 Agent…",
+    "deliveryTraceTitle": "交付关联",
+    "deliveryPrs": "{{count}} 个关联 PR",
+    "deliveryPipelines": "{{count}} 次流水线",
+    "deliveryDeployments": "{{count}} 次部署",
+    "deliveryTraceEmptyPrs": "尚无关联 PR。",
+    "deliveryTraceEmptyPipelines": "尚无关联到此 Issue 的流水线。",
+    "deliveryTraceEmptyDeployments": "尚无从此 Issue 追溯到的部署。",
+    "deliveryViewDelivery": "打开交付控制台",
+    "lifecycleTitle": "状态",
+    "closeReason": "关闭原因",
+    "closeReasonPlaceholder": "completed",
+    "closeIssue": "关闭 Issue",
+    "reopenIssue": "重新打开",
+    "markInProgress": "标记为进行中",
+    "closeReasonRequired": "请填写关闭原因。",
+    "closedAs": "已关闭：{{reason}}"
+  },
+  "delivery": {
+    "linkedIssue": "追溯 → Issue",
+    "linkedPull": "追溯 → Pull Request"
   },
   "sshKeys": {
     "title": "SSH 密钥",
@@ -164,6 +203,8 @@
   },
   "repoSettings": {
     "grantsTitle": "仓库授权",
-    "grantReader": "授予 reader"
+    "grantReader": "授予 reader",
+    "environmentsTitle": "部署环境",
+    "approvalRequired": "需审批"
   }
 }

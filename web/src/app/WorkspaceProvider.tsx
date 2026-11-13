@@ -176,6 +176,7 @@ export type WorkspaceValue = {
   onLoadTrace: () => Promise<void>
   onLoadDeploymentById: () => Promise<void>
   onPickDeploymentFromList: (id: string) => Promise<void>
+  onFocusPipelineRun: (runId: string) => Promise<void>
   onDeploymentListModeChange: (mode: 'pending' | 'all') => void
   onLoadMoreDeployments: () => void
   refreshDeploymentList: () => Promise<void>
@@ -1126,7 +1127,9 @@ function useWorkspaceState(): WorkspaceValue {
   async function onCreatePrFromRun() {
     if (!selectedRepo || !lastRun?.result_commit_oid) return
     const branch = `agent/${lastRun.id}`
-    await createPullRequest(activeOrg, selectedRepo, `PR for ${branch}`, branch)
+    await createPullRequest(activeOrg, selectedRepo, `PR for ${branch}`, branch, {
+      agent_run_id: lastRun.id,
+    })
     await loadIssues(selectedRepo)
     navigate(paths.repoPulls(activeOrg, selectedRepo))
   }
@@ -1160,6 +1163,22 @@ function useWorkspaceState(): WorkspaceValue {
     const jobs = await listPipelineJobs(activeOrg, selectedRepo, runId)
     if (!pipelineOpActive(op)) return
     setPipelineJobs(jobs)
+  }
+
+  async function onFocusPipelineRun(runId: string) {
+    if (!selectedRepo) return
+    const op = capturePipelineOp(runId)
+    setError(null)
+    try {
+      const run = await getPipeline(activeOrg, selectedRepo, runId)
+      if (!pipelineOpActive(op)) return
+      applyPipelineRun(run)
+      await loadPipelineJobsForRun(runId)
+    } catch (err) {
+      if (pipelineOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'pipeline load failed')
+      }
+    }
   }
 
   async function pollPipelineRun(runId: string, pollEpoch: number, op: PipelineOpContext) {
@@ -1614,6 +1633,7 @@ function useWorkspaceState(): WorkspaceValue {
     onLoadTrace,
     onLoadDeploymentById,
     onPickDeploymentFromList,
+    onFocusPipelineRun,
     onDeploymentListModeChange,
     onLoadMoreDeployments,
     refreshDeploymentList: refreshDeploymentListForUi,
