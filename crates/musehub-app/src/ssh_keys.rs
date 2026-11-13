@@ -200,7 +200,6 @@ pub async fn create_ssh_key(
     let id = Uuid::new_v4();
     let request_id = audit::request_id_from_headers(&headers);
     let name = body.name.trim().to_string();
-    let public_key = body.public_key.trim().to_string();
     let metadata = serde_json::json!({ "name": name.as_str(), "fingerprint": fp.as_str() });
 
     let mut tx = state.pool.begin().await?;
