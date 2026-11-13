@@ -20,6 +20,7 @@ mod git_http;
 pub mod git_ssh;
 pub mod git_ssh_pack_privilege;
 pub mod git_ssh_runtime;
+pub mod git_ssh_server_log;
 mod grants;
 mod hooks;
 pub mod lease;

@@ -19,9 +19,10 @@ use crate::audit;
 use crate::error::AppError;
 use crate::git_http::bare_repo_path;
 use crate::git_ssh_pack_privilege::{
-    receive_pack_child_privilege_setup, resolve_trusted_storage_group_gid,
+    prepare_receive_pack_child_setup, receive_pack_child_privilege_setup_raw,
 };
 use crate::git_ssh_runtime::git_storage_group;
+use crate::git_ssh_server_log;
 use crate::grants;
 use crate::ssh_keys::sanitize_stored_ssh_public_key;
 
@@ -332,16 +333,8 @@ pub async fn run_ssh_gateway(
 
 /// Runs `upload-pack` / `receive-pack` after the DB pool is released (may block for pack I/O).
 pub fn execute_ssh_pack(plan: &SshPackPlan) -> Result<i32, AppError> {
-    if plan.service == "receive-pack" {
-        tracing::debug!(bare = %plan.bare.display(), "ssh receive-pack");
-    }
     run_git_pack_inherit(&plan.bare, &plan.service).map_err(|e| {
-        tracing::error!(
-            error = %e,
-            bare = %plan.bare.display(),
-            service = %plan.service,
-            "git pack failed"
-        );
+        git_ssh_server_log::log_pack_exec_failure(&e.to_string(), &plan.service);
         AppError::Other("pack operation failed".into())
     })
 }
@@ -374,7 +367,6 @@ fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     if storage_group.is_some() {
         #[cfg(unix)]
         {
-            let gid = resolve_trusted_storage_group_gid()?;
             let configured = git_storage_group();
             let plan_group = storage_group.as_deref().unwrap_or("");
             if !plan_group.eq_ignore_ascii_case(&configured) {
@@ -382,8 +374,12 @@ fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
                     "storage group mismatch: plan {plan_group} vs configured {configured}"
                 )));
             }
+            let setup = prepare_receive_pack_child_setup()?;
             unsafe {
-                cmd.pre_exec(move || receive_pack_child_privilege_setup(gid));
+                cmd.pre_exec(move || {
+                    receive_pack_child_privilege_setup_raw(setup);
+                    Ok(())
+                });
             }
         }
     }

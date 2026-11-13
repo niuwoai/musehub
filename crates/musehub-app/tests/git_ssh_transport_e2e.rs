@@ -57,6 +57,11 @@ async fn git_ssh_transport_auth_and_protection() {
         Some(work),
         &["push", "origin", "HEAD:refs/heads/feature/ssh"],
     );
+    let push_stderr = String::from_utf8_lossy(&push.stderr);
+    assert!(
+        !push_stderr.contains(f.git_root.to_string_lossy().as_ref()),
+        "SSH client stderr must not leak bare repo storage path"
+    );
     assert!(
         push.status.success(),
         "{}",
