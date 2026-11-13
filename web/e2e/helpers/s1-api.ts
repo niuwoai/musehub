@@ -1,7 +1,9 @@
 import type { Page } from '@playwright/test'
+import { e2eBrowserApiOrigin } from './origin'
 import { expectResponseOk } from './repo'
 
-export const apiBase = () => process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
+/** Session-authenticated JSON API (Vite proxy origin). */
+export const apiBase = () => e2eBrowserApiOrigin()
 
 export async function cookieHeader(page: Page): Promise<Record<string, string>> {
   const cookies = await page.context().cookies()
@@ -42,5 +44,7 @@ export async function apiJson<T>(
   })
   await expectResponseOk(r, `${method} ${path}`)
   if (r.status() === 204) return undefined as T
-  return (await r.json()) as T
+  const text = await r.text()
+  if (!text.trim()) return undefined as T
+  return JSON.parse(text) as T
 }

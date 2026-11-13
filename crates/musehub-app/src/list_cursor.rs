@@ -34,3 +34,24 @@ pub fn decode_issue_cursor(cursor: &str) -> Result<(i64, Uuid), AppError> {
         Uuid::parse_str(id).map_err(|_| AppError::Validation("invalid cursor id".into()))?;
     Ok((number, issue_id))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_cursor_round_trip() {
+        let id = Uuid::new_v4();
+        let encoded = encode_issue_cursor(42, id);
+        let (number, decoded) = decode_issue_cursor(&encoded).expect("decode");
+        assert_eq!(number, 42);
+        assert_eq!(decoded, id);
+    }
+
+    #[test]
+    fn issue_cursor_rejects_garbage() {
+        assert!(decode_issue_cursor("").is_err());
+        assert!(decode_issue_cursor("mhi1:not-valid-base64!!!").is_err());
+        assert!(decode_issue_cursor("legacy:foo").is_err());
+    }
+}

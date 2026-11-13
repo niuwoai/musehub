@@ -171,6 +171,10 @@ export function RepoIssuesPage() {
             >
               #{issue.number} {issue.title}
             </Link>{' '}
+            <span data-testid={`issue-state-${issue.number}`}>{issue.state}</span>
+            {issue.assignee_handle ? (
+              <span data-testid={`issue-assignee-${issue.number}`}> @{issue.assignee_handle}</span>
+            ) : null}{' '}
             <button type="button" onClick={() => void onAcceptPlan(issue)}>
               {t('app.acceptPlan')}
             </button>

@@ -111,6 +111,16 @@ export function PullDetailPage() {
       <p data-testid="pull-detail-branches">
         {pr.source_branch} → {pr.target_branch}
       </p>
+      {pr.issue_number != null ? (
+        <p data-testid="pull-linked-issue">
+          {t('pull.linkedIssue')}:{' '}
+          <Link to={paths.repoIssue(org, slug!, pr.issue_number)}>#{pr.issue_number}</Link>
+        </p>
+      ) : (
+        <p data-testid="pull-linked-issue-missing" role="status">
+          {t('pull.noLinkedIssue')}
+        </p>
+      )}
       <button
         type="button"
         data-testid="pull-sync"

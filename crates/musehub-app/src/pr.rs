@@ -17,6 +17,23 @@ use crate::AppState;
 
 pub const DEFAULT_REPO_CHECK: &str = "product-ci";
 
+async fn issue_number_for(
+    pool: &sqlx::PgPool,
+    repo_id: Uuid,
+    issue_id: Option<Uuid>,
+) -> Result<Option<i64>, AppError> {
+    let Some(iid) = issue_id else {
+        return Ok(None);
+    };
+    let row =
+        sqlx::query_as::<_, (i64,)>("SELECT number FROM issues WHERE id = $1 AND repo_id = $2")
+            .bind(iid)
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(n,)| n))
+}
+
 #[derive(Serialize)]
 pub struct PullRequestView {
     pub id: Uuid,
@@ -28,6 +45,7 @@ pub struct PullRequestView {
     pub head_oid: Option<String>,
     pub base_oid: Option<String>,
     pub issue_id: Option<Uuid>,
+    pub issue_number: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -202,13 +220,40 @@ pub async fn create_pull_request(
             "pull request requires a non-empty diff".to_string(),
         ));
     }
-    if let Some(issue_id) = body.issue_id {
+    let mut issue_id = body.issue_id;
+    if let Some(iid) = issue_id {
         let ok =
             sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
-                .bind(issue_id)
+                .bind(iid)
                 .bind(repo_id)
                 .fetch_optional(&state.pool)
                 .await?;
+        if ok.is_none() {
+            return Err(AppError::NotFound);
+        }
+    }
+    if issue_id.is_none() {
+        if let Some(run_id) = body.agent_run_id {
+            let from_run = sqlx::query_as::<_, (Uuid,)>(
+                "SELECT ar.issue_id FROM agent_runs ar
+                 JOIN issues i ON i.id = ar.issue_id AND i.repo_id = ar.repo_id
+                 WHERE ar.id = $1 AND ar.repo_id = $2",
+            )
+            .bind(run_id)
+            .bind(repo_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            issue_id = from_run.map(|r| r.0);
+        }
+    }
+    if let Some(run_id) = body.agent_run_id {
+        let ok = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT id FROM agent_runs WHERE id = $1 AND repo_id = $2",
+        )
+        .bind(run_id)
+        .bind(repo_id)
+        .fetch_optional(&state.pool)
+        .await?;
         if ok.is_none() {
             return Err(AppError::NotFound);
         }
@@ -235,13 +280,14 @@ pub async fn create_pull_request(
     .bind(body.title.trim())
     .bind(&body.source_branch)
     .bind(&target)
-    .bind(body.issue_id)
+    .bind(issue_id)
     .bind(body.agent_run_id)
     .bind(&head_oid)
     .bind(&base_oid)
     .execute(&state.pool)
     .await?;
     insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, issue_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(PullRequestView {
@@ -253,7 +299,8 @@ pub async fn create_pull_request(
             state: "open".to_string(),
             head_oid: Some(head_oid),
             base_oid: Some(base_oid),
-            issue_id: body.issue_id,
+            issue_id,
+            issue_number,
         }),
     ))
 }
@@ -482,10 +529,14 @@ pub async fn list_pull_requests(
             Option<String>,
             Option<String>,
             Option<Uuid>,
+            Option<i64>,
         ),
     >(
-        "SELECT id, number, title, source_branch, target_branch, state, head_oid, base_oid, issue_id
-         FROM pull_requests WHERE repo_id = $1 ORDER BY number",
+        "SELECT pr.id, pr.number, pr.title, pr.source_branch, pr.target_branch, pr.state,
+                pr.head_oid, pr.base_oid, pr.issue_id, i.number AS issue_number
+         FROM pull_requests pr
+         LEFT JOIN issues i ON i.id = pr.issue_id AND i.repo_id = pr.repo_id
+         WHERE pr.repo_id = $1 ORDER BY pr.number",
     )
     .bind(repo_id)
     .fetch_all(&state.pool)
@@ -503,6 +554,7 @@ pub async fn list_pull_requests(
                     head_oid,
                     base_oid,
                     issue_id,
+                    issue_number,
                 )| {
                     PullRequestView {
                         id,
@@ -514,6 +566,7 @@ pub async fn list_pull_requests(
                         head_oid,
                         base_oid,
                         issue_id,
+                        issue_number,
                     }
                 },
             )
@@ -593,6 +646,7 @@ pub async fn sync_pull_request(
     .bind(pr_id)
     .fetch_one(&state.pool)
     .await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, meta.1).await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
@@ -603,6 +657,7 @@ pub async fn sync_pull_request(
         head_oid: Some(head_oid),
         base_oid: Some(base_oid),
         issue_id: meta.1,
+        issue_number,
     }))
 }
 
@@ -1040,6 +1095,7 @@ pub async fn merge_pull_request(
     .bind(pr_id)
     .fetch_one(&state.pool)
     .await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, meta.1).await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
@@ -1050,6 +1106,7 @@ pub async fn merge_pull_request(
         head_oid: Some(merged_oid.clone()),
         base_oid: Some(base_oid),
         issue_id: meta.1,
+        issue_number,
     }))
 }
 
@@ -1222,13 +1279,17 @@ pub async fn get_pull_request(
             Option<String>,
             Option<String>,
             Option<Uuid>,
+            Option<i64>,
             i64,
             Uuid,
         ),
     >(
         "SELECT pr.id, pr.number, pr.title, pr.source_branch, pr.target_branch, pr.state,
-                pr.head_oid, pr.base_oid, pr.issue_id, pr.row_version, pr.author_id
-         FROM pull_requests pr WHERE pr.repo_id = $1 AND pr.number = $2",
+                pr.head_oid, pr.base_oid, pr.issue_id, i.number AS issue_number,
+                pr.row_version, pr.author_id
+         FROM pull_requests pr
+         LEFT JOIN issues i ON i.id = pr.issue_id AND i.repo_id = pr.repo_id
+         WHERE pr.repo_id = $1 AND pr.number = $2",
     )
     .bind(repo_id)
     .bind(number)
@@ -1244,6 +1305,7 @@ pub async fn get_pull_request(
         head_oid,
         base_oid,
         issue_id,
+        issue_number,
         row_version,
         author_id,
     )) = row
@@ -1267,6 +1329,7 @@ pub async fn get_pull_request(
             head_oid: Some(head.clone()),
             base_oid: Some(base.clone()),
             issue_id,
+            issue_number,
         },
         row_version,
         author_handle: author.0,

@@ -1,28 +1,19 @@
 import { execSync } from 'node:child_process'
 import fs from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { expectLoggedInAs } from './helpers/session'
+import { loginAsAdmin } from './helpers/session'
 import { createRepoViaUi, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { apiJson, apiRaw } from './helpers/s1-api'
 import { gitPushBranch } from './helpers/s1-git-seed'
 import { mintGitPat, revokePat } from './helpers/s1-pat'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
-const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
-
-async function loginAsAdmin(page: import('@playwright/test').Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded' })
-  await page.getByTestId('login-handle-input').fill('admin')
-  await page.getByLabel(/password|密码/i).fill(password!)
-  await page.getByRole('button', { name: /login|登录/i }).click()
-  await expectLoggedInAs(page, 'admin')
-}
 
 test.describe('S1 collaboration console', () => {
   test.skip(!password, 'requires bootstrap password')
 
   test('issues: create visible, filter notice, cursor pages', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
@@ -56,7 +47,7 @@ test.describe('S1 collaboration console', () => {
   })
 
   test('issue detail: discussion i18n controls', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
@@ -69,7 +60,7 @@ test.describe('S1 collaboration console', () => {
   })
 
   test('code: PAT git seed, oid, tree, blob', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     const repos = await apiJson<{ id: string; slug: string; clone_url: string }[]>(
@@ -103,7 +94,7 @@ test.describe('S1 collaboration console', () => {
   })
 
   test('pull request: deep link, line comment, sync outdated', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     const repos = await apiJson<{ id: string; slug: string; clone_url: string }[]>(
@@ -168,7 +159,7 @@ test.describe('S1 collaboration console', () => {
   })
 
   test('ssh keys: add and revoke', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await page.goto('/account/security')
     await expect(page.getByTestId('ssh-keys-section')).toBeVisible()
     const tmp = fs.mkdtempSync('/tmp/mh-e2e-ssh-')

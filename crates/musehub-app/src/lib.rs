@@ -38,6 +38,7 @@ pub use pipeline::{
 };
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod discussion;
+mod environments;
 mod git_browse;
 mod issues;
 mod list_cursor;
@@ -184,6 +185,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             get(list_repos).post(create_repo),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issue-assignees",
+            get(issues::list_issue_assignee_options),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues",
             get(issues::list_issues_page).post(create_issue),
         )
@@ -196,6 +201,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             get(discussion::list_issue_comments).post(discussion::post_issue_comment),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/criteria",
+            axum::routing::put(issues::put_issue_criteria),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/delivery-trace",
+            get(trace::get_issue_delivery_trace),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues/{issue_number}/plans",
             post(create_plan).patch(accept_plan),
         )
@@ -205,6 +218,14 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/agent-runs/{run_id}", get(get_agent_run))
         .route("/api/v1/agent-runs/{run_id}/cancel", post(cancel_agent_run))
+        .route(
+            "/api/v1/agent-runs/{run_id}/respond",
+            post(respond_agent_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/environments",
+            get(environments::list_repo_environments),
+        )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests",
             get(pr::list_pull_requests).post(pr::create_pull_request),
@@ -863,6 +884,62 @@ async fn cancel_agent_run(
     }
     let _ = state.supervisor.cancel(run_id).await;
     Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+struct RespondAgentRunRequest {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct AgentRunRespondView {
+    id: Uuid,
+    state: String,
+    message_sequence: i32,
+}
+
+async fn respond_agent_run(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(run_id): Path<Uuid>,
+    Json(body): Json<RespondAgentRunRequest>,
+) -> Result<Json<AgentRunRespondView>, AppError> {
+    let principal_id = require_session(&state.pool, &headers).await?;
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        "SELECT ar.org_id, ar.repo_id, o.slug, r.slug
+         FROM agent_runs ar
+         JOIN organizations o ON o.id = ar.org_id
+         JOIN repositories r ON r.id = ar.repo_id
+         WHERE ar.id = $1 AND ar.requested_by = $2",
+    )
+    .bind(run_id)
+    .bind(principal_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((org_id, repo_id, org_slug, repo_slug)) = row else {
+        return Err(AppError::NotFound);
+    };
+    let access = crate::mcp::RepoAccess {
+        org_id,
+        repo_id,
+        org_slug,
+        repo_slug,
+    };
+    let value =
+        crate::mcp::contract_domain::agent_run_respond(&state, &access, run_id, &body.message)
+            .await?;
+    Ok(Json(AgentRunRespondView {
+        id: run_id,
+        state: value
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queued")
+            .to_string(),
+        message_sequence: value
+            .get("message_sequence")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32,
+    }))
 }
 
 async fn git_smart_http(

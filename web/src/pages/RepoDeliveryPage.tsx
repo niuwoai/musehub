@@ -1,10 +1,20 @@
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
+import { paths } from '../app/paths'
+import { getPipelineJobLogs, type PipelineJob } from '../api'
 
 export function RepoDeliveryPage() {
   const ws = useWorkspace()
+  const [searchParams] = useSearchParams()
+  const deepLinkKeyRef = useRef('')
+  const [jobLogText, setJobLogText] = useState<string | null>(null)
+  const [jobLogKey, setJobLogKey] = useState<string | null>(null)
+  const [jobLogError, setJobLogError] = useState<string | null>(null)
   const {
     t,
+    activeOrg,
     selectedRepo,
     mergedPr,
     pipelineRun,
@@ -25,7 +35,48 @@ export function RepoDeliveryPage() {
     deploymentRollbackBusy,
     deploymentId,
     trace,
+    onPickDeploymentFromList,
+    onFocusPipelineRun,
   } = ws
+
+  useEffect(() => {
+    if (!selectedRepo) return
+    const dep = searchParams.get('deployment')
+    const pipe = searchParams.get('pipeline')
+    if (!dep && !pipe) return
+    const key = `${selectedRepo}:${dep ?? ''}:${pipe ?? ''}`
+    if (deepLinkKeyRef.current === key) return
+    deepLinkKeyRef.current = key
+    if (dep) {
+      setDeploymentLookupId(dep)
+      void onPickDeploymentFromList(dep)
+    }
+    if (pipe) void onFocusPipelineRun(pipe)
+  }, [
+    selectedRepo,
+    searchParams,
+    setDeploymentLookupId,
+    onPickDeploymentFromList,
+    onFocusPipelineRun,
+  ])
+
+  async function loadJobLogs(job: PipelineJob) {
+    if (!selectedRepo || !pipelineRun) return
+    setJobLogError(null)
+    setJobLogKey(job.job_key)
+    try {
+      const chunk = await getPipelineJobLogs(
+        activeOrg,
+        selectedRepo,
+        job.id,
+        pipelineRun.run_attempt_id,
+      )
+      setJobLogText(chunk.text || t('app.prCiJobLogMissing'))
+    } catch (err) {
+      setJobLogError(err instanceof Error ? err.message : 'log fetch failed')
+      setJobLogText(null)
+    }
+  }
 
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
@@ -42,6 +93,17 @@ export function RepoDeliveryPage() {
         <>
           <p>
             main @{mergedPr.head_oid.slice(0, 7)} (PR #{mergedPr.number})
+            {mergedPr.issue_number != null ? (
+              <>
+                {' · '}
+                <Link
+                  to={paths.repoIssue(activeOrg, selectedRepo, mergedPr.issue_number)}
+                  data-testid="delivery-merged-issue-link"
+                >
+                  issue #{mergedPr.issue_number}
+                </Link>
+              </>
+            ) : null}
           </p>
           {pipelineRun ? (
             <p data-testid="pipeline-state">
@@ -86,6 +148,13 @@ export function RepoDeliveryPage() {
                   {pipelineJobs.map((job) => (
                     <li key={job.id}>
                       {job.job_key} ({job.state})
+                      <button
+                        type="button"
+                        data-testid={`pipeline-job-logs-${job.job_key}`}
+                        onClick={() => void loadJobLogs(job)}
+                      >
+                        {t('app.pipelineViewJobLogs')}
+                      </button>
                       {job.retry_allowed ? (
                         <button
                           type="button"
@@ -99,6 +168,17 @@ export function RepoDeliveryPage() {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+            </div>
+          ) : null}
+          {jobLogKey ? (
+            <div data-testid="pipeline-job-log-panel">
+              <h4>{t('app.pipelineJobLogTitle', { job: jobLogKey })}</h4>
+              {jobLogError ? <p role="alert">{jobLogError}</p> : null}
+              {jobLogText ? (
+                <pre data-testid="pipeline-job-log-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {jobLogText}
+                </pre>
               ) : null}
             </div>
           ) : null}
@@ -283,6 +363,32 @@ export function RepoDeliveryPage() {
         <button type="button" onClick={() => void ws.onLoadTrace()}>
           {t('app.viewTrace')}
         </button>
+      ) : null}
+      {trace ? (
+        <div data-testid="delivery-trace-links">
+          {trace.issue_number != null ? (
+            <p>
+              {t('delivery.linkedIssue')}:{' '}
+              <Link
+                to={paths.repoIssue(activeOrg, selectedRepo, trace.issue_number)}
+                data-testid="delivery-trace-issue-link"
+              >
+                #{trace.issue_number}
+              </Link>
+            </p>
+          ) : null}
+          {trace.pr_number != null ? (
+            <p>
+              {t('delivery.linkedPull')}:{' '}
+              <Link
+                to={paths.repoPull(activeOrg, selectedRepo, trace.pr_number)}
+                data-testid="delivery-trace-pr-link"
+              >
+                #{trace.pr_number}
+              </Link>
+            </p>
+          ) : null}
+        </div>
       ) : null}
       {trace ? (
         <pre data-testid="delivery-trace" style={{ fontSize: '0.85rem' }}>

@@ -1,6 +1,7 @@
 //! Production MCP on `/mcp` — PAT Bearer, domain tools, idempotent writes.
 
 mod auth;
+pub(crate) use auth::RepoAccess;
 pub mod capabilities;
 pub(crate) mod contract_domain;
 mod domain;
