@@ -203,6 +203,8 @@ done
 
 export DATABASE_URL
 export MUSEHUB_PRODUCT_OCI_E2E="${MUSEHUB_PRODUCT_OCI_E2E:-0}"
+# Playwright is started only by this script (avoid reuseExistingServer picking a stale :5173).
+export MUSEHUB_E2E_SKIP_WEB=1
 if [[ -n "${PLAYWRIGHT_ARGS:-}" ]]; then
   # shellcheck disable=SC2086
   yarn --cwd web test:e2e ${PLAYWRIGHT_ARGS}
