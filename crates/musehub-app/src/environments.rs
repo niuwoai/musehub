@@ -120,9 +120,10 @@ pub async fn create_repo_environment(
         return Err(AppError::Validation("environment name required".into()));
     }
     let id = Uuid::new_v4();
-    let result = sqlx::query(
+    let row = sqlx::query_as::<_, (Uuid, String, bool, i64)>(
         "INSERT INTO environments (id, org_id, repo_id, slug, name, requires_approval)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, name, requires_approval, row_version",
     )
     .bind(id)
     .bind(org_id)
@@ -130,24 +131,25 @@ pub async fn create_repo_environment(
     .bind(&slug)
     .bind(name)
     .bind(body.requires_approval)
-    .execute(&state.pool)
-    .await;
-    if let Err(e) = result {
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
         if let sqlx::Error::Database(db) = &e {
             if db.code().as_deref() == Some("23505") {
-                return Err(AppError::Conflict("environment slug already exists".into()));
+                return AppError::Conflict("environment slug already exists".into());
             }
         }
-        return Err(e.into());
-    }
+        e.into()
+    })?;
+    let (id, name, requires_approval, row_version) = row;
     Ok((
         StatusCode::CREATED,
         Json(EnvironmentView {
             id,
             slug,
-            name: name.to_string(),
-            requires_approval: body.requires_approval,
-            row_version: 1,
+            name,
+            requires_approval,
+            row_version,
         }),
     ))
 }
@@ -170,6 +172,11 @@ pub async fn patch_repo_environment(
         .filter(|n| !n.is_empty());
     if body.name.is_some() && name.is_none() {
         return Err(AppError::Validation("environment name required".into()));
+    }
+    if let Some(ref n) = name {
+        if n.len() > 128 {
+            return Err(AppError::Validation("environment name too long".into()));
+        }
     }
     let row = sqlx::query_as::<_, (Uuid, String, bool, i64)>(
         "UPDATE environments SET

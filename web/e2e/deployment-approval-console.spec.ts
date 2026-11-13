@@ -6,6 +6,7 @@ import type { Page } from '@playwright/test'
 import { expectLoggedInAs } from './helpers/session'
 import { refreshRepoAndOpenDelivery } from './helpers/delivery'
 import { goRepoPulls } from './helpers/navigation'
+import { createIssueViaUi } from './helpers/issues'
 import {
   createRepoViaUi,
   expectResponseOk,
@@ -35,14 +36,7 @@ async function loginCookie(handle: string, pass: string) {
 async function deliveryThroughRelease(page: Page, adminCookie: string) {
   const { slug } = await createRepoViaUi(page)
   await openRepoBySlug(page, slug)
-  const issueCreate = page.waitForResponse(
-    (r) =>
-      r.url().includes(`/repos/${slug}/issues`) &&
-      r.request().method() === 'POST' &&
-      r.ok(),
-  )
-  await page.getByTestId('create-issue').click()
-  await issueCreate
+  await createIssueViaUi(page, 'deployment approval fixture', { slug })
   await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
 
   const planCreate = page.waitForResponse(

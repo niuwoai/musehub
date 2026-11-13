@@ -24,5 +24,15 @@ test.describe('repo settings environments', () => {
     await page.getByTestId('repo-env-submit').click()
     await createResp
     await expect(page.getByTestId('env-staging')).toBeVisible()
+    await expect(page.getByTestId('env-staging')).toContainText(/approval required|需审批/i)
+    const toggle = page.waitForResponse(
+      (r) =>
+        r.url().includes('/environments/staging') &&
+        r.request().method() === 'PATCH' &&
+        r.ok(),
+    )
+    await page.getByTestId('env-toggle-approval-staging').click()
+    await toggle
+    await expect(page.getByTestId('env-staging')).not.toContainText(/approval required|需审批/i)
   })
 })

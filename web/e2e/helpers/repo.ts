@@ -2,6 +2,22 @@ import { expect, type Locator, type Page, type Response } from '@playwright/test
 import { e2eBrowserApiOrigin } from './origin'
 import { waitForSessionAuthSettled } from './session'
 
+function repoWorkspaceListGet(response: Response, slug: string): boolean {
+  if (response.request().method() !== 'GET' || !response.ok()) {
+    return false
+  }
+  const url = response.url()
+  if (!url.includes(`/repos/${slug}/`)) {
+    return false
+  }
+  return (
+    url.includes('/issues') ||
+    url.includes('/pull-requests') ||
+    url.includes('/deployments') ||
+    url.includes('/releases')
+  )
+}
+
 const apiBase = () => e2eBrowserApiOrigin()
 
 export function repoNavButtons(page: Page) {
@@ -151,6 +167,7 @@ export async function createRepoViaUi(page: Page): Promise<{
   expect(listed.some((r) => r.slug === slug)).toBe(true)
 
   await expect(page).toHaveURL(new RegExp(`/org/demo/repos/${slug}/issues`), { timeout: 15_000 })
+  await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
   await ensureRepoListPage(page)
   const repoEntry = repoNavButtonForSlug(page, slug)
   await expect(repoEntry).toHaveCount(1, { timeout: 15_000 })
@@ -158,19 +175,22 @@ export async function createRepoViaUi(page: Page): Promise<{
 }
 
 export async function openRepoDelivery(page: Page, slug: string): Promise<void> {
-  const repoContextReady = page.waitForResponse(
-    (r) =>
-      r.request().method() === 'GET' &&
-      r.ok() &&
-      r.url().includes(`/repos/${slug}/`) &&
-      (r.url().includes('/issues') ||
-        r.url().includes('/pull-requests') ||
-        r.url().includes('/deployments')),
-    { timeout: 30_000 },
-  )
-  await page.goto(`/org/demo/repos/${slug}/delivery`, { waitUntil: 'domcontentloaded' })
   await waitForSessionAuthSettled(page)
-  await repoContextReady
+  const repoContextReady = page.waitForResponse((r) => repoWorkspaceListGet(r, slug), {
+    timeout: 30_000,
+  })
+  await page.goto(`/org/demo/repos/${slug}/delivery`, { waitUntil: 'domcontentloaded' })
+  try {
+    await repoContextReady
+  } catch {
+    await openRepoBySlug(page, slug)
+    const deliveryReady = page.waitForResponse((r) => repoWorkspaceListGet(r, slug), {
+      timeout: 30_000,
+    })
+    await page.getByTestId('nav-repo-delivery').click()
+    await expect(page).toHaveURL(new RegExp(`/repos/${slug}/delivery`), { timeout: 15_000 })
+    await deliveryReady
+  }
   await expectRepoSlugInSubnav(page, slug)
   await expect(page.getByTestId('delivery-panel')).toBeVisible({ timeout: 30_000 })
 }
@@ -208,4 +228,5 @@ export async function openRepoBySlug(page: Page, slug: string): Promise<void> {
     timeout: 15_000,
   })
   await expectRepoSlugInSubnav(page, slug)
+  await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
 }

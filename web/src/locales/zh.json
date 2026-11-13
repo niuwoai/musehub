@@ -23,6 +23,9 @@
     "prCiJobLogPath": "日志 API",
     "prCiJobLogMissing": "此 job 尝试尚无已存储的日志片段。",
     "deliveryTitle": "交付链",
+    "releasesTitle": "版本发布",
+    "releasesEmpty": "尚无发布 — 请从已成功的流水线运行创建发布。",
+    "releasesLoadFailed": "无法加载本仓库的版本发布列表。",
     "deliveryMockNote": "部署仅使用 compose-mock（非真实 OCI/Docker）。",
     "deliveryModeNote": "部署遵循服务端策略：MUSEHUB_REQUIRE_PIPELINE_OCI=1 时为流水线构建 OCI + compose-runner；否则本地开发使用 compose-mock。",
     "runPipelineOnMain": "在已合并 main 提交上运行流水线",
@@ -139,7 +142,9 @@
     "emptyTree": "此路径下无条目。",
     "binaryFile": "二进制文件 @ {{path}}",
     "truncatedFile": "大文件（已截断）@ {{path}}",
-    "sshCloneLabel": "SSH 克隆"
+    "sshCloneLabel": "SSH 克隆",
+    "httpCloneLabel": "HTTPS 克隆",
+    "sshKeysLink": "管理 SSH 密钥（账号安全）"
   },
   "pull": {
     "syncHead": "同步 head",
@@ -167,7 +172,9 @@
     "loadMore": "加载更多",
     "loadingMore": "正在加载更多…",
     "loadFailed": "无法加载 Issue 列表。",
-    "createdHiddenByFilters": "Issue #{{number}} 已创建，但不满足当前筛选条件。"
+    "createdHiddenByFilters": "Issue #{{number}} 已创建，但不满足当前筛选条件。",
+    "newTitlePlaceholder": "Issue 标题",
+    "titleRequired": "创建前请填写 Issue 标题。"
   },
   "issueDetail": {
     "labels": "标签",
@@ -235,6 +242,12 @@
     "revokeGrant": "撤销",
     "revokeFailed": "无法撤销授权。",
     "environmentsTitle": "部署环境",
-    "approvalRequired": "需审批"
+    "approvalRequired": "需审批",
+    "envSlugPlaceholder": "staging",
+    "envNamePlaceholder": "Staging",
+    "envCreate": "添加环境",
+    "envToggleApproval": "切换审批门",
+    "envCreateFailed": "无法创建环境。",
+    "envPatchFailed": "无法更新环境。"
   }
 }

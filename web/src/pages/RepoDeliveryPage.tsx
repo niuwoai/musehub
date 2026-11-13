@@ -13,6 +13,8 @@ export function RepoDeliveryPage() {
   const [jobLogKey, setJobLogKey] = useState<string | null>(null)
   const [jobLogError, setJobLogError] = useState<string | null>(null)
   const [releases, setReleases] = useState<ReleaseSummary[]>([])
+  const [releasesLoading, setReleasesLoading] = useState(false)
+  const [releasesError, setReleasesError] = useState<string | null>(null)
   const {
     t,
     activeOrg,
@@ -42,10 +44,18 @@ export function RepoDeliveryPage() {
 
   useEffect(() => {
     if (!selectedRepo) return
+    setReleasesLoading(true)
+    setReleasesError(null)
     void listReleases(activeOrg, selectedRepo)
-      .then(setReleases)
-      .catch(() => setReleases([]))
-  }, [activeOrg, selectedRepo, publishedReleaseId, pipelineRun?.id])
+      .then((rows) => setReleases(rows))
+      .catch((err) => {
+        setReleases([])
+        setReleasesError(
+          err instanceof Error ? err.message : t('app.releasesLoadFailed'),
+        )
+      })
+      .finally(() => setReleasesLoading(false))
+  }, [activeOrg, selectedRepo, publishedReleaseId, pipelineRun?.id, t])
 
   useEffect(() => {
     if (!selectedRepo) return
@@ -99,9 +109,22 @@ export function RepoDeliveryPage() {
       </p>
       <section data-testid="delivery-releases">
         <h4>{t('app.releasesTitle')}</h4>
-        {releases.length === 0 ? (
-          <p role="status">{t('app.releasesEmpty')}</p>
-        ) : (
+        {releasesLoading ? (
+          <p role="status" data-testid="delivery-releases-loading">
+            {t('common.loading')}
+          </p>
+        ) : null}
+        {releasesError ? (
+          <p role="alert" data-testid="delivery-releases-error">
+            {releasesError}
+          </p>
+        ) : null}
+        {!releasesLoading && !releasesError && releases.length === 0 ? (
+          <p role="status" data-testid="delivery-releases-empty">
+            {t('app.releasesEmpty')}
+          </p>
+        ) : null}
+        {!releasesLoading && !releasesError && releases.length > 0 ? (
           <ul data-testid="delivery-release-list">
             {releases.map((rel) => (
               <li key={rel.id} data-testid={`release-row-${rel.tag_name}`}>
@@ -109,7 +132,7 @@ export function RepoDeliveryPage() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </section>
       {mergedPr?.head_oid ? (
         <>

@@ -25,6 +25,7 @@
     "deliveryTitle": "Delivery chain",
     "releasesTitle": "Releases",
     "releasesEmpty": "No releases yet — publish from a succeeded pipeline run.",
+    "releasesLoadFailed": "Could not load releases for this repository.",
     "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
     "deliveryModeNote": "Deploy follows server policy: pipeline-built OCI + compose-runner when MUSEHUB_REQUIRE_PIPELINE_OCI=1; otherwise compose-mock for local dev.",
     "runPipelineOnMain": "Run pipeline on merged main tip",
@@ -167,7 +168,8 @@
     "loadingMore": "Loading more…",
     "loadFailed": "Could not load issues.",
     "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters.",
-    "newTitlePlaceholder": "Issue title"
+    "newTitlePlaceholder": "Issue title",
+    "titleRequired": "Enter an issue title before creating."
   },
   "issueDetail": {
     "labels": "Labels",

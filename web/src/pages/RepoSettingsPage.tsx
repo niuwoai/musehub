@@ -225,7 +225,7 @@ export function RepoSettingsPage() {
         <button
           type="button"
           data-testid="repo-grant-submit"
-          disabled={grantsBusy}
+          disabled={grantsBusy || grantHandle.trim().length === 0}
           onClick={() => void submitGrant()}
         >
           {t('repoSettings.grantSubmit')}

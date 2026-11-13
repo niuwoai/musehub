@@ -16,7 +16,7 @@ function issueMatchesFilters(
 }
 
 export function RepoIssuesPage() {
-  const { org = DEFAULT_ORG } = useParams<{ org: string }>()
+  const { org = DEFAULT_ORG, slug: routeSlug } = useParams<{ org: string; slug?: string }>()
   const envLimit = import.meta.env.VITE_E2E_ISSUE_PAGE_LIMIT
   const pageLimit = Math.min(
     100,
@@ -24,7 +24,7 @@ export function RepoIssuesPage() {
   )
   const {
     t,
-    selectedRepo,
+    selectedRepo: workspaceRepo,
     lastRun,
     agentRunStarting,
     onAcceptPlan,
@@ -33,6 +33,7 @@ export function RepoIssuesPage() {
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
+  const selectedRepo = workspaceRepo ?? routeSlug ?? null
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -95,9 +96,14 @@ export function RepoIssuesPage() {
     void loadAssigneeOptions()
   }, [selectedRepo, loadAssigneeOptions])
 
+  const canCreateIssue = newIssueTitle.trim().length > 0 && Boolean(selectedRepo)
+
   async function handleCreateIssue() {
     const title = newIssueTitle.trim()
-    if (!title || !selectedRepo) return
+    if (!title || !selectedRepo) {
+      setListError(t('issues.titleRequired'))
+      return
+    }
     setListError(null)
     setListNotice(null)
     const created = await createIssue(org, selectedRepo, title, {
@@ -206,7 +212,12 @@ export function RepoIssuesPage() {
           </option>
         ))}
       </select>
-      <button type="button" data-testid="create-issue" onClick={() => void handleCreateIssue()}>
+      <button
+        type="button"
+        data-testid="create-issue"
+        disabled={!canCreateIssue}
+        onClick={() => void handleCreateIssue()}
+      >
         {t('app.createIssue')}
       </button>
       {listError ? <p role="alert">{listError}</p> : null}
