@@ -146,12 +146,10 @@ async fn receive_pack_hook_sees_zero_caps_and_storage_gid() {
         .lines()
         .find(|l| l.starts_with("Groups:"))
         .expect("Groups line in probe");
-    let groups_field = groups_line
-        .strip_prefix("Groups:")
-        .unwrap_or("")
-        .trim();
+    let groups_field = groups_line.strip_prefix("Groups:").unwrap_or("").trim();
     assert_eq!(
-        groups_field, musehub_gid.as_str(),
+        groups_field,
+        musehub_gid.as_str(),
         "Groups must be only storage gid: {groups_line}"
     );
     let _ = std::fs::remove_file(probe_path);
