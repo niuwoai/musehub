@@ -77,6 +77,13 @@ export function RepoIssuesPage() {
     [org, selectedRepo, filterState, filterLabel, filterAssignee, pageLimit],
   )
 
+  const loadAssigneeOptions = useCallback(() => {
+    if (!selectedRepo) return Promise.resolve()
+    return listIssueAssignees(org, selectedRepo)
+      .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
+      .catch(() => setAssigneeOptions([]))
+  }, [org, selectedRepo])
+
   useEffect(() => {
     if (!selectedRepo) return
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
@@ -84,10 +91,8 @@ export function RepoIssuesPage() {
 
   useEffect(() => {
     if (!selectedRepo) return
-    void listIssueAssignees(org, selectedRepo)
-      .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
-      .catch(() => setAssigneeOptions([]))
-  }, [org, selectedRepo])
+    void loadAssigneeOptions()
+  }, [selectedRepo, loadAssigneeOptions])
 
   async function handleCreateIssue() {
     setListError(null)
@@ -114,7 +119,7 @@ export function RepoIssuesPage() {
   }
 
   async function refreshAll() {
-    await Promise.all([loadIssues(selectedRepo!), fetchPage()])
+    await Promise.all([loadIssues(selectedRepo!), fetchPage(), loadAssigneeOptions()])
   }
 
   if (!selectedRepo) {
@@ -133,9 +138,9 @@ export function RepoIssuesPage() {
             onChange={(e) => setFilterState(e.target.value)}
           >
             <option value="">{t('issues.filterAny')}</option>
-            <option value="open">open</option>
-            <option value="in_progress">in_progress</option>
-            <option value="closed">closed</option>
+            <option value="open">{t('issues.stateOpen')}</option>
+            <option value="in_progress">{t('issues.stateInProgress')}</option>
+            <option value="closed">{t('issues.stateClosed')}</option>
           </select>
         </label>
         <label>
@@ -165,7 +170,7 @@ export function RepoIssuesPage() {
           type="button"
           data-testid="issue-apply-filters"
           onClick={() =>
-            void fetchPage().catch((e) =>
+            void Promise.all([loadAssigneeOptions(), fetchPage()]).catch((e) =>
               setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
             )
           }

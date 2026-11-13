@@ -283,6 +283,39 @@ pub async fn discussion_comment(
         ));
     }
     discussion_list(state, access, target_kind, target_id, 0).await?;
+    let normalized_anchor = if target_kind == "pr" {
+        match anchor {
+            None | Some(Value::Null) => None,
+            Some(anchor_value) => {
+                let row = sqlx::query_as::<_, (i64, Option<String>, Option<String>)>(
+                    "SELECT row_version, base_oid, head_oid FROM pull_requests
+                     WHERE id = $1 AND repo_id = $2",
+                )
+                .bind(target_id)
+                .bind(access.repo_id)
+                .fetch_optional(&state.pool)
+                .await?;
+                let Some((row_version, base_oid, head_oid)) = row else {
+                    return Err(AppError::NotFound);
+                };
+                let base = base_oid.ok_or_else(|| AppError::Validation("missing base".into()))?;
+                let head = head_oid.ok_or_else(|| AppError::Validation("missing head".into()))?;
+                let storage = storage_for_repo(state, access.repo_id).await?;
+                let bare = crate::git_http::bare_repo_path(&state.git_root, &storage);
+                Some(
+                    crate::discussion::pr_anchor::validate_and_normalize_pr_anchor(
+                        &bare,
+                        &base,
+                        &head,
+                        row_version,
+                        anchor_value,
+                    )?,
+                )
+            }
+        }
+    } else {
+        None
+    };
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO discussion_comments (id, org_id, repo_id, target_kind, target_id, author_id, body, anchor)
@@ -295,7 +328,7 @@ pub async fn discussion_comment(
     .bind(target_id)
     .bind(principal_id)
     .bind(body)
-    .bind(anchor.as_ref())
+    .bind(normalized_anchor.as_ref())
     .execute(&state.pool)
     .await?;
     Ok(json!({
@@ -303,7 +336,7 @@ pub async fn discussion_comment(
         "target": { "kind": target_kind, "id": target_id.to_string() },
         "author_id": principal_id.to_string(),
         "body": body,
-        "anchor": anchor,
+        "anchor": normalized_anchor,
         "resolved": false,
         "outdated": false,
     }))

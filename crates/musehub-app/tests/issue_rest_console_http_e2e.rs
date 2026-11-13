@@ -394,6 +394,147 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
         .iter()
         .any(|i| i["number"] == 1 && i["assignee_handle"] == "admin"));
 
+    let bad_label = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?label=bad%21"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_label.status(), StatusCode::BAD_REQUEST);
+
+    let list_label_trim = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?label=%20v1-console%20"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_label_trim.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(list_label_trim).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    for title in ["slice two", "slice three", "slice four"] {
+        let created_n = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues"))
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "title": title }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created_n.status(), StatusCode::CREATED);
+        let n = body_json(created_n).await["number"].as_i64().unwrap();
+        let tag = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/{n}"))
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "labels": ["v1-console"] }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tag.status(), StatusCode::OK);
+    }
+
+    let page_one = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?label=v1-console&limit=2"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page_one.status(), StatusCode::OK);
+    let page_one_json = body_json(page_one).await;
+    assert!(page_one_json["has_more"].as_bool() == Some(true));
+    let cursor = page_one_json["next_cursor"]
+        .as_str()
+        .expect("cursor for label page");
+    let first_ids: Vec<String> = page_one_json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(first_ids.len(), 2);
+
+    let page_two = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?label=v1-console&limit=2&cursor={cursor}"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page_two.status(), StatusCode::OK);
+    let page_two_json = body_json(page_two).await;
+    let second_ids: Vec<String> = page_two_json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect();
+    for id in &second_ids {
+        assert!(!first_ids.contains(id));
+    }
+    let total = first_ids.len() + second_ids.len();
+    assert!(total >= 3);
+    for id in first_ids.iter().chain(second_ids.iter()) {
+        let listed = page_one_json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(page_two_json["items"].as_array().unwrap().iter())
+            .find(|i| i["id"].as_str() == Some(id.as_str()))
+            .unwrap();
+        assert!(listed["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l == "v1-console"));
+    }
+
     let reason_while_open = app
         .clone()
         .oneshot(

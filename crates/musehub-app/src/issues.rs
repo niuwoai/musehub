@@ -70,6 +70,14 @@ pub(crate) fn validate_close_reason(reason: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+pub(crate) fn validate_label_filter(label: &str) -> Result<(), AppError> {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("invalid label".into()));
+    }
+    validate_labels(&[trimmed.to_string()])
+}
+
 pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
     if labels.len() > MAX_LABELS {
         return Err(AppError::Validation(format!(
@@ -206,12 +214,29 @@ pub async fn list_issues_page(
     let (org_id, repo_id) =
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
 
-    if let Some(s) = &q.state {
+    let state_filter = if let Some(s) = &q.state {
         let trimmed = s.trim();
-        if !trimmed.is_empty() {
+        if trimmed.is_empty() {
+            None
+        } else {
             validate_issue_list_state(trimmed)?;
+            Some(trimmed.to_string())
         }
-    }
+    } else {
+        None
+    };
+
+    let label_filter = if let Some(raw) = &q.label {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            validate_label_filter(trimmed)?;
+            Some(trimmed.to_string())
+        }
+    } else {
+        None
+    };
 
     let mut cursor_number: Option<i64> = None;
     let mut cursor_id: Option<Uuid> = None;
@@ -240,8 +265,8 @@ pub async fn list_issues_page(
          LIMIT $7",
     )
     .bind(repo_id)
-    .bind(q.state.as_deref().map(str::trim).filter(|s| !s.is_empty()))
-    .bind(q.label.as_deref())
+    .bind(state_filter.as_deref())
+    .bind(label_filter.as_deref())
     .bind(assignee_id)
     .bind(cursor_number)
     .bind(cursor_id)
@@ -630,5 +655,12 @@ mod tests {
         assert!(validate_issue_list_state("in_progress").is_ok());
         assert!(validate_issue_list_state("closed").is_ok());
         assert!(validate_issue_list_state("bogus").is_err());
+    }
+
+    #[test]
+    fn label_filter_matches_write_path() {
+        assert!(validate_label_filter("  v1-console  ").is_ok());
+        assert!(validate_label_filter("bad!").is_err());
+        assert!(validate_label_filter("   ").is_err());
     }
 }

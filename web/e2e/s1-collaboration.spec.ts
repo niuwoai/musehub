@@ -120,6 +120,7 @@ test.describe('S1 collaboration console', () => {
       )
       await page.goto(`/org/demo/repos/${slug}/pulls/${pr.number}`)
       await expect(page.getByTestId('pull-detail-title')).toBeVisible()
+      await expect(page.getByTestId('pull-row-version')).toBeVisible()
       await page.getByTestId('pull-diff-files').getByRole('button').first().click()
       await page.getByTestId('pull-diff-line-pick').first().click()
       await page.getByTestId('pull-comment-input').fill('anchored')

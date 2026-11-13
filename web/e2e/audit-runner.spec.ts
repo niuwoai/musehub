@@ -17,6 +17,9 @@ test.describe('audit and runner status panels', () => {
 
     await goAudit(page)
     await expect(page.getByTestId('audit-panel')).toBeVisible()
+    await page.getByTestId('audit-resource-type').selectOption('repository')
+    await page.getByTestId('audit-apply-filter').click()
+    await expect(page.getByTestId('audit-panel')).toBeVisible()
     await goRunner(page)
     await expect(page.getByTestId('runner-status-panel')).toBeVisible()
     await expect(page.getByTestId('runner-executors')).toBeVisible()

@@ -83,7 +83,15 @@
     "changePassword": "Change password"
   },
   "audit": {
-    "empty": "No audit events yet."
+    "empty": "No audit events yet.",
+    "loadFailed": "Could not load audit events.",
+    "resourceTypeFilter": "Resource type",
+    "resourceRepository": "Repository",
+    "resourcePullRequest": "Pull request",
+    "resourceIssue": "Issue",
+    "resourcePipeline": "Pipeline run",
+    "resourceDeployment": "Deployment",
+    "resourcePrincipal": "Principal"
   },
   "orgSettings": {
     "displayName": "Org display name",
@@ -120,6 +128,8 @@
   "pull": {
     "syncHead": "Sync head",
     "syncFailed": "Could not sync pull request head.",
+    "staleRevision": "This pull request changed elsewhere. Reloaded the latest revision — try again.",
+    "rowVersion": "Revision {{version}}",
     "review": "Review",
     "approve": "Approve",
     "selfApproveBlocked": "Authors cannot approve their own pull requests.",
@@ -134,6 +144,9 @@
     "filterAny": "Any",
     "filterLabel": "Label",
     "filterAssignee": "Assignee",
+    "stateOpen": "Open",
+    "stateInProgress": "In progress",
+    "stateClosed": "Closed",
     "applyFilters": "Apply filters",
     "loadMore": "Load more",
     "loadingMore": "Loading more…",
@@ -188,7 +201,7 @@
   },
   "sshKeys": {
     "title": "SSH keys",
-    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.",
+    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc5 — use HTTPS + PAT for Git.",
     "name": "Key name",
     "publicKey": "Public key",
     "add": "Add SSH key",

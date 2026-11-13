@@ -536,6 +536,32 @@ async fn s1_collaboration_rest_slice() {
         .await
         .unwrap();
     assert_eq!(sync_ok.status(), StatusCode::OK);
+    let sync_body = body_json(sync_ok).await;
+    let bumped_row = sync_body["row_version"]
+        .as_i64()
+        .expect("sync returns row_version");
+    assert!(bumped_row > row_version);
+
+    let sync_noop = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/pull-requests/{pr_number}/sync"
+                ))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "expected_row_version": bumped_row }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sync_noop.status(), StatusCode::OK);
+    let noop_body = body_json(sync_noop).await;
+    assert_eq!(noop_body["row_version"], bumped_row);
 
     let comments = app
         .clone()

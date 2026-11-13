@@ -1,10 +1,10 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc4`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc5`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
-MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc4`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。
+MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc5`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。
 
 **诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、**Live Codex** 在线凭据、OAuth/SAML、多区域 HA。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
 

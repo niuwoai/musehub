@@ -101,6 +101,11 @@ test.describe('Issue delivery console', () => {
       password: 'E2e-Filter-Member-12!',
       role: 'member',
     })
+    await apiJson(page, 'POST', `/api/v1/orgs/demo/repos/${slug}/collaborators`, {
+      handle: member,
+      role: 'maintainer',
+    })
+    await page.goto(`/org/demo/repos/${slug}/issues`)
     await page.getByTestId('issue-filter-assignee').selectOption(member)
     await page.getByTestId('issue-apply-filters').click()
     await expect(page.getByTestId('issue-row-1')).toHaveCount(0)
