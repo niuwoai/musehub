@@ -29,7 +29,7 @@ pub struct ListAuditQuery {
     pub resource_type: Option<String>,
 }
 
-/// Records one audit row; failures are logged by caller but must not block primary operations.
+/// Records one audit row inside an open transaction.
 #[allow(clippy::too_many_arguments)]
 pub async fn record_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -177,5 +177,72 @@ pub async fn list_org_audit(
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let items =
         query_org_audit(&state.pool, org_id, None, query.resource_type, None, limit).await?;
+    Ok(Json(items))
+}
+
+/// Principal-scoped audit (e.g. SSH keys): org_id may be NULL; visible only to the actor.
+pub async fn query_self_audit(
+    pool: &PgPool,
+    actor_id: Uuid,
+    resource_type: Option<String>,
+    resource_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<AuditEventView>, AppError> {
+    let rows = sqlx::query_as::<_, (
+        Uuid,
+        Option<Uuid>,
+        Option<Uuid>,
+        Uuid,
+        String,
+        String,
+        Uuid,
+        String,
+        serde_json::Value,
+        time::OffsetDateTime,
+    )>(
+        "SELECT id, org_id, repo_id, actor_id, action, resource_type, resource_id, decision, metadata, occurred_at
+         FROM audit_events
+         WHERE actor_id = $1
+           AND ($2::text IS NULL OR resource_type = $2)
+           AND ($3::uuid IS NULL OR resource_id = $3)
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT $4",
+    )
+    .bind(actor_id)
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, o, r, actor, action, rt, rid, decision, meta, at)| AuditEventView {
+                id,
+                org_id: o,
+                repo_id: r,
+                actor_id: actor,
+                action,
+                resource_type: rt,
+                resource_id: rid,
+                decision,
+                metadata: meta,
+                occurred_at: at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| at.to_string()),
+            },
+        )
+        .collect())
+}
+
+pub async fn list_self_audit(
+    State(state): State<std::sync::Arc<crate::AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ListAuditQuery>,
+) -> Result<Json<Vec<AuditEventView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let items =
+        query_self_audit(&state.pool, principal_id, query.resource_type, None, limit).await?;
     Ok(Json(items))
 }

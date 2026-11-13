@@ -92,7 +92,8 @@
     "resourcePipeline": "流水线运行",
     "resourceDeployment": "部署",
     "resourcePrincipal": "主体",
-    "resourceRepositoryGrant": "仓库授权"
+    "resourceRepositoryGrant": "仓库授权",
+    "resourceSshKey": "SSH 公钥"
   },
   "orgSettings": {
     "displayName": "组织显示名称",

@@ -115,6 +115,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(change_password_handler),
         )
         .route("/api/v1/me", get(me_handler))
+        .route("/api/v1/me/audit/events", get(audit::list_self_audit))
         .route(
             "/api/v1/tokens",
             get(list_pats_handler).post(create_pat_handler),

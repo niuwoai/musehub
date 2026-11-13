@@ -43,6 +43,11 @@ export async function goAccountTokens(page: Page) {
   await expect(page.getByTestId('pat-management')).toBeVisible({ timeout: 15_000 })
 }
 
+export async function goRepoCode(page: Page) {
+  await goNav(page, 'nav-repo-code')
+  await expect(page.getByTestId('repo-code')).toBeVisible({ timeout: 30_000 })
+}
+
 export async function goRepoPulls(page: Page) {
   await goNav(page, 'nav-repo-pulls')
   await expect(page.getByTestId('repo-pulls-page')).toBeVisible({ timeout: 30_000 })

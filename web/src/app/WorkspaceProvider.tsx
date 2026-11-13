@@ -688,10 +688,10 @@ function useWorkspaceState(): WorkspaceValue {
     if (!session || !repoSlugFromUrl) {
       return
     }
-    if (selectedRepoRef.current !== repoSlugFromUrl) {
+    if (selectedRepo !== repoSlugFromUrl) {
       void loadIssues(repoSlugFromUrl)
     }
-  }, [session, repoSlugFromUrl])
+  }, [session, repoSlugFromUrl, selectedRepo])
 
   async function refreshRepos() {
     const data = await listRepos(activeOrg)
