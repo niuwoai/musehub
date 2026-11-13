@@ -65,7 +65,7 @@ pub async fn record_in_tx(
     Ok(())
 }
 
-/// Records one audit row; failures propagate to the caller when used with `?`.
+/// Records one audit row outside an existing transaction.
 #[allow(clippy::too_many_arguments)]
 pub async fn record(
     pool: &PgPool,
