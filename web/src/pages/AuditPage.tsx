@@ -62,7 +62,7 @@ export function AuditPage() {
           {events.map((ev) => (
             <li key={ev.id} data-testid="audit-event">
               <code>{ev.occurred_at.slice(0, 19)}</code> {ev.action}{' '}
-              <span>
+              <span data-testid="audit-event-resource">
                 {ev.resource_type}/{ev.resource_id.slice(0, 8)}…
               </span>{' '}
               · {ev.decision}
