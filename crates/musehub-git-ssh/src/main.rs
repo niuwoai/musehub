@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use musehub_app::git_ssh::{
-    self, assert_git_ssh_connection_user, lookup_ssh_key_by_fingerprint, reload_ssh_key_by_id,
-    render_sshd_config, write_authorized_keys_stdout, GIT_SSH_LOGIN_USER,
+    self, assert_git_ssh_connection_user, lookup_ssh_key_by_fingerprint, render_sshd_config,
+    write_authorized_keys_stdout, GIT_SSH_LOGIN_USER,
 };
 use musehub_app::git_ssh_runtime::{
     default_git_ssh_run_dir, ensure_host_ed25519_key, ensure_shared_git_storage_root,
@@ -182,7 +182,7 @@ exec /usr/local/bin/musehub-git-ssh shell
 
 async fn pool() -> Result<sqlx::PgPool, Box<dyn std::error::Error + Send + Sync>> {
     Ok(PgPoolOptions::new()
-        .max_connections(2)
+        .max_connections(4)
         .connect(&require_database_url()?)
         .await?)
 }
@@ -227,8 +227,11 @@ async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let auth = lookup_ssh_key_by_fingerprint(&pool, &session_fp)
         .await
         .map_err(|_| "unknown key")?;
-    let _ = reload_ssh_key_by_id(&pool, auth.key_id).await?;
-    match git_ssh::run_ssh_gateway(&pool, &require_git_root(), auth.key_id, &original).await {
+    let plan = git_ssh::plan_ssh_pack_gateway(&pool, &require_git_root(), auth.key_id, &original)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    pool.close().await;
+    match git_ssh::execute_ssh_pack(&plan) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("{}", e);

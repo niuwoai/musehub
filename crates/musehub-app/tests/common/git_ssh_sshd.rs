@@ -53,14 +53,13 @@ impl GitPasswdHomeGuard {
 
 impl Drop for GitPasswdHomeGuard {
     fn drop(&mut self) {
-        if let Some(ref prev) = self.saved_home {
-            if prev != &self.fixture_home {
-                let _ = Command::new("sudo")
-                    .args(["usermod", "-d", prev, "git"])
-                    .status();
-            }
-        }
         std::env::remove_var("MUSEHUB_GIT_SSH_LOGIN_HOME");
+        let stable = musehub_app::git_ssh_runtime::GIT_SSH_LOGIN_HOME;
+        if self.fixture_home != stable {
+            let _ = Command::new("sudo")
+                .args(["usermod", "-d", stable, "git"])
+                .status();
+        }
         if let Some(parent) = std::path::Path::new(&self.fixture_home).parent() {
             let _ = Command::new("sudo")
                 .args(["rm", "-rf", parent.to_str().unwrap_or("")])

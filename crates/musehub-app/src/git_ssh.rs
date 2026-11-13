@@ -7,7 +7,7 @@
 //! session `HOME`. Client `SendEnv` / writable passwd home can otherwise override allowlisted vars.
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use sqlx::PgPool;
@@ -260,12 +260,20 @@ pub fn format_authorized_keys_line(
     ))
 }
 
-pub async fn run_ssh_gateway(
+/// Bare repo path and git pack service after DB authorization (no I/O to git yet).
+#[derive(Debug, Clone)]
+pub struct SshPackPlan {
+    pub bare: PathBuf,
+    pub service: String,
+}
+
+/// Authorizes one forced git command and returns the on-disk bare repo + pack service name.
+pub async fn plan_ssh_pack_gateway(
     pool: &PgPool,
     git_root: &Path,
     key_id: Uuid,
     original_command: &str,
-) -> Result<i32, AppError> {
+) -> Result<SshPackPlan, AppError> {
     let auth = reload_ssh_key_by_id(pool, key_id).await?;
     let principal_id = auth.principal_id;
     let parsed = parse_ssh_original_command(original_command)?;
@@ -301,7 +309,25 @@ pub async fn run_ssh_gateway(
         metadata,
     )
     .await;
-    run_git_pack_inherit(&bare, service_name)
+    Ok(SshPackPlan {
+        bare,
+        service: service_name.to_string(),
+    })
+}
+
+pub async fn run_ssh_gateway(
+    pool: &PgPool,
+    git_root: &Path,
+    key_id: Uuid,
+    original_command: &str,
+) -> Result<i32, AppError> {
+    let plan = plan_ssh_pack_gateway(pool, git_root, key_id, original_command).await?;
+    execute_ssh_pack(&plan)
+}
+
+/// Runs `upload-pack` / `receive-pack` after the DB pool is released (may block for pack I/O).
+pub fn execute_ssh_pack(plan: &SshPackPlan) -> Result<i32, AppError> {
+    run_git_pack_inherit(&plan.bare, &plan.service)
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -317,11 +343,47 @@ pub(crate) fn git_pack_exec_plan(service: &str) -> (&'static str, Option<String>
     }
 }
 
+/// Probes `sg` for receive-pack without a TTY; fails fast when the group is missing or unusable.
+#[cfg(unix)]
+fn validate_sg_storage_group(group: &str) -> Result<(), AppError> {
+    let exists = Command::new("getent")
+        .args(["group", group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !exists {
+        return Err(AppError::Other(format!(
+            "storage group {group} missing — create it and add user git (usermod -aG {group} git)"
+        )));
+    }
+    let probe = Command::new("sg")
+        .args([group, "-c", "true"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if probe.success() {
+        return Ok(());
+    }
+    Err(AppError::Other(format!(
+        "cannot run sg {group} for receive-pack — ensure git is a member of {group}"
+    )))
+}
+
+#[cfg(not(unix))]
+fn validate_sg_storage_group(_group: &str) -> Result<(), AppError> {
+    Ok(())
+}
+
 /// `receive-pack` writes refs with the storage GID (HTTP uses the same via `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let safe_dir = format!("safe.directory={}", bare.display());
     let (program, sg_group) = git_pack_exec_plan(service);
     let mut child = if let Some(g) = sg_group {
+        validate_sg_storage_group(g.as_str())?;
         let g = g.as_str();
         let script = format!(
             "git -c {} -c core.sharedRepository=group {} {}",
