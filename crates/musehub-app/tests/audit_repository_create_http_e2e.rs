@@ -34,6 +34,12 @@ async fn repository_create_writes_repository_audit_event() {
         .await
         .unwrap();
     assert_eq!(created.status(), StatusCode::CREATED);
+    let created_body = serde_json::from_slice::<serde_json::Value>(
+        &created.into_body().collect().await.unwrap().to_bytes(),
+    )
+    .unwrap();
+    let repo_id = created_body["id"].as_str().expect("repo id");
+    assert_eq!(created_body["slug"].as_str(), Some(slug.as_str()));
 
     let listed = app
         .clone()
@@ -53,8 +59,14 @@ async fn repository_create_writes_repository_audit_event() {
     )
     .unwrap();
     let events = body.as_array().expect("audit array");
-    assert!(
-        events.iter().any(|e| e["action"] == "repository.create"),
-        "expected repository.create audit event"
-    );
+    let matched = events
+        .iter()
+        .find(|e| {
+            e["action"] == "repository.create"
+                && e["resource_id"] == repo_id
+                && e["metadata"]["slug"] == slug
+        })
+        .expect("repository.create audit for this repo");
+    assert_eq!(matched["resource_type"], "repository");
+    assert_eq!(matched["decision"], "allow");
 }

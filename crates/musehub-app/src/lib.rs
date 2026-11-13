@@ -604,10 +604,9 @@ async fn create_repo(
     .bind(principal_id)
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
     let request_id = audit::request_id_from_headers(&headers);
-    let _ = audit::record(
-        &state.pool,
+    audit::record_in_tx(
+        &mut tx,
         Some(org_id),
         Some(repo_id),
         principal_id,
@@ -619,7 +618,8 @@ async fn create_repo(
         "allow",
         serde_json::json!({ "slug": slug }),
     )
-    .await;
+    .await?;
+    tx.commit().await?;
     pr::seed_repo_required_checks(&state.pool, repo_id).await?;
     pipeline::seed_repo_environment(&state.pool, org_id, repo_id).await?;
     Ok((

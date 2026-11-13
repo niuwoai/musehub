@@ -8,10 +8,12 @@ import { loginAsAdmin } from './helpers/session'
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 
 test.describe('IAM grants console', () => {
-  test.describe.configure({ mode: 'serial' })
   test.skip(!password, 'requires bootstrap password')
 
-  test('org default role, grant and revoke on repo settings', async ({ page, playwright }) => {
+  test('grant and revoke on repo settings without mutating org defaults', async ({
+    page,
+    playwright,
+  }) => {
     await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
@@ -23,13 +25,6 @@ test.describe('IAM grants console', () => {
       password: memberPass,
       role: 'member',
     })
-
-    const patched = await apiJson<{
-      preferences: { default_collaborator_role: string }
-    }>(page, 'PATCH', '/api/v1/orgs/demo/settings', {
-      preferences: { default_collaborator_role: 'developer' },
-    })
-    expect(patched.preferences.default_collaborator_role).toBe('developer')
 
     await page.goto(`/org/demo/repos/${slug}/settings`)
     await expect(page.getByTestId('repo-settings-panel')).toBeVisible({ timeout: 15_000 })
