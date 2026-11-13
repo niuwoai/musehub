@@ -300,20 +300,38 @@ pub async fn run_ssh_gateway(
         metadata,
     )
     .await;
-    let code = run_git_pack_inherit(&bare, service_name)?;
-    #[cfg(unix)]
-    if service_name == "receive-pack" && code == 0 {
-        super::git_http::apply_bare_repo_group_acl(&bare)?;
-    }
-    Ok(code)
+    run_git_pack_inherit(&bare, service_name)
 }
 
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Run pack services with the storage group effective GID (same model as HTTP `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
-    let mut child = Command::new("git");
-    child
-        .arg("-c")
-        .arg(format!("safe.directory={}", bare.display()));
-    child.arg(service).arg(bare);
+    let safe_dir = format!("safe.directory={}", bare.display());
+    let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").ok();
+    let mut child = if let Some(ref g) = group.filter(|name| !name.is_empty()) {
+        let script = format!(
+            "git -c {} -c core.sharedRepository=group {} {}",
+            shell_single_quote(&safe_dir),
+            service,
+            shell_single_quote(&bare.to_string_lossy())
+        );
+        let mut cmd = Command::new("sg");
+        cmd.arg(g).arg("-c").arg(script);
+        cmd
+    } else {
+        let mut direct = Command::new("git");
+        direct
+            .arg("-c")
+            .arg(safe_dir)
+            .arg("-c")
+            .arg("core.sharedRepository=group")
+            .arg(service)
+            .arg(bare);
+        direct
+    };
     child.stdin(Stdio::inherit());
     child.stdout(Stdio::inherit());
     child.stderr(Stdio::inherit());

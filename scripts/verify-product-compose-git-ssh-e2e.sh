@@ -384,8 +384,7 @@ compose_api_json() {
   printf '%s' "$body"
 }
 
-if [[ -n "${MUSEHUB_STACK_DC:-}" ]]; then
-  : "${COOKIE_JAR:?embedded product-stack e2e must export COOKIE_JAR}"
+if [[ -n "${MUSEHUB_STACK_DC:-}" && -n "${COOKIE_JAR:-}" ]]; then
   [[ -f "$COOKIE_JAR" ]] || {
     echo "compose git-ssh: missing session cookie jar (${COOKIE_JAR})" >&2
     exit 1
