@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::audit;
 use crate::error::AppError;
 use crate::git_http::bare_repo_path;
+use crate::git_ssh_runtime::git_storage_group;
 use crate::grants;
 use crate::ssh_keys::sanitize_stored_ssh_public_key;
 
@@ -310,10 +311,10 @@ fn shell_single_quote(value: &str) -> String {
 /// `receive-pack` writes refs with the storage GID (HTTP uses the same via `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let safe_dir = format!("safe.directory={}", bare.display());
-    let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").ok();
-    let use_sg = service == "receive-pack" && group.as_ref().is_some_and(|name| !name.is_empty());
+    let group = git_storage_group();
+    let use_sg = service == "receive-pack";
     let mut child = if use_sg {
-        let g = group.as_ref().expect("checked");
+        let g = group.as_str();
         let script = format!(
             "git -c {} -c core.sharedRepository=group {} {}",
             shell_single_quote(&safe_dir),
@@ -488,5 +489,13 @@ mod tests {
         assert!(!line.contains("MUSEHUB_SSH_PRINCIPAL_ID"));
         assert!(!line.contains("command="));
         assert_eq!(line.matches('\n').count(), 0);
+    }
+
+    #[test]
+    fn receive_pack_uses_storage_sg_even_without_process_env() {
+        std::env::remove_var("MUSEHUB_GIT_STORAGE_GROUP");
+        let group = git_storage_group();
+        assert_eq!(group, "musehub-git");
+        assert_eq!(group, git_storage_group());
     }
 }

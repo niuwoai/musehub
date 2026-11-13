@@ -10,9 +10,9 @@ use musehub_app::git_ssh::{
 };
 use musehub_app::git_ssh_runtime::{
     default_git_ssh_run_dir, ensure_host_ed25519_key, ensure_shared_git_storage_root,
-    finalize_git_ssh_run_dir, git_ssh_runtime_group, is_root_euid, prepare_git_ssh_run_dir,
-    run_privileged, validate_git_ssh_runtime_readable, write_git_ssh_runtime_env,
-    write_secure_file,
+    finalize_git_ssh_run_dir, git_ssh_runtime_group, git_storage_group, is_root_euid,
+    prepare_git_ssh_run_dir, run_privileged, validate_git_ssh_runtime_readable,
+    write_git_ssh_runtime_env, write_secure_file,
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
 use sqlx::postgres::PgPoolOptions;
@@ -275,8 +275,12 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     install_git_login_shell()?;
     let packaging_marker = env::var("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER").ok();
     let packaging_synthetic = env::var("MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET").ok();
-    let mut runtime_vars: Vec<(&str, &str)> =
-        vec![("DATABASE_URL", &db_url), ("MUSEHUB_GIT_ROOT", git_root_s)];
+    let storage_group = git_storage_group();
+    let mut runtime_vars: Vec<(&str, &str)> = vec![
+        ("DATABASE_URL", &db_url),
+        ("MUSEHUB_GIT_ROOT", git_root_s),
+        ("MUSEHUB_GIT_STORAGE_GROUP", storage_group.as_str()),
+    ];
     if let Some(ref marker) = packaging_marker {
         if !marker.is_empty() {
             runtime_vars.push(("MUSEHUB_GIT_SSH_PACKAGING_TEST_MARKER", marker.as_str()));

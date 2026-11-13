@@ -16,6 +16,13 @@ STACK_ID="musehub-dual-uid-$(date +%s)"
 export COMPOSE_PROJECT_NAME="$STACK_ID"
 ENV_FILE="$ROOT/deploy/.env.dual-uid.${STACK_ID}"
 allocate_compose_ci_ports
+GIT_SSH_HOST_PORT=$(pick_free_local_port)
+while [[ "$GIT_SSH_HOST_PORT" == "$MUSEHUB_CI_POSTGRES_PORT" \
+  || "$GIT_SSH_HOST_PORT" == "$MUSEHUB_CI_API_HOST_PORT" \
+  || "$GIT_SSH_HOST_PORT" == "$MUSEHUB_GATEWAY_HTTP_PORT" ]]; do
+  GIT_SSH_HOST_PORT=$(pick_free_local_port)
+done
+export MUSEHUB_GIT_SSH_PORT="$GIT_SSH_HOST_PORT"
 export MUSEHUB_CI_POSTGRES_PORT MUSEHUB_CI_API_HOST_PORT MUSEHUB_GATEWAY_HTTP_PORT
 
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
@@ -42,6 +49,11 @@ services:
   gateway:
     volumes:
       - ${CADDY_CI_HOST}:/etc/caddy/Caddyfile:ro
+  musehub-git-ssh:
+    environment:
+      MUSEHUB_GIT_SSH_PORT: "2222"
+    ports: !reset
+      - "${MUSEHUB_GIT_SSH_PORT}:2222"
 EOF
 compose_cmd=(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT/deploy/docker-compose.yml" -f "$ROOT/deploy/docker-compose.ci.yml" -f "$COMPOSE_CI_EXTRA" --env-file "$ENV_FILE")
 if docker info >/dev/null 2>&1; then
@@ -64,13 +76,18 @@ dc up -d
 
 GW_PORT="${MUSEHUB_GATEWAY_HTTP_PORT}"
 if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
-  live_gw="$(dc ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | awk '/gateway/{match($0,/0\.0\.0\.0:([0-9]+)->8080/,a); if (a[1]!="") {print a[1]; exit}}')"
+  live_gw="$(dc ps --format '{{.Ports}}' 2>/dev/null | grep -oE '0\.0\.0\.0:[0-9]+->8080' | head -1 | sed -E 's/0\.0\.0\.0:([0-9]+)->8080/\1/' || true)"
   [[ -n "$live_gw" ]] && GW_PORT="$live_gw"
 fi
 BASE="http://127.0.0.1:${GW_PORT}"
-export BASE BOOTSTRAP_PW POSTGRES_PASSWORD MUSEHUB_GIT_SSH_PORT=2222 MUSEHUB_GATEWAY_HTTP_PORT="$GW_PORT"
+export BASE BOOTSTRAP_PW POSTGRES_PASSWORD MUSEHUB_GATEWAY_HTTP_PORT="$GW_PORT"
+export COMPOSE_PROJECT_NAME
+if docker info >/dev/null 2>&1; then
+  MUSEHUB_STACK_DC=$(printf '%q ' "${compose_cmd[@]}")
+else
+  MUSEHUB_STACK_DC=$(printf '%q ' sudo "${compose_cmd[@]}")
+fi
 export MUSEHUB_STACK_DC
-MUSEHUB_STACK_DC=$(printf '%q ' "${COMPOSE_BASE[@]}")
 
 wait_ready() {
   for _ in $(seq 1 90); do
@@ -84,6 +101,8 @@ wait_ready() {
   return 1
 }
 wait_ready
+live_ssh="$(dc port musehub-git-ssh 2222/tcp 2>/dev/null | head -1 | sed -E 's/.*:([0-9]+)$/\1/' || true)"
+[[ -n "$live_ssh" ]] && export MUSEHUB_GIT_SSH_PORT="$live_ssh"
 
 echo "=== dual-uid interop: permission model evidence (no sudo fallback in containers) ==="
 dc exec -T musehub-server id
@@ -107,10 +126,10 @@ dc exec -T musehub-git-ssh sh -c '
   [[ -n "$ref" ]] && ls -la "$ref"
   owner=$(stat -c %u "$bare/HEAD")
   if [[ "$owner" == "10001" ]]; then
-    sudo -u git chgrp musehub-git "$bare/HEAD" 2>/dev/null && {
+    if runuser -u git -- chgrp musehub-git "$bare/HEAD" 2>/dev/null; then
       echo "unexpected: git user chgrp musehub-owned HEAD succeeded" >&2
       exit 1
-    }
+    fi
     echo "git uid cannot chgrp musehub-owned HEAD (expected fail-closed boundary)"
   fi
 '

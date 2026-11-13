@@ -290,11 +290,14 @@ remote_ref_oid() {
 
 echo "=== compose git-ssh: wait published port ${MUSEHUB_GIT_SSH_PORT} ==="
 wait_published_port() {
+  if (echo >/dev/tcp/127.0.0.1/"${MUSEHUB_GIT_SSH_PORT}") 2>/dev/null; then
+    return 0
+  fi
   if command -v ss >/dev/null 2>&1; then
     ss -tln 2>/dev/null | grep -qE ":${MUSEHUB_GIT_SSH_PORT}([[:space:]]|$)"
     return
   fi
-  (echo >/dev/tcp/127.0.0.1/"${MUSEHUB_GIT_SSH_PORT}") 2>/dev/null
+  return 1
 }
 for _ in $(seq 1 120); do
   if wait_published_port; then
@@ -303,6 +306,20 @@ for _ in $(seq 1 120); do
   sleep 2
 done
 wait_published_port || {
+  dc logs musehub-git-ssh --tail=80 >&2 || true
+  exit 1
+}
+echo "=== compose git-ssh: wait sshd host key (not just published port) ==="
+sshd_up=0
+for _ in $(seq 1 90); do
+  if ssh-keyscan -p "${MUSEHUB_GIT_SSH_PORT}" -T 3 127.0.0.1 2>/dev/null | grep -qE 'ssh-ed25519|ecdsa-sha2'; then
+    sshd_up=1
+    break
+  fi
+  sleep 1
+done
+[[ "$sshd_up" == 1 ]] || {
+  echo "compose git-ssh: sshd host key never available on port ${MUSEHUB_GIT_SSH_PORT}" >&2
   dc logs musehub-git-ssh --tail=80 >&2 || true
   exit 1
 }
@@ -336,6 +353,19 @@ if dc exec -T -u git musehub-git-ssh sh -c "echo x >> '${SSH_RUN_DIR}/runtime.en
   echo "compose git-ssh: git user must not append runtime.env" >&2
   exit 1
 fi
+dc exec -T musehub-git-ssh grep -q "MUSEHUB_GIT_STORAGE_GROUP='musehub-git'" "${SSH_RUN_DIR}/runtime.env" \
+  || dc exec -T musehub-git-ssh grep -q "MUSEHUB_GIT_STORAGE_GROUP=musehub-git" "${SSH_RUN_DIR}/runtime.env" \
+  || {
+    echo "compose git-ssh: runtime.env missing MUSEHUB_GIT_STORAGE_GROUP=musehub-git" >&2
+    exit 1
+  }
+dc exec -T -u git musehub-git-ssh sh -ec "
+  set -a
+  # shellcheck disable=SC1090
+  . '${SSH_RUN_DIR}/runtime.env'
+  set +a
+  test \"\${MUSEHUB_GIT_STORAGE_GROUP}\" = musehub-git
+"
 
 wait_gateway_ready
 
@@ -470,6 +500,18 @@ git -C "$GIT_DIR" commit -m ssh-1 --no-gpg-sign
 git_ssh_git "$GIT_DIR" "ssh-1-push" push -u origin "HEAD:refs/heads/${FEATURE_BRANCH}"
 OID_SSH_1=$(git -C "$GIT_DIR" rev-parse HEAD)
 [[ "$(remote_ref_oid "refs/heads/${FEATURE_BRANCH}")" == "$OID_SSH_1" ]]
+echo "=== compose git-ssh: receive-pack objects use shared storage GID (sg musehub-git) ==="
+dc exec -T musehub-git-ssh sh -ec "
+  pref=\$(echo '${OID_SSH_1}' | cut -c1-2)
+  suf=\$(echo '${OID_SSH_1}' | cut -c3-)
+  obj='${BARE_REPO_PATH}/objects/'\"\$pref\"/\"\$suf\"
+  test -f \"\$obj\"
+  gid=\$(stat -c %g \"\$obj\")
+  test \"\$gid\" = 998
+  uid=\$(stat -c %u \"\$obj\")
+  test \"\$uid\" = 997
+  echo compose_git_ssh_receive_pack_sg_evidence=gid998_uid997
+"
 
 git -C "$GIT_DIR" remote set-url origin "$HTTP_URL"
 echo "http-2" >>"$GIT_DIR/roundtrip.txt"
