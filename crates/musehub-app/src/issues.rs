@@ -48,6 +48,15 @@ fn default_limit() -> i64 {
 const MAX_LABELS: usize = 20;
 const MAX_LABEL_LEN: usize = 50;
 
+const MAX_CLOSE_REASON_LEN: usize = 200;
+
+pub(crate) fn validate_close_reason(reason: &str) -> Result<(), AppError> {
+    if reason.is_empty() || reason.len() > MAX_CLOSE_REASON_LEN {
+        return Err(AppError::Validation("invalid close_reason".into()));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
     if labels.len() > MAX_LABELS {
         return Err(AppError::Validation(format!(
@@ -435,11 +444,15 @@ pub async fn patch_issue(
         if !matches!(state_val.as_str(), "open" | "closed" | "in_progress") {
             return Err(AppError::Validation("invalid state".into()));
         }
-        if state_val == "closed" && body.close_reason.is_none() {
-            return Err(AppError::Validation(
-                "close_reason required when closing".into(),
-            ));
+        if state_val == "closed" {
+            let reason = body
+                .close_reason
+                .as_deref()
+                .ok_or_else(|| AppError::Validation("close_reason required when closing".into()))?;
+            validate_close_reason(reason)?;
         }
+    } else if let Some(reason) = &body.close_reason {
+        validate_close_reason(reason)?;
     }
 
     let title = body.title.as_deref();
@@ -524,4 +537,26 @@ pub async fn patch_issue(
     }
 
     get_issue(State(state), headers, Path((org, repo, number))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_validation() {
+        assert!(validate_labels(&["bug".into(), "p0".into()]).is_ok());
+        assert!(validate_labels(&["ok_label".into()]).is_ok());
+        assert!(validate_labels(&["".into()]).is_err());
+        assert!(validate_labels(&["bad!".into()]).is_err());
+        assert!(validate_labels(&vec!["x".repeat(51)]).is_err());
+        assert!(validate_labels(&vec!["l".repeat(50); 21]).is_err());
+    }
+
+    #[test]
+    fn close_reason_validation() {
+        assert!(validate_close_reason("completed").is_ok());
+        assert!(validate_close_reason("").is_err());
+        assert!(validate_close_reason(&"x".repeat(201)).is_err());
+    }
 }

@@ -44,6 +44,8 @@ export function IssueDetailPage() {
   const [agentBusy, setAgentBusy] = useState(false)
   const [agentInput, setAgentInput] = useState('')
   const [agentError, setAgentError] = useState<string | null>(null)
+  const [closeReason, setCloseReason] = useState('completed')
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!slug || !issueNumber) return
@@ -98,7 +100,85 @@ export function IssueDetailPage() {
       </h2>
       <p data-testid="issue-detail-state">
         {issue.state} · {t('issueDetail.revision', { version: revision })}
+        {issue.close_reason ? ` · ${t('issueDetail.closedAs', { reason: issue.close_reason })}` : ''}
       </p>
+
+      <section data-testid="issue-lifecycle">
+        <h3>{t('issueDetail.lifecycleTitle')}</h3>
+        {issue.state === 'closed' ? (
+          <button
+            type="button"
+            data-testid="issue-reopen"
+            onClick={() => {
+              setLifecycleError(null)
+              void patchIssue(org, slug, issueNumber, { state: 'open' })
+                .then(reload)
+                .catch((err) =>
+                  setLifecycleError(
+                    err instanceof Error ? err.message : t('issueDetail.saveFailed'),
+                  ),
+                )
+            }}
+          >
+            {t('issueDetail.reopenIssue')}
+          </button>
+        ) : (
+          <>
+            {issue.state === 'open' ? (
+              <button
+                type="button"
+                data-testid="issue-mark-in-progress"
+                onClick={() => {
+                  setLifecycleError(null)
+                  void patchIssue(org, slug, issueNumber, { state: 'in_progress' })
+                    .then(reload)
+                    .catch((err) =>
+                      setLifecycleError(
+                        err instanceof Error ? err.message : t('issueDetail.saveFailed'),
+                      ),
+                    )
+                }}
+              >
+                {t('issueDetail.markInProgress')}
+              </button>
+            ) : null}
+            <label>
+              {t('issueDetail.closeReason')}
+              <input
+                data-testid="issue-close-reason"
+                value={closeReason}
+                onChange={(e) => setCloseReason(e.target.value)}
+                placeholder={t('issueDetail.closeReasonPlaceholder')}
+              />
+            </label>
+            <button
+              type="button"
+              data-testid="issue-close"
+              onClick={() => {
+                setLifecycleError(null)
+                if (!closeReason.trim()) {
+                  setLifecycleError(t('issueDetail.closeReasonRequired'))
+                  return
+                }
+                void patchIssue(org, slug, issueNumber, {
+                  state: 'closed',
+                  close_reason: closeReason.trim(),
+                })
+                  .then(reload)
+                  .catch((err) =>
+                    setLifecycleError(
+                      err instanceof Error ? err.message : t('issueDetail.saveFailed'),
+                    ),
+                  )
+              }}
+            >
+              {t('issueDetail.closeIssue')}
+            </button>
+          </>
+        )}
+        {lifecycleError ? <p role="alert">{lifecycleError}</p> : null}
+      </section>
+
       <pre data-testid="issue-detail-body">{issue.body}</pre>
 
       <section data-testid="issue-criteria">
@@ -244,9 +324,49 @@ export function IssueDetailPage() {
       {trace ? (
         <section data-testid="issue-delivery-trace">
           <h3>{t('issueDetail.deliveryTraceTitle')}</h3>
-          <p>{t('issueDetail.deliveryPrs', { count: trace.pull_requests.length })}</p>
+          <p>
+            {t('issueDetail.deliveryPrs', { count: trace.pull_requests.length })}
+            <Link to={paths.repoDelivery(org, slug!)} style={{ marginLeft: '0.75rem' }}>
+              {t('issueDetail.deliveryViewDelivery')}
+            </Link>
+          </p>
+          <ul data-testid="issue-trace-prs">
+            {trace.pull_requests.length === 0 ? (
+              <li role="status">{t('issueDetail.deliveryTraceEmptyPrs')}</li>
+            ) : (
+              trace.pull_requests.map((pr) => (
+                <li key={pr.id} data-testid={`issue-trace-pr-${pr.number}`}>
+                  <Link to={paths.repoPull(org, slug!, pr.number)}>#{pr.number}</Link> · {pr.state}
+                  {pr.merged_oid ? ` @ ${pr.merged_oid.slice(0, 7)}` : ''}
+                </li>
+              ))
+            )}
+          </ul>
           <p>{t('issueDetail.deliveryPipelines', { count: trace.pipeline_runs.length })}</p>
+          <ul data-testid="issue-trace-pipelines">
+            {trace.pipeline_runs.length === 0 ? (
+              <li role="status">{t('issueDetail.deliveryTraceEmptyPipelines')}</li>
+            ) : (
+              trace.pipeline_runs.map((run) => (
+                <li key={run.id} data-testid={`issue-trace-pipeline-${run.id.slice(0, 8)}`}>
+                  {run.id.slice(0, 8)}… {run.state} @ {run.source_oid.slice(0, 7)}
+                </li>
+              ))
+            )}
+          </ul>
           <p>{t('issueDetail.deliveryDeployments', { count: trace.deployments.length })}</p>
+          <ul data-testid="issue-trace-deployments">
+            {trace.deployments.length === 0 ? (
+              <li role="status">{t('issueDetail.deliveryTraceEmptyDeployments')}</li>
+            ) : (
+              trace.deployments.map((dep) => (
+                <li key={dep.id} data-testid={`issue-trace-deployment-${dep.id.slice(0, 8)}`}>
+                  <Link to={paths.repoDelivery(org, slug!)}>{dep.environment_slug}</Link> · {dep.state}{' '}
+                  <span data-testid="issue-trace-deployment-id">{dep.id}</span>
+                </li>
+              ))
+            )}
+          </ul>
           {trace.gaps.length > 0 ? (
             <p data-testid="issue-trace-gaps" style={{ color: '#9a6700' }}>
               {t('app.traceGaps')}: {trace.gaps.join(', ')}

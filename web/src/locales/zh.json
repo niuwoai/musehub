@@ -168,7 +168,19 @@
     "deliveryTraceTitle": "交付关联",
     "deliveryPrs": "{{count}} 个关联 PR",
     "deliveryPipelines": "{{count}} 次流水线",
-    "deliveryDeployments": "{{count}} 次部署"
+    "deliveryDeployments": "{{count}} 次部署",
+    "deliveryTraceEmptyPrs": "尚无关联 PR。",
+    "deliveryTraceEmptyPipelines": "尚无关联到此 Issue 的流水线。",
+    "deliveryTraceEmptyDeployments": "尚无从此 Issue 追溯到的部署。",
+    "deliveryViewDelivery": "打开交付控制台",
+    "lifecycleTitle": "状态",
+    "closeReason": "关闭原因",
+    "closeReasonPlaceholder": "completed",
+    "closeIssue": "关闭 Issue",
+    "reopenIssue": "重新打开",
+    "markInProgress": "标记为进行中",
+    "closeReasonRequired": "请填写关闭原因。",
+    "closedAs": "已关闭：{{reason}}"
   },
   "sshKeys": {
     "title": "SSH 密钥",

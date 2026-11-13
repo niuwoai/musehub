@@ -163,7 +163,19 @@
     "deliveryTraceTitle": "Delivery links",
     "deliveryPrs": "{{count}} linked pull request(s)",
     "deliveryPipelines": "{{count}} pipeline run(s)",
-    "deliveryDeployments": "{{count}} deployment(s)"
+    "deliveryDeployments": "{{count}} deployment(s)",
+    "deliveryTraceEmptyPrs": "No linked pull requests yet.",
+    "deliveryTraceEmptyPipelines": "No pipeline runs linked to this issue yet.",
+    "deliveryTraceEmptyDeployments": "No deployments traced from this issue yet.",
+    "deliveryViewDelivery": "Open delivery console",
+    "lifecycleTitle": "State",
+    "closeReason": "Close reason",
+    "closeReasonPlaceholder": "completed",
+    "closeIssue": "Close issue",
+    "reopenIssue": "Reopen",
+    "markInProgress": "Mark in progress",
+    "closeReasonRequired": "Enter a close reason.",
+    "closedAs": "Closed: {{reason}}"
   },
   "sshKeys": {
     "title": "SSH keys",

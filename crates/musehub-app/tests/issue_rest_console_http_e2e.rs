@@ -140,6 +140,73 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
         .iter()
         .any(|g| g == "no_pull_requests"));
 
+    let close_missing_reason = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "state": "closed" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(close_missing_reason.status(), StatusCode::BAD_REQUEST);
+
+    let close_ok = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "state": "closed", "close_reason": "accepted" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(close_ok.status(), StatusCode::OK);
+    let closed_json = body_json(close_ok).await;
+    assert_eq!(closed_json["state"], "closed");
+    assert_eq!(closed_json["close_reason"], "accepted");
+
+    let list_closed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues?state=closed"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_closed.status(), StatusCode::OK);
+    let list_json = body_json(list_closed).await;
+    assert_eq!(list_json["items"].as_array().unwrap().len(), 1);
+
+    let reopen = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "state": "open" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reopen.status(), StatusCode::OK);
+    assert!(body_json(reopen).await["close_reason"].is_null());
+
     let repo_id: (Uuid,) = sqlx::query_as("SELECT id FROM repositories WHERE slug_normalized = $1")
         .bind(&repo)
         .fetch_one(&pool)
