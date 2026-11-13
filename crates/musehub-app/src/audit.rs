@@ -31,6 +31,42 @@ pub struct ListAuditQuery {
 
 /// Records one audit row; failures are logged by caller but must not block primary operations.
 #[allow(clippy::too_many_arguments)]
+pub async fn record_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: Option<Uuid>,
+    repo_id: Option<Uuid>,
+    actor_id: Uuid,
+    initiator_id: Option<Uuid>,
+    action: &str,
+    resource_type: &str,
+    resource_id: Uuid,
+    request_id: Option<Uuid>,
+    decision: &str,
+    metadata: serde_json::Value,
+) -> Result<(), AppError> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO audit_events (id, org_id, repo_id, actor_id, initiator_id, action, resource_type, resource_id, request_id, decision, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+    )
+    .bind(id)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(actor_id)
+    .bind(initiator_id)
+    .bind(action)
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(request_id)
+    .bind(decision)
+    .bind(metadata)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Records one audit row outside an existing transaction.
+#[allow(clippy::too_many_arguments)]
 pub async fn record(
     pool: &PgPool,
     org_id: Option<Uuid>,

@@ -46,6 +46,8 @@ pub struct PullRequestView {
     pub base_oid: Option<String>,
     pub issue_id: Option<Uuid>,
     pub issue_number: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_version: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -301,6 +303,7 @@ pub async fn create_pull_request(
             base_oid: Some(base_oid),
             issue_id,
             issue_number,
+            row_version: None,
         }),
     ))
 }
@@ -567,6 +570,7 @@ pub async fn list_pull_requests(
                         base_oid,
                         issue_id,
                         issue_number,
+                        row_version: None,
                     }
                 },
             )
@@ -600,13 +604,13 @@ pub async fn sync_pull_request(
         return Err(AppError::NotFound);
     };
     let mut tx = state.pool.begin().await?;
-    let locked = sqlx::query_as::<_, (i64, String)>(
-        "SELECT row_version, state FROM pull_requests WHERE id = $1 FOR UPDATE",
+    let locked = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>)>(
+        "SELECT row_version, state, head_oid, base_oid FROM pull_requests WHERE id = $1 FOR UPDATE",
     )
     .bind(pr_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((locked_row_version, locked_state)) = locked else {
+    let Some((locked_row_version, locked_state, stored_head, stored_base)) = locked else {
         return Err(AppError::NotFound);
     };
     if locked_state != "open" {
@@ -620,26 +624,34 @@ pub async fn sync_pull_request(
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let head_oid = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     let base_oid = git_rev_parse(&bare, &format!("refs/heads/{target_branch}"))?;
-    let new_row: Option<(i64,)> = sqlx::query_as(
-        "UPDATE pull_requests SET head_oid = $2, base_oid = $3, row_version = row_version + 1,
-         updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND row_version = $4
-         RETURNING row_version",
-    )
-    .bind(pr_id)
-    .bind(&head_oid)
-    .bind(&base_oid)
-    .bind(body.expected_row_version)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some((new_row_version,)) = new_row else {
-        return Err(AppError::Validation(
-            "stale pull request revision".to_string(),
-        ));
+    let head_unchanged = stored_head.as_deref() == Some(head_oid.as_str());
+    let base_unchanged = stored_base.as_deref() == Some(base_oid.as_str());
+    let new_row_version = if head_unchanged && base_unchanged {
+        tx.commit().await?;
+        locked_row_version
+    } else {
+        let new_row: Option<(i64,)> = sqlx::query_as(
+            "UPDATE pull_requests SET head_oid = $2, base_oid = $3, row_version = row_version + 1,
+             updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND row_version = $4
+             RETURNING row_version",
+        )
+        .bind(pr_id)
+        .bind(&head_oid)
+        .bind(&base_oid)
+        .bind(body.expected_row_version)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((bumped,)) = new_row else {
+            return Err(AppError::Validation(
+                "stale pull request revision".to_string(),
+            ));
+        };
+        crate::discussion::mark_pr_comments_outdated(&mut *tx, pr_id, bumped).await?;
+        tx.commit().await?;
+        insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+        bumped
     };
-    crate::discussion::mark_pr_comments_outdated(&mut *tx, pr_id, new_row_version).await?;
-    tx.commit().await?;
-    insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
     let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT title, issue_id FROM pull_requests WHERE id = $1",
     )
@@ -658,6 +670,7 @@ pub async fn sync_pull_request(
         base_oid: Some(base_oid),
         issue_id: meta.1,
         issue_number,
+        row_version: Some(new_row_version),
     }))
 }
 
@@ -1107,6 +1120,7 @@ pub async fn merge_pull_request(
         base_oid: Some(base_oid),
         issue_id: meta.1,
         issue_number,
+        row_version: None,
     }))
 }
 
@@ -1330,6 +1344,7 @@ pub async fn get_pull_request(
             base_oid: Some(base.clone()),
             issue_id,
             issue_number,
+            row_version: None,
         },
         row_version,
         author_handle: author.0,

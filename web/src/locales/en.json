@@ -83,11 +83,27 @@
     "changePassword": "Change password"
   },
   "audit": {
-    "empty": "No audit events yet."
+    "empty": "No audit events yet.",
+    "loadFailed": "Could not load audit events.",
+    "resourceTypeFilter": "Resource type",
+    "resourceRepository": "Repository",
+    "resourcePullRequest": "Pull request",
+    "resourceIssue": "Issue",
+    "resourcePipeline": "Pipeline run",
+    "resourceDeployment": "Deployment",
+    "resourcePrincipal": "Principal",
+    "resourceRepositoryGrant": "Repository grant"
   },
   "orgSettings": {
     "displayName": "Org display name",
-    "save": "Save org settings"
+    "defaultCollaboratorRole": "Default repository role for new grants",
+    "save": "Save org settings",
+    "saveFailed": "Could not save organization settings.",
+    "repoRole": {
+      "reader": "Reader",
+      "developer": "Developer",
+      "maintainer": "Maintainer"
+    }
   },
   "orgMembers": {
     "adminRequired": "Member admin requires org owner/admin.",
@@ -122,6 +138,8 @@
   "pull": {
     "syncHead": "Sync head",
     "syncFailed": "Could not sync pull request head.",
+    "staleRevision": "This pull request changed elsewhere. Reloaded the latest revision — try again.",
+    "rowVersion": "Revision {{version}}",
     "review": "Review",
     "approve": "Approve",
     "selfApproveBlocked": "Authors cannot approve their own pull requests.",
@@ -133,8 +151,12 @@
   },
   "issues": {
     "filterState": "State",
+    "filterAny": "Any",
     "filterLabel": "Label",
     "filterAssignee": "Assignee",
+    "stateOpen": "Open",
+    "stateInProgress": "In progress",
+    "stateClosed": "Closed",
     "applyFilters": "Apply filters",
     "loadMore": "Load more",
     "loadingMore": "Loading more…",
@@ -179,6 +201,7 @@
     "closeIssue": "Close issue",
     "reopenIssue": "Reopen",
     "markInProgress": "Mark in progress",
+    "markOpen": "Mark open",
     "closeReasonRequired": "Enter a close reason.",
     "closedAs": "Closed: {{reason}}"
   },
@@ -188,7 +211,7 @@
   },
   "sshKeys": {
     "title": "SSH keys",
-    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.",
+    "transportGap": "Register ed25519 public keys for Git-over-SSH when your operator exposes musehub-git-ssh (see deploy/RUNBOOK.md). Until SSH is configured, use HTTPS clone URLs with a PAT.",
     "name": "Key name",
     "publicKey": "Public key",
     "add": "Add SSH key",
@@ -204,6 +227,12 @@
   "repoSettings": {
     "grantsTitle": "Repo grants",
     "grantReader": "Grant reader",
+    "grantSubmit": "Grant access",
+    "grantRole": "Repository role",
+    "grantHandlePlaceholder": "Member handle",
+    "grantFailed": "Could not grant repository access.",
+    "revokeGrant": "Revoke",
+    "revokeFailed": "Could not revoke grant.",
     "environmentsTitle": "Deployment environments",
     "approvalRequired": "approval required"
   }

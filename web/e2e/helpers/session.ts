@@ -21,13 +21,30 @@ export async function expectSessionCookie(page: Page) {
     .toBe(true)
 }
 
+/** Wait until WorkspaceProvider finishes session restore (see SessionBootScreen). */
+export async function waitForSessionAuthSettled(page: Page) {
+  await expect(page.getByTestId('session-boot')).toHaveCount(0, { timeout: 15_000 })
+}
+
+/** Anonymous login form on the current route (e.g. after logout redirect). */
+export async function expectAnonymousLoginForm(page: Page) {
+  await waitForSessionAuthSettled(page)
+  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 15_000 })
+}
+
 export async function loginAsAdmin(
   page: Page,
   password: string,
   handle = 'admin',
 ): Promise<void> {
   await page.goto('/login', { waitUntil: 'domcontentloaded' })
-  await page.getByTestId('login-handle-input').fill(handle)
+  await waitForSessionAuthSettled(page)
+  const loginInput = page.getByTestId('login-handle-input')
+  if (!(await loginInput.isVisible())) {
+    await expectLoggedInAs(page, handle)
+    return
+  }
+  await loginInput.fill(handle)
   await page.getByLabel(/password|密码/i).fill(password)
   await page.getByRole('button', { name: /login|登录/i }).click()
   await expectLoggedInAs(page, handle)

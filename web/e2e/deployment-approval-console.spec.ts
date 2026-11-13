@@ -8,6 +8,7 @@ import { refreshRepoAndOpenDelivery } from './helpers/delivery'
 import { goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
+  expectResponseOk,
   openRepoBySlug,
   openRepoDelivery,
   waitForDemoRepoNavHydrated,
@@ -34,12 +35,65 @@ async function loginCookie(handle: string, pass: string) {
 async function deliveryThroughRelease(page: Page, adminCookie: string) {
   const { slug } = await createRepoViaUi(page)
   await openRepoBySlug(page, slug)
-  await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
-  await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
-  await page.getByRole('button', { name: /run agent|运行/i }).first().click()
-  await expect(page.getByTestId('last-agent-run')).toContainText(/succeeded/i, {
-    timeout: 180_000,
+  const issueCreate = page.waitForResponse(
+    (r) =>
+      r.url().includes(`/repos/${slug}/issues`) &&
+      r.request().method() === 'POST' &&
+      r.ok(),
+  )
+  await page.getByTestId('create-issue').click()
+  await issueCreate
+  await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
+
+  const planCreate = page.waitForResponse(
+    (r) =>
+      r.url().includes(`/repos/${slug}/issues/1/plans`) &&
+      r.request().method() === 'POST' &&
+      r.ok(),
+  )
+  const planAccept = page.waitForResponse(
+    (r) =>
+      r.url().includes(`/repos/${slug}/issues/1/plans`) &&
+      r.request().method() === 'PATCH' &&
+      r.status() === 204,
+  )
+  await page
+    .getByTestId('issue-row-1')
+    .getByRole('button', { name: /accept plan|接受计划/i })
+    .click()
+  await planCreate
+  await planAccept
+
+  const runAgent = page
+    .getByTestId('issue-row-1')
+    .getByRole('button', { name: /run agent|运行|reference/i })
+  await expect(runAgent).toBeVisible({ timeout: 15_000 })
+  const agentStart = page.waitForResponse(
+    (r) => r.url().includes(`/repos/${slug}/agent-runs`) && r.request().method() === 'POST',
+    { timeout: 60_000 },
+  )
+  await runAgent.click()
+  const agentStartResp = await agentStart
+  await expectResponseOk(agentStartResp, 'start agent run')
+  const started = (await agentStartResp.json()) as { id?: string }
+  expect(started.id?.length).toBeGreaterThan(0)
+
+  const lastRun = page.getByTestId('last-agent-run')
+  await expect(lastRun).toHaveAttribute('data-agent-run-id', started.id!, {
+    timeout: 30_000,
   })
+  await expect
+    .poll(
+      async () => {
+        const runId = await lastRun.getAttribute('data-agent-run-id')
+        if (runId !== started.id) {
+          return ''
+        }
+        return await lastRun.innerText()
+      },
+      { timeout: 180_000, intervals: [500, 1000, 2000] },
+    )
+    .toMatch(/succeeded/i)
   await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
   await goRepoPulls(page)
   await expect(page.getByTestId('pull-request-list')).toContainText(/open|PR for/i, {

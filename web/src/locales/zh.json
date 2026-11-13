@@ -83,11 +83,27 @@
     "changePassword": "修改密码"
   },
   "audit": {
-    "empty": "暂无审计事件。"
+    "empty": "暂无审计事件。",
+    "loadFailed": "无法加载审计事件。",
+    "resourceTypeFilter": "资源类型",
+    "resourceRepository": "仓库",
+    "resourcePullRequest": "Pull Request",
+    "resourceIssue": "Issue",
+    "resourcePipeline": "流水线运行",
+    "resourceDeployment": "部署",
+    "resourcePrincipal": "主体",
+    "resourceRepositoryGrant": "仓库授权"
   },
   "orgSettings": {
     "displayName": "组织显示名称",
-    "save": "保存组织设置"
+    "defaultCollaboratorRole": "新授予成员的默认仓库角色",
+    "save": "保存组织设置",
+    "saveFailed": "无法保存组织设置。",
+    "repoRole": {
+      "reader": "只读 (reader)",
+      "developer": "开发者 (developer)",
+      "maintainer": "维护者 (maintainer)"
+    }
   },
   "orgMembers": {
     "adminRequired": "成员管理需要组织 owner/admin。",
@@ -127,6 +143,8 @@
   "pull": {
     "syncHead": "同步 head",
     "syncFailed": "无法同步 Pull Request head。",
+    "staleRevision": "此 Pull Request 已在别处更新，已重新加载最新修订版，请再试一次。",
+    "rowVersion": "修订版 {{version}}",
     "review": "评审",
     "approve": "批准",
     "selfApproveBlocked": "作者不能批准自己的 Pull Request。",
@@ -138,8 +156,12 @@
   },
   "issues": {
     "filterState": "状态",
+    "filterAny": "全部",
     "filterLabel": "标签",
     "filterAssignee": "负责人",
+    "stateOpen": "打开",
+    "stateInProgress": "进行中",
+    "stateClosed": "已关闭",
     "applyFilters": "应用筛选",
     "loadMore": "加载更多",
     "loadingMore": "正在加载更多…",
@@ -184,6 +206,7 @@
     "closeIssue": "关闭 Issue",
     "reopenIssue": "重新打开",
     "markInProgress": "标记为进行中",
+    "markOpen": "标记为打开",
     "closeReasonRequired": "请填写关闭原因。",
     "closedAs": "已关闭：{{reason}}"
   },
@@ -193,7 +216,7 @@
   },
   "sshKeys": {
     "title": "SSH 密钥",
-    "transportGap": "为将来的 Git-over-SSH 管理公钥。产品级 SSH 克隆/推送传输在 0.1.0-rc4 服务端未启用 — 请使用 HTTPS + PAT。",
+    "transportGap": "在运营方部署 musehub-git-ssh 后可在此注册 ed25519 公钥用于 Git-over-SSH（见 deploy/RUNBOOK.md）。未配置 SSH 时请使用 HTTPS 克隆地址与 PAT。",
     "name": "密钥名称",
     "publicKey": "公钥",
     "add": "添加 SSH 密钥",
@@ -204,6 +227,12 @@
   "repoSettings": {
     "grantsTitle": "仓库授权",
     "grantReader": "授予 reader",
+    "grantSubmit": "授予访问",
+    "grantRole": "仓库角色",
+    "grantHandlePlaceholder": "成员 handle",
+    "grantFailed": "无法授予仓库访问。",
+    "revokeGrant": "撤销",
+    "revokeFailed": "无法撤销授权。",
     "environmentsTitle": "部署环境",
     "approvalRequired": "需审批"
   }

@@ -521,7 +521,11 @@ pub async fn grant_repo_collaborator(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let org_id = require_org_admin(&state.pool, &org, principal_id).await?;
     let repo_id = super::repo_id_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let normalized = normalize_handle(&body.handle);
+    let trimmed = body.handle.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("handle required".into()));
+    }
+    let normalized = normalize_handle(trimmed);
     let member =
         sqlx::query_as::<_, (Uuid,)>("SELECT id FROM principals WHERE handle_normalized = $1")
             .bind(normalized)
@@ -657,4 +661,15 @@ pub async fn grant_repo_access(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::role_rank;
+
+    #[test]
+    fn repo_role_ranks_order_maintainer_above_reader() {
+        assert!(role_rank("maintainer") > role_rank("reader"));
+        assert!(role_rank("developer") > role_rank("reader"));
+    }
 }

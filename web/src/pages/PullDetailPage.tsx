@@ -109,6 +109,11 @@ export function PullDetailPage() {
 
   const isAuthor = session === pr.author_handle
 
+  function stalePrMessage(err: unknown): string | null {
+    const msg = err instanceof Error ? err.message : ''
+    return /stale pull request revision/i.test(msg) ? msg : null
+  }
+
   return (
     <Panel data-testid="pull-detail">
       <p>
@@ -120,6 +125,7 @@ export function PullDetailPage() {
       <p data-testid="pull-detail-branches">
         {pr.source_branch} → {pr.target_branch}
       </p>
+      <p data-testid="pull-row-version">{t('pull.rowVersion', { version: pr.row_version })}</p>
       {pr.issue_number != null ? (
         <p data-testid="pull-linked-issue">
           {t('pull.linkedIssue')}:{' '}
@@ -136,8 +142,22 @@ export function PullDetailPage() {
         onClick={() => {
           setActionError(null)
           void syncPullRequest(org, slug, prNumber, pr.row_version)
-            .then(reload)
-            .catch((e) => setActionError(e instanceof Error ? e.message : t('pull.syncFailed')))
+            .then((updated) => {
+              if (updated.row_version != null) {
+                setPr((prev) =>
+                  prev ? { ...prev, row_version: updated.row_version! } : prev,
+                )
+              }
+              return reload()
+            })
+            .catch(async (e) => {
+              if (stalePrMessage(e)) {
+                await reload().catch(() => {})
+                setActionError(t('pull.staleRevision'))
+                return
+              }
+              setActionError(e instanceof Error ? e.message : t('pull.syncFailed'))
+            })
         }}
       >
         {t('pull.syncHead')}
@@ -215,9 +235,14 @@ export function PullDetailPage() {
                 setPick(null)
                 return reload()
               })
-              .catch((err) =>
-                setActionError(err instanceof Error ? err.message : t('pull.commentFailed')),
-              )
+              .catch(async (err) => {
+                if (stalePrMessage(err)) {
+                  await reload().catch(() => {})
+                  setActionError(t('pull.staleRevision'))
+                  return
+                }
+                setActionError(err instanceof Error ? err.message : t('pull.commentFailed'))
+              })
           }}
         >
           <textarea data-testid="pull-comment-input" value={comment} onChange={(e) => setComment(e.target.value)} />

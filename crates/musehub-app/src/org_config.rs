@@ -89,3 +89,30 @@ pub async fn save_display_name(
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_repo_role_accepts_known_roles() {
+        assert_eq!(parse_repo_role(Some("reader".into())).unwrap(), "reader");
+        assert_eq!(
+            parse_repo_role(Some("developer".into())).unwrap(),
+            "developer"
+        );
+        assert_eq!(parse_repo_role(None).unwrap(), "reader");
+    }
+
+    #[test]
+    fn parse_repo_role_rejects_unknown() {
+        assert!(parse_repo_role(Some("superuser".into())).is_err());
+    }
+
+    #[test]
+    fn preferences_normalize_fills_default_role() {
+        let mut p = OrgPreferences::default();
+        p.normalize().unwrap();
+        assert_eq!(p.default_collaborator_role, "reader");
+    }
+}

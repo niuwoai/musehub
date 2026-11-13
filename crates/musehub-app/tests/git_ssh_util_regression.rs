@@ -13,6 +13,11 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+/// CI-visible trace for permissive sshd echo probe (stdout may be captured; stderr is logged).
+fn echo_probe_trace(outcome: &str, detail: &str) {
+    eprintln!("git_ssh_echo_probe outcome={outcome} {detail}");
+}
+
 #[test]
 fn run_bounded_times_out_sleep() {
     let mut cmd = Command::new("sleep");
@@ -110,9 +115,13 @@ fn forward_echo_probe_rejects_accept_without_echo() {
 #[test]
 #[cfg(unix)]
 fn forward_echo_probe_detects_allowed_sshd_tunnel() {
+    echo_probe_trace(
+        "start",
+        "test=forward_echo_probe_detects_allowed_sshd_tunnel",
+    );
     common::git_ssh_util::require_git_ssh_transport_prereqs();
     if !std::path::Path::new("/usr/sbin/sshd").exists() {
-        eprintln!("skip permissive sshd positive: no /usr/sbin/sshd");
+        echo_probe_trace("skip", "reason=no_sshd_bin");
         return;
     }
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -227,9 +236,12 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
         .output()
         .expect("ssh auth probe");
     if !auth_probe.status.success() {
-        eprintln!(
-            "skip permissive sshd tunnel: loopback pubkey auth not available ({})",
-            redact_test_output(&String::from_utf8_lossy(&auth_probe.stderr))
+        echo_probe_trace(
+            "skip",
+            &format!(
+                "reason=pubkey_auth_unavailable detail={}",
+                redact_test_output(&String::from_utf8_lossy(&auth_probe.stderr))
+            ),
         );
         if let Ok(pid) = std::fs::read_to_string(&pid_file) {
             let _ = Command::new("sudo")
@@ -238,6 +250,7 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
         }
         return;
     }
+    echo_probe_trace("executed", "phase=pubkey_auth_ok");
     let (target_port, target_handle) = spawn_nonce_echo_target();
     thread::sleep(Duration::from_millis(50));
     let local_listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -257,7 +270,7 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
     let mut child = forward.spawn().expect("ssh -N -L");
     thread::sleep(Duration::from_millis(500));
     if child.try_wait().ok().flatten().is_some() {
-        eprintln!("skip permissive sshd tunnel: forward session exited early");
+        echo_probe_trace("skip", "reason=forward_session_exited_early");
         if let Ok(pid) = std::fs::read_to_string(&pid_file) {
             let _ = Command::new("sudo")
                 .args(["-n", "kill", pid.trim()])
@@ -282,6 +295,21 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
             .status();
     }
     let _ = target_handle.join();
+    if ok {
+        echo_probe_trace(
+            "executed",
+            &format!(
+                "phase=nonce_echo_roundtrip_ok local_port={local_port} target_port={target_port}"
+            ),
+        );
+    } else {
+        echo_probe_trace(
+            "fail",
+            &format!(
+                "phase=nonce_echo_roundtrip_miss local_port={local_port} target_port={target_port}"
+            ),
+        );
+    }
     assert!(
         ok,
         "when permissive ssh -N -L stays up, echo roundtrip must succeed"

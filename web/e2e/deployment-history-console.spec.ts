@@ -7,7 +7,11 @@ import {
   STALE_DEPLOYMENT_ID,
   STALE_PLAN_PREFIX,
 } from './fixtures/stale-deployment-view'
-import { expectLoggedInAs } from './helpers/session'
+import {
+  expectAnonymousLoginForm,
+  expectLoggedInAs,
+  loginAsAdmin,
+} from './helpers/session'
 import {
   activateDeploymentViewAll,
   switchDeploymentListToAll,
@@ -27,7 +31,7 @@ const HISTORY_DEPLOY_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ALL_TAB_ROW_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
 async function fillLoginForm(page: Page, handle: string, pass: string) {
-  await expect(page.getByTestId('login-handle-input')).toBeVisible({ timeout: 30_000 })
+  await expectAnonymousLoginForm(page)
   await page.getByTestId('login-handle-input').fill(handle)
   await page.getByLabel(/password|密码/i).fill(pass)
 }
@@ -41,10 +45,7 @@ function delayedGate() {
 }
 
 async function loginAndCreateRepo(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded' })
-  await fillLoginForm(page, 'admin', password!)
-  await page.getByRole('button', { name: /login|登录/i }).click()
-  await expectLoggedInAs(page, 'admin')
+  await loginAsAdmin(page, password!)
   await waitForDemoRepoNavHydrated(page)
   const { slug } = await createRepoViaUi(page)
   await openRepoDelivery(page, slug)
@@ -55,6 +56,7 @@ test.describe('deployment history console', () => {
   test.skip(!password, 'requires bootstrap password and API on :8080')
 
   test('all history view lists mixed states without pending filter', async ({ page }) => {
+    await loginAndCreateRepo(page)
     await page.route('**/deployments?*', async (route) => {
       if (route.request().method() !== 'GET') {
         await route.continue()
@@ -98,7 +100,6 @@ test.describe('deployment history console', () => {
       })
     })
 
-    await loginAndCreateRepo(page)
     await switchDeploymentListToAll(page)
     await expect(page.getByTestId(`deployment-list-item-${HISTORY_DEPLOY_A}`)).toBeVisible({
       timeout: 15_000,
@@ -112,6 +113,7 @@ test.describe('deployment history console', () => {
   })
 
   test('load more appends second page in all history', async ({ page }) => {
+    await loginAndCreateRepo(page)
     let listCall = 0
     await page.route('**/deployments?*', async (route) => {
       if (route.request().method() !== 'GET') {
@@ -171,7 +173,6 @@ test.describe('deployment history console', () => {
       })
     })
 
-    await loginAndCreateRepo(page)
     await switchDeploymentListToAll(page)
     await expect(page.getByTestId(`deployment-list-item-${HISTORY_DEPLOY_A}`)).toBeVisible({
       timeout: 15_000,

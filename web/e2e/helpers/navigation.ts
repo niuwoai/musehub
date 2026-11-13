@@ -54,6 +54,16 @@ export async function goRepoDelivery(page: Page) {
   await expect(page.getByTestId('delivery-panel')).toBeVisible({ timeout: 30_000 })
 }
 
+export async function goRepoSettings(page: Page, slug?: string) {
+  if (slug) {
+    await page.goto(`/org/demo/repos/${slug}/settings`)
+    await expect(page.getByTestId('repo-settings-panel')).toBeVisible({ timeout: 15_000 })
+    return
+  }
+  await goNav(page, 'nav-repo-settings')
+  await expect(page.getByTestId('repo-settings-panel')).toBeVisible({ timeout: 15_000 })
+}
+
 export async function goRepoIssues(page: Page) {
   await goNav(page, 'nav-repo-issues')
   await expect(page.getByTestId('refresh-repo')).toBeVisible({ timeout: 15_000 })

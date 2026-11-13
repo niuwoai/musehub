@@ -1,6 +1,6 @@
 //! REST discussion threads for issues and pull requests.
 
-mod pr_anchor;
+pub mod pr_anchor;
 
 use std::sync::Arc;
 

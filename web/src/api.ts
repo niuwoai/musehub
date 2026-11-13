@@ -116,6 +116,7 @@ export type PullRequest = {
   head_oid?: string | null
   issue_id?: string | null
   issue_number?: number | null
+  row_version?: number | null
 }
 
 export type PrCiFailedJob = {
@@ -769,6 +770,13 @@ export async function grantRepoCollaborator(
   })
 }
 
+export async function revokeRepoGrant(org: string, repo: string, principalId: string) {
+  return api<void>(
+    `/api/v1/orgs/${org}/repos/${repo}/grants?principal_id=${encodeURIComponent(principalId)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function listRunnerTokens(org: string) {
   return api<RunnerTokenMasked[]>(`/api/v1/orgs/${org}/runner-tokens`)
 }
@@ -793,10 +801,17 @@ export type RunnerCapabilities = {
   note: string
 }
 
-export async function listAuditEvents(org: string, limit = 25) {
-  return api<AuditEvent[]>(
-    `/api/v1/orgs/${org}/audit/events?limit=${encodeURIComponent(String(limit))}`,
-  )
+export async function listAuditEvents(
+  org: string,
+  limit = 25,
+  resourceType?: string,
+) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const trimmed = resourceType?.trim()
+  if (trimmed) {
+    params.set('resource_type', trimmed)
+  }
+  return api<AuditEvent[]>(`/api/v1/orgs/${org}/audit/events?${params}`)
 }
 
 export async function getRunnerCapabilities() {

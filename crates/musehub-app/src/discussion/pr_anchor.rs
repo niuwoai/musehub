@@ -139,3 +139,28 @@ fn line_exists_in_unified(unified: &str, target_line: u64, side: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unified_line_right_addition() {
+        let diff = "@@ -1,1 +1,2 @@\n old\n+new\n";
+        assert!(line_exists_in_unified(diff, 2, "RIGHT"));
+        assert!(!line_exists_in_unified(diff, 2, "LEFT"));
+    }
+
+    #[test]
+    fn unified_line_left_deletion() {
+        let diff = "@@ -1,2 +1,1 @@\n-old\n kept\n";
+        assert!(line_exists_in_unified(diff, 1, "LEFT"));
+    }
+
+    #[test]
+    fn parse_hunk_starts_reads_ranges() {
+        let (o, n) = parse_hunk_starts("@@ -3,4 +5,6 @@").unwrap();
+        assert_eq!(o, 3);
+        assert_eq!(n, 5);
+    }
+}

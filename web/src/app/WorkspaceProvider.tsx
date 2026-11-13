@@ -61,6 +61,7 @@ import {
   retryPipelineJob,
   publishRelease,
   PullRequest,
+  type RepoGrant,
   Repository,
   setPullRequestCheck,
   startAgentRun,
@@ -129,7 +130,7 @@ export type WorkspaceValue = {
   settings: Awaited<ReturnType<typeof getOrgSettings>> | null
   orgDisplayName: string
   setOrgDisplayName: React.Dispatch<React.SetStateAction<string>>
-  grants: { handle: string; role: string }[]
+  grants: RepoGrant[]
   grantHandle: string
   setGrantHandle: React.Dispatch<React.SetStateAction<string>>
   orgMembers: OrgMember[]
@@ -203,7 +204,7 @@ export type WorkspaceValue = {
   setSettings: React.Dispatch<
     React.SetStateAction<Awaited<ReturnType<typeof getOrgSettings>> | null>
   >
-  setGrants: React.Dispatch<React.SetStateAction<{ handle: string; role: string }[]>>
+  setGrants: React.Dispatch<React.SetStateAction<RepoGrant[]>>
   setOrgMembers: React.Dispatch<React.SetStateAction<OrgMember[]>>
   setMembersAdmin: React.Dispatch<React.SetStateAction<boolean>>
 }
@@ -264,7 +265,7 @@ function useWorkspaceState(): WorkspaceValue {
   const [trace, setTrace] = useState<DeploymentTrace | null>(null)
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof getOrgSettings>> | null>(null)
   const [orgDisplayName, setOrgDisplayName] = useState('')
-  const [grants, setGrants] = useState<{ handle: string; role: string }[]>([])
+  const [grants, setGrants] = useState<RepoGrant[]>([])
   const [grantHandle, setGrantHandle] = useState('')
   const [mintedPatFull, setMintedPatFull] = useState<string | null>(null)
   const sessionEpochRef = useRef(0)

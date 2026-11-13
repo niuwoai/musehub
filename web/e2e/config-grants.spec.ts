@@ -57,4 +57,20 @@ test.describe('org config and grants UI', () => {
     expect(body.display_name).toBe(name)
     expect(JSON.stringify(body)).not.toMatch(tokenLike)
   })
+
+  test('default collaborator role persists via API', async ({ request }) => {
+    const login = await request.post(`${apiBase}/api/v1/auth/login`, {
+      data: { handle: 'admin', password: password! },
+    })
+    expect(login.ok()).toBeTruthy()
+    const patch = await request.patch(`${apiBase}/api/v1/orgs/demo/settings`, {
+      data: { preferences: { default_collaborator_role: 'maintainer' } },
+    })
+    expect(patch.ok()).toBeTruthy()
+    const body = await patch.json()
+    expect(body.preferences.default_collaborator_role).toBe('maintainer')
+    await request.patch(`${apiBase}/api/v1/orgs/demo/settings`, {
+      data: { preferences: { default_collaborator_role: 'reader' } },
+    })
+  })
 })
