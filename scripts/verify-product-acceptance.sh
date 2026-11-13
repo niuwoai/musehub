@@ -26,6 +26,9 @@ cargo build -p musehub-agent-adapter --bin musehub-compose-runner -q
 cargo build -p musehub-git-ssh -q
 if command -v sudo >/dev/null && [[ -x target/debug/musehub-git-ssh ]]; then
   sudo install -m 0755 target/debug/musehub-git-ssh /usr/local/bin/musehub-git-ssh
+  if command -v setcap >/dev/null; then
+    sudo setcap cap_setgid+ep /usr/local/bin/musehub-git-ssh
+  fi
 fi
 export MUSEHUB_GIT_SSH_BIN="${MUSEHUB_GIT_SSH_BIN:-$PWD/target/debug/musehub-git-ssh}"
 export MUSEHUB_REQUIRE_GIT_SSH="${MUSEHUB_REQUIRE_GIT_SSH:-1}"

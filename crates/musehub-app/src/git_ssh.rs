@@ -7,6 +7,8 @@
 //! session `HOME`. Client `SendEnv` / writable passwd home can otherwise override allowlisted vars.
 
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -327,17 +329,18 @@ pub async fn run_ssh_gateway(
 
 /// Runs `upload-pack` / `receive-pack` after the DB pool is released (may block for pack I/O).
 pub fn execute_ssh_pack(plan: &SshPackPlan) -> Result<i32, AppError> {
+    if plan.service == "receive-pack" {
+        eprintln!("musehub gateway: receive-pack {}", plan.bare.display());
+    }
     run_git_pack_inherit(&plan.bare, &plan.service)
 }
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-/// How product SSH/HTTP pack helpers run git (tested to prevent login-shell env drift).
+/// How product SSH pack helpers run git (tested to prevent login-shell env drift).
+/// Receive-pack carries the storage group via `setegid` in the child (not `sg`), avoiding
+/// no-TTY hangs in CI acceptance.
 pub(crate) fn git_pack_exec_plan(service: &str) -> (&'static str, Option<String>) {
     if service == "receive-pack" {
-        ("sg", Some(git_storage_group()))
+        ("git", Some(git_storage_group()))
     } else {
         ("git", None)
     }
@@ -378,37 +381,54 @@ fn validate_sg_storage_group(_group: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// `receive-pack` writes refs with the storage GID (HTTP uses the same via `sg` http-backend).
+#[cfg(unix)]
+fn storage_group_gid(group: &str) -> Result<libc::gid_t, AppError> {
+    let out = Command::new("getent")
+        .args(["group", group])
+        .output()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !out.status.success() {
+        return Err(AppError::Other(format!("storage group {group} missing")));
+    }
+    let line = String::from_utf8_lossy(&out.stdout);
+    let gid = line
+        .split(':')
+        .nth(2)
+        .and_then(|s| s.trim().parse::<libc::gid_t>().ok())
+        .ok_or_else(|| AppError::Other(format!("getent group {group} invalid")))?;
+    Ok(gid)
+}
+
+/// `receive-pack` writes refs with the storage GID (HTTP uses `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let safe_dir = format!("safe.directory={}", bare.display());
-    let (program, sg_group) = git_pack_exec_plan(service);
-    let mut child = if let Some(g) = sg_group {
-        validate_sg_storage_group(g.as_str())?;
-        let g = g.as_str();
-        let script = format!(
-            "git -c {} -c core.sharedRepository=group {} {}",
-            shell_single_quote(&safe_dir),
-            service,
-            shell_single_quote(&bare.to_string_lossy())
-        );
-        let mut cmd = Command::new(program);
-        cmd.arg(g).arg("-c").arg(script);
-        cmd
-    } else {
-        let mut direct = Command::new(program);
-        direct
-            .arg("-c")
-            .arg(safe_dir)
-            .arg("-c")
-            .arg("core.sharedRepository=group")
-            .arg(service)
-            .arg(bare);
-        direct
-    };
-    child.stdin(Stdio::inherit());
-    child.stdout(Stdio::inherit());
-    child.stderr(Stdio::inherit());
-    let status = child.status().map_err(|e| AppError::Other(e.to_string()))?;
+    let (program, storage_group) = git_pack_exec_plan(service);
+    let mut cmd = Command::new(program);
+    cmd.arg("-c")
+        .arg(&safe_dir)
+        .arg("-c")
+        .arg("core.sharedRepository=group")
+        .arg(service)
+        .arg(bare);
+    if let Some(g) = storage_group.as_deref() {
+        validate_sg_storage_group(g)?;
+        #[cfg(unix)]
+        {
+            let gid = storage_group_gid(g)?;
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::setegid(gid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+    }
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+    let status = cmd.status().map_err(|e| AppError::Other(e.to_string()))?;
     Ok(status.code().unwrap_or(1))
 }
 
@@ -562,10 +582,10 @@ mod tests {
     }
 
     #[test]
-    fn receive_pack_exec_plan_uses_sg_musehub_git() {
+    fn receive_pack_exec_plan_uses_storage_group() {
         std::env::remove_var("MUSEHUB_GIT_STORAGE_GROUP");
         let (prog, group) = super::git_pack_exec_plan("receive-pack");
-        assert_eq!(prog, "sg");
+        assert_eq!(prog, "git");
         assert_eq!(group.as_deref(), Some("musehub-git"));
         let (upload_prog, upload_group) = super::git_pack_exec_plan("upload-pack");
         assert_eq!(upload_prog, "git");

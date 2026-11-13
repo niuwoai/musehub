@@ -230,7 +230,8 @@ async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let plan = git_ssh::plan_ssh_pack_gateway(&pool, &require_git_root(), auth.key_id, &original)
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-    pool.close().await;
+    // Release DB handles before blocking pack I/O (do not await graceful close — can stall).
+    drop(pool);
     match git_ssh::execute_ssh_pack(&plan) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
@@ -268,6 +269,23 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&staged_bin, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        let _ = musehub_app::git_ssh_runtime::run_privileged(
+            "setcap",
+            &[
+                "cap_setgid+ep",
+                pinned_gateway_bin().to_str().unwrap_or(PINNED_GATEWAY_BIN),
+            ],
+        );
+        let staged_s = staged_bin.to_str().unwrap_or("");
+        if !staged_s.is_empty() {
+            let _ = musehub_app::git_ssh_runtime::run_privileged(
+                "setcap",
+                &["cap_setgid+ep", staged_s],
+            );
         }
     }
     let db_url = require_database_url()?;

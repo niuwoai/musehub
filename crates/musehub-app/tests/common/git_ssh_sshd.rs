@@ -15,7 +15,7 @@ impl GitPasswdHomeGuard {
     fn install_for_port(port: u16) -> Self {
         let lock = GIT_PASSWD_HOME_SERIAL
             .lock()
-            .expect("serialize git passwd home changes");
+            .unwrap_or_else(|e| e.into_inner());
         let saved_home = musehub_app::git_ssh_runtime::passwd_home_for("git");
         let fixture_home = format!("/var/lib/musehub-ssh-test-{port}/login-home");
         let script = format!(
@@ -339,5 +339,21 @@ pub fn install_root_owned_git_ssh_bin(gateway_bin: &std::path::Path) -> std::pat
         status.success(),
         "sudo install musehub-git-ssh to /usr/local/bin required for AKC ownership"
     );
+    if Command::new("which")
+        .arg("setcap")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        let cap = Command::new("sudo")
+            .args(["setcap", "cap_setgid+ep", dest.to_str().expect("dest")])
+            .status();
+        assert!(
+            cap.map(|s| s.success()).unwrap_or(false),
+            "cap_setgid+ep on musehub-git-ssh required for receive-pack without sg stdin hang"
+        );
+    }
     dest
 }

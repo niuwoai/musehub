@@ -5,7 +5,10 @@ mod common;
 use std::process::Command;
 
 use common::git_ssh_fixture::git_ssh_fixture;
-use common::git_ssh_util::{git_ssh_cmd_in, require_git_ssh_transport_prereqs};
+use common::git_ssh_util::{
+    format_bounded_git_transport_failure, git_ssh_cmd_in, git_ssh_cmd_in_bounded,
+    require_git_ssh_transport_prereqs,
+};
 
 #[tokio::test]
 async fn git_ssh_transport_auth_and_protection() {
@@ -48,7 +51,7 @@ async fn git_ssh_transport_auth_and_protection() {
         ])
         .status()
         .unwrap();
-    let push = git_ssh_cmd_in(
+    let push = git_ssh_cmd_in_bounded(
         &f.priv_key,
         f.sshd.port,
         Some(work),
@@ -56,8 +59,8 @@ async fn git_ssh_transport_auth_and_protection() {
     );
     assert!(
         push.status.success(),
-        "push: {}",
-        String::from_utf8_lossy(&push.stderr)
+        "{}",
+        format_bounded_git_transport_failure("push feature/ssh", &push)
     );
     let push_main = git_ssh_cmd_in(
         &f.priv_key,

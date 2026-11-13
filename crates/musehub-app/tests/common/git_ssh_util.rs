@@ -543,6 +543,15 @@ pub fn git_ssh_cmd_in(
     workdir: Option<&Path>,
     git_args: &[&str],
 ) -> Output {
+    git_ssh_cmd_in_bounded(priv_key, port, workdir, git_args).into_output()
+}
+
+pub fn git_ssh_cmd_in_bounded(
+    priv_key: &Path,
+    port: u16,
+    workdir: Option<&Path>,
+    git_args: &[&str],
+) -> BoundedOutput {
     let ssh_cmd = format!(
         "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ControlMaster=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {} -p {}",
         priv_key.display(),
@@ -555,7 +564,21 @@ pub fn git_ssh_cmd_in(
     cmd.arg("-c").arg(format!("core.sshCommand={ssh_cmd}"));
     cmd.args(git_args);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    run_bounded(cmd, git_timeout_secs()).into_output()
+    run_bounded(cmd, git_timeout_secs())
+}
+
+pub fn format_bounded_git_transport_failure(label: &str, b: &BoundedOutput) -> String {
+    let stdout = String::from_utf8_lossy(&b.stdout);
+    let stderr = redact_test_output(&String::from_utf8_lossy(&b.stderr));
+    let code = b.status.code();
+    if b.timed_out {
+        format!(
+            "{label}: timed out after {}s waiting for remote (receive-pack may have hung — check gateway stderr); exit={code:?}; stdout={stdout}; stderr={stderr}",
+            git_timeout_secs(),
+        )
+    } else {
+        format!("{label}: exit={code:?}; stdout={stdout}; stderr={stderr}")
+    }
 }
 
 pub fn raw_ssh(priv_key: &Path, port: u16, remote_cmd: &str, allocate_tty: bool) -> Output {

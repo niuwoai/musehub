@@ -68,6 +68,7 @@ jobs:
           sudo usermod -aG musehub-git git || true
           sudo usermod -aG musehub-git "$(whoami)" || true
           cargo build -p musehub-git-ssh -q && sudo install -m 0755 target/debug/musehub-git-ssh /usr/local/bin/musehub-git-ssh
+          sudo setcap cap_setgid+ep /usr/local/bin/musehub-git-ssh
       - name: build agent adapter binaries
         run: |
           cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
