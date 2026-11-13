@@ -23,6 +23,8 @@
     "prCiJobLogPath": "Log API",
     "prCiJobLogMissing": "No stored log chunks for this job attempt yet.",
     "deliveryTitle": "Delivery chain",
+    "releasesTitle": "Releases",
+    "releasesEmpty": "No releases yet — publish from a succeeded pipeline run.",
     "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
     "deliveryModeNote": "Deploy follows server policy: pipeline-built OCI + compose-runner when MUSEHUB_REQUIRE_PIPELINE_OCI=1; otherwise compose-mock for local dev.",
     "runPipelineOnMain": "Run pipeline on merged main tip",
@@ -134,7 +136,9 @@
     "emptyTree": "No entries at this path.",
     "binaryFile": "Binary file @ {{path}}",
     "truncatedFile": "Large file (truncated) @ {{path}}",
-    "sshCloneLabel": "SSH clone"
+    "sshCloneLabel": "SSH clone",
+    "httpCloneLabel": "HTTPS clone",
+    "sshKeysLink": "Manage SSH keys in Account → Security"
   },
   "pull": {
     "syncHead": "Sync head",
@@ -162,7 +166,8 @@
     "loadMore": "Load more",
     "loadingMore": "Loading more…",
     "loadFailed": "Could not load issues.",
-    "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters."
+    "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters.",
+    "newTitlePlaceholder": "Issue title"
   },
   "issueDetail": {
     "labels": "Labels",
@@ -235,6 +240,12 @@
     "revokeGrant": "Revoke",
     "revokeFailed": "Could not revoke grant.",
     "environmentsTitle": "Deployment environments",
-    "approvalRequired": "approval required"
+    "approvalRequired": "approval required",
+    "envSlugPlaceholder": "staging",
+    "envNamePlaceholder": "Staging",
+    "envCreate": "Add environment",
+    "envToggleApproval": "Toggle approval gate",
+    "envCreateFailed": "Could not create environment.",
+    "envPatchFailed": "Could not update environment."
   }
 }

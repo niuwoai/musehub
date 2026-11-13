@@ -343,11 +343,58 @@ export async function postIssueComment(org: string, repo: string, issueNumber: n
   )
 }
 
-export async function createIssue(org: string, repo: string, title: string) {
+export async function createIssue(
+  org: string,
+  repo: string,
+  title: string,
+  opts?: { body?: string; assignee_handle?: string },
+) {
   return api<Issue>(`/api/v1/orgs/${org}/repos/${repo}/issues`, {
     method: 'POST',
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({
+      title,
+      body: opts?.body,
+      assignee_handle: opts?.assignee_handle,
+    }),
   })
+}
+
+export async function createRepoEnvironment(
+  org: string,
+  repo: string,
+  body: { slug: string; name: string; requires_approval?: boolean },
+) {
+  return api<RepoEnvironment>(`/api/v1/orgs/${org}/repos/${repo}/environments`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function patchRepoEnvironment(
+  org: string,
+  repo: string,
+  slug: string,
+  body: { name?: string; requires_approval?: boolean; expected_row_version: number },
+) {
+  return api<RepoEnvironment>(`/api/v1/orgs/${org}/repos/${repo}/environments/${slug}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export type ReleaseSummary = {
+  id: string
+  version: string
+  tag_name: string
+  commit_oid: string
+  pipeline_run_id: string
+  state: string
+  manifest_sha256?: string | null
+  oci_image_ref?: string | null
+}
+
+export async function listReleases(org: string, repo: string) {
+  return api<ReleaseSummary[]>(`/api/v1/orgs/${org}/repos/${repo}/releases`)
 }
 
 export async function createPlan(org: string, repo: string, issueNumber: number, body: string) {

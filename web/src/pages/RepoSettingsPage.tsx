@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  createRepoEnvironment,
   getOrgSettings,
   grantRepoCollaborator,
   listRepoEnvironments,
   listRepoGrants,
+  patchRepoEnvironment,
   revokeRepoGrant,
   type RepoEnvironment,
 } from '../api'
@@ -27,6 +29,17 @@ export function RepoSettingsPage() {
   const [grantRole, setGrantRole] = useState<string>('reader')
   const [grantError, setGrantError] = useState<string | null>(null)
   const [grantsBusy, setGrantsBusy] = useState(false)
+  const [envSlug, setEnvSlug] = useState('')
+  const [envName, setEnvName] = useState('')
+  const [envApproval, setEnvApproval] = useState(false)
+  const [envError, setEnvError] = useState<string | null>(null)
+  const [envBusy, setEnvBusy] = useState(false)
+
+  const reloadEnvironments = useCallback(async () => {
+    if (!selectedRepo) return
+    const rows = await listRepoEnvironments(activeOrg, selectedRepo)
+    setEnvironments(rows)
+  }, [activeOrg, selectedRepo])
 
   const reloadGrants = useCallback(async () => {
     if (!selectedRepo) return
@@ -36,9 +49,7 @@ export function RepoSettingsPage() {
 
   useEffect(() => {
     if (!selectedRepo) return
-    void listRepoEnvironments(activeOrg, selectedRepo)
-      .then(setEnvironments)
-      .catch(() => setEnvironments([]))
+    void reloadEnvironments().catch(() => setEnvironments([]))
     void getOrgSettings(activeOrg)
       .then((s) => {
         const defaultRole = s.preferences?.default_collaborator_role
@@ -48,7 +59,7 @@ export function RepoSettingsPage() {
       })
       .catch(() => {})
     void reloadGrants().catch(() => {})
-  }, [activeOrg, selectedRepo, reloadGrants])
+  }, [activeOrg, selectedRepo, reloadEnvironments, reloadGrants])
 
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
@@ -84,6 +95,45 @@ export function RepoSettingsPage() {
     }
   }
 
+  async function submitEnvironment() {
+    const slug = envSlug.trim()
+    const name = envName.trim()
+    if (!slug || !name) return
+    setEnvError(null)
+    setEnvBusy(true)
+    try {
+      await createRepoEnvironment(activeOrg, repoSlug, {
+        slug,
+        name,
+        requires_approval: envApproval,
+      })
+      setEnvSlug('')
+      setEnvName('')
+      setEnvApproval(false)
+      await reloadEnvironments()
+    } catch (e) {
+      setEnvError(e instanceof Error ? e.message : t('repoSettings.envCreateFailed'))
+    } finally {
+      setEnvBusy(false)
+    }
+  }
+
+  async function toggleEnvApproval(env: RepoEnvironment) {
+    setEnvError(null)
+    setEnvBusy(true)
+    try {
+      await patchRepoEnvironment(activeOrg, repoSlug, env.slug, {
+        requires_approval: !env.requires_approval,
+        expected_row_version: env.row_version,
+      })
+      await reloadEnvironments()
+    } catch (e) {
+      setEnvError(e instanceof Error ? e.message : t('repoSettings.envPatchFailed'))
+    } finally {
+      setEnvBusy(false)
+    }
+  }
+
   return (
     <Panel data-testid="repo-settings-panel">
       <h2>{t('nav.repoSettings')}</h2>
@@ -93,10 +143,50 @@ export function RepoSettingsPage() {
           {environments.map((e) => (
             <li key={e.id} data-testid={`env-${e.slug}`}>
               {e.slug} — {e.name}
-              {e.requires_approval ? ` (${t('repoSettings.approvalRequired')})` : ''}
+              {e.requires_approval ? ` (${t('repoSettings.approvalRequired')})` : ''}{' '}
+              <button
+                type="button"
+                data-testid={`env-toggle-approval-${e.slug}`}
+                disabled={envBusy}
+                onClick={() => void toggleEnvApproval(e)}
+              >
+                {t('repoSettings.envToggleApproval')}
+              </button>
             </li>
           ))}
         </ul>
+        <div data-testid="repo-env-create">
+          <input
+            data-testid="repo-env-slug"
+            placeholder={t('repoSettings.envSlugPlaceholder')}
+            value={envSlug}
+            onChange={(ev) => setEnvSlug(ev.target.value)}
+          />
+          <input
+            data-testid="repo-env-name"
+            placeholder={t('repoSettings.envNamePlaceholder')}
+            value={envName}
+            onChange={(ev) => setEnvName(ev.target.value)}
+          />
+          <label>
+            <input
+              type="checkbox"
+              data-testid="repo-env-approval"
+              checked={envApproval}
+              onChange={(ev) => setEnvApproval(ev.target.checked)}
+            />{' '}
+            {t('repoSettings.approvalRequired')}
+          </label>
+          <button
+            type="button"
+            data-testid="repo-env-submit"
+            disabled={envBusy}
+            onClick={() => void submitEnvironment()}
+          >
+            {t('repoSettings.envCreate')}
+          </button>
+        </div>
+        {envError ? <p role="alert">{envError}</p> : null}
       </div>
       <div data-testid="repo-grants">
         <strong>{t('repoSettings.grantsTitle')}</strong>
@@ -121,24 +211,21 @@ export function RepoSettingsPage() {
           value={grantHandle}
           onChange={(e) => setGrantHandle(e.target.value)}
         />
-        <label>
-          {t('repoSettings.grantRole')}
-          <select
-            data-testid="repo-grant-role"
-            value={grantRole}
-            onChange={(e) => setGrantRole(e.target.value)}
-          >
-            {GRANT_ROLES.map((role) => (
-              <option key={role} value={role}>
-                {t(`orgSettings.repoRole.${role}`)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <select
+          data-testid="repo-grant-role"
+          value={grantRole}
+          onChange={(e) => setGrantRole(e.target.value)}
+        >
+          {GRANT_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
         <button
           type="button"
           data-testid="repo-grant-submit"
-          disabled={grantsBusy || !grantHandle.trim()}
+          disabled={grantsBusy}
           onClick={() => void submitGrant()}
         >
           {t('repoSettings.grantSubmit')}

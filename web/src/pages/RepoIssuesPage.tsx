@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
-import { listIssueAssignees, listIssuesPage, type Issue } from '../api'
+import { createIssue, listIssueAssignees, listIssuesPage, type Issue } from '../api'
 
 function issueMatchesFilters(
   issue: Issue,
@@ -27,7 +27,6 @@ export function RepoIssuesPage() {
     selectedRepo,
     lastRun,
     agentRunStarting,
-    onCreateIssue,
     onAcceptPlan,
     onRunAgent,
     onCancelRun,
@@ -44,6 +43,8 @@ export function RepoIssuesPage() {
   const [listNotice, setListNotice] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
+  const [newIssueTitle, setNewIssueTitle] = useState('')
+  const [newIssueAssignee, setNewIssueAssignee] = useState('')
 
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
@@ -95,9 +96,15 @@ export function RepoIssuesPage() {
   }, [selectedRepo, loadAssigneeOptions])
 
   async function handleCreateIssue() {
+    const title = newIssueTitle.trim()
+    if (!title || !selectedRepo) return
     setListError(null)
     setListNotice(null)
-    const created = await onCreateIssue()
+    const created = await createIssue(org, selectedRepo, title, {
+      assignee_handle: newIssueAssignee.trim() || undefined,
+    })
+    setNewIssueTitle('')
+    setNewIssueAssignee('')
     if (!created || !selectedRepo) return
     if (issueMatchesFilters(created, filters)) {
       setItems((prev) => {
@@ -181,6 +188,24 @@ export function RepoIssuesPage() {
       <button type="button" data-testid="refresh-repo" onClick={() => void refreshAll()}>
         {t('app.refreshRepo')}
       </button>
+      <input
+        data-testid="issue-create-title"
+        placeholder={t('issues.newTitlePlaceholder')}
+        value={newIssueTitle}
+        onChange={(e) => setNewIssueTitle(e.target.value)}
+      />
+      <select
+        data-testid="issue-create-assignee"
+        value={newIssueAssignee}
+        onChange={(e) => setNewIssueAssignee(e.target.value)}
+      >
+        <option value="">{t('issues.filterAny')}</option>
+        {assigneeOptions.map((handle) => (
+          <option key={handle} value={handle}>
+            {handle}
+          </option>
+        ))}
+      </select>
       <button type="button" data-testid="create-issue" onClick={() => void handleCreateIssue()}>
         {t('app.createIssue')}
       </button>
