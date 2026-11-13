@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
@@ -24,6 +24,7 @@ export function RepoDeliveryPage() {
     pipelineJobs,
     pipelineRetryBusy,
     pipelineCancelBusy,
+    publishReleaseBusy,
     publishedReleaseId,
     deploymentListMode,
     deploymentListLoading,
@@ -42,11 +43,11 @@ export function RepoDeliveryPage() {
     onFocusPipelineRun,
   } = ws
 
-  useEffect(() => {
-    if (!selectedRepo) return
+  const refreshReleases = useCallback(() => {
+    if (!selectedRepo) return Promise.resolve()
     setReleasesLoading(true)
     setReleasesError(null)
-    void listReleases(activeOrg, selectedRepo)
+    return listReleases(activeOrg, selectedRepo)
       .then((rows) => setReleases(rows))
       .catch((err) => {
         setReleases([])
@@ -55,7 +56,11 @@ export function RepoDeliveryPage() {
         )
       })
       .finally(() => setReleasesLoading(false))
-  }, [activeOrg, selectedRepo, publishedReleaseId, pipelineRun?.id, t])
+  }, [activeOrg, selectedRepo, t])
+
+  useEffect(() => {
+    void refreshReleases()
+  }, [refreshReleases, publishedReleaseId, pipelineRun?.id])
 
   useEffect(() => {
     if (!selectedRepo) return
@@ -230,7 +235,21 @@ export function RepoDeliveryPage() {
           <button type="button" onClick={() => void ws.onRunDeliveryPipeline()}>
             {t('app.runPipelineOnMain')}
           </button>
-          <button type="button" onClick={() => void ws.onReleaseAndDeploy()}>
+          {pipelineRun?.state === 'succeeded' ? (
+            <button
+              type="button"
+              data-testid="publish-pipeline-release"
+              disabled={publishReleaseBusy}
+              onClick={() => void ws.onPublishPipelineRelease().then(() => refreshReleases())}
+            >
+              {t('app.publishPipelineRelease')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            data-testid="release-and-deploy-mock"
+            onClick={() => void ws.onReleaseAndDeploy()}
+          >
             {t('app.releaseAndDeployMock')}
           </button>
         </>

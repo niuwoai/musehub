@@ -33,7 +33,10 @@ export function RepoIssuesPage() {
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
-  const selectedRepo = workspaceRepo ?? routeSlug ?? null
+  const activeRepoSlug = routeSlug ?? workspaceRepo ?? null
+  const repoContextTransitioning = Boolean(
+    routeSlug && workspaceRepo && routeSlug !== workspaceRepo,
+  )
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -51,12 +54,12 @@ export function RepoIssuesPage() {
 
   const fetchPage = useCallback(
     async (cursor?: string, append = false, opts?: { keepNotice?: boolean }) => {
-      if (!selectedRepo) return
+      if (!activeRepoSlug) return
       setListError(null)
       if (!opts?.keepNotice) {
         setListNotice(null)
       }
-      const page = await listIssuesPage(org, selectedRepo, {
+      const page = await listIssuesPage(org, activeRepoSlug, {
         state: filterState || undefined,
         label: filterLabel || undefined,
         assignee: filterAssignee || undefined,
@@ -76,55 +79,60 @@ export function RepoIssuesPage() {
       setNextCursor(page.next_cursor)
       return page
     },
-    [org, selectedRepo, filterState, filterLabel, filterAssignee, pageLimit],
+    [org, activeRepoSlug, filterState, filterLabel, filterAssignee, pageLimit],
   )
 
   const loadAssigneeOptions = useCallback(() => {
-    if (!selectedRepo) return Promise.resolve()
-    return listIssueAssignees(org, selectedRepo)
+    if (!activeRepoSlug) return Promise.resolve()
+    return listIssueAssignees(org, activeRepoSlug)
       .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
       .catch(() => setAssigneeOptions([]))
-  }, [org, selectedRepo])
+  }, [org, activeRepoSlug])
 
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!activeRepoSlug) return
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
-  }, [selectedRepo, fetchPage, t])
+  }, [activeRepoSlug, fetchPage, t])
 
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!activeRepoSlug) return
     void loadAssigneeOptions()
-  }, [selectedRepo, loadAssigneeOptions])
+  }, [activeRepoSlug, loadAssigneeOptions])
 
-  const canCreateIssue = newIssueTitle.trim().length > 0 && Boolean(selectedRepo)
+  const canCreateIssue =
+    newIssueTitle.trim().length > 0 && Boolean(activeRepoSlug) && !repoContextTransitioning
 
   async function handleCreateIssue() {
     const title = newIssueTitle.trim()
-    if (!title || !selectedRepo) {
+    if (!title || !activeRepoSlug) {
       setListError(t('issues.titleRequired'))
+      return
+    }
+    if (repoContextTransitioning) {
+      setListError(t('issues.repoContextTransitioning'))
       return
     }
     setListError(null)
     setListNotice(null)
-    const created = await createIssue(org, selectedRepo, title, {
+    const created = await createIssue(org, activeRepoSlug, title, {
       assignee_handle: newIssueAssignee.trim() || undefined,
     })
     setNewIssueTitle('')
     setNewIssueAssignee('')
-    if (!created || !selectedRepo) return
+    if (!created || !activeRepoSlug) return
     if (issueMatchesFilters(created, filters)) {
       setItems((prev) => {
         const merged = [created, ...prev.filter((i) => i.id !== created.id)]
         merged.sort((a, b) => b.number - a.number)
         return merged
       })
-      await loadIssues(selectedRepo)
+      await loadIssues(activeRepoSlug)
       void fetchPage(undefined, false).catch((e) =>
         setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
       )
     } else {
       setListNotice(t('issues.createdHiddenByFilters', { number: created.number }))
-      await loadIssues(selectedRepo)
+      await loadIssues(activeRepoSlug)
       void fetchPage(undefined, false, { keepNotice: true }).catch((e) =>
         setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
       )
@@ -132,10 +140,10 @@ export function RepoIssuesPage() {
   }
 
   async function refreshAll() {
-    await Promise.all([loadIssues(selectedRepo!), fetchPage(), loadAssigneeOptions()])
+    await Promise.all([loadIssues(activeRepoSlug!), fetchPage(), loadAssigneeOptions()])
   }
 
-  if (!selectedRepo) {
+  if (!activeRepoSlug) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
 
@@ -220,13 +228,18 @@ export function RepoIssuesPage() {
       >
         {t('app.createIssue')}
       </button>
+      {repoContextTransitioning ? (
+        <p role="status" data-testid="issues-repo-transition">
+          {t('issues.repoContextTransitioning')}
+        </p>
+      ) : null}
       {listError ? <p role="alert">{listError}</p> : null}
       {listNotice ? <p role="status" data-testid="issue-list-notice">{listNotice}</p> : null}
       <ul data-testid="issue-list">
         {items.map((issue) => (
           <li key={issue.id} data-testid={`issue-row-${issue.number}`}>
             <Link
-              to={paths.repoIssue(org, selectedRepo, issue.number)}
+              to={paths.repoIssue(org, activeRepoSlug, issue.number)}
               data-testid={`issue-link-${issue.number}`}
             >
               #{issue.number} {issue.title}

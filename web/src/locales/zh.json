@@ -34,6 +34,7 @@
     "pipelineCancelPending": "已请求取消 — 等待服务端/Runner 上报 canceled（进程内执行器可能先完成当前步骤）。",
     "pipelineCancelHonesty": "取消仅为服务端请求；仅在状态变为 canceled 时确认 worker 已停，而非按钮返回瞬间。",
     "releaseAndDeployMock": "发布 + mock 部署",
+    "publishPipelineRelease": "从成功流水线发布 Release",
     "deployProductionProtected": "部署到 production（需审批）",
     "deploymentAwaitingApproval": "部署到 {{env}} 等待审批",
     "approveDeployment": "批准部署",
@@ -174,7 +175,8 @@
     "loadFailed": "无法加载 Issue 列表。",
     "createdHiddenByFilters": "Issue #{{number}} 已创建，但不满足当前筛选条件。",
     "newTitlePlaceholder": "Issue 标题",
-    "titleRequired": "创建前请填写 Issue 标题。"
+    "titleRequired": "创建前请填写 Issue 标题。",
+    "repoContextTransitioning": "正在切换仓库，请稍候再创建 Issue。"
   },
   "issueDetail": {
     "labels": "标签",
@@ -237,6 +239,11 @@
     "grantReader": "授予 reader",
     "grantSubmit": "授予访问",
     "grantRole": "仓库角色",
+    "grantRoles": {
+      "reader": "读者",
+      "developer": "开发者",
+      "maintainer": "维护者"
+    },
     "grantHandlePlaceholder": "成员 handle",
     "grantFailed": "无法授予仓库访问。",
     "revokeGrant": "撤销",

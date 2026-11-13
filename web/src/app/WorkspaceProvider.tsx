@@ -112,6 +112,7 @@ export type WorkspaceValue = {
   pipelineJobs: PipelineJob[]
   pipelineRetryBusy: boolean
   pipelineCancelBusy: boolean
+  publishReleaseBusy: boolean
   deploymentId: string | null
   activeDeployment: Deployment | null
   publishedReleaseId: string | null
@@ -168,6 +169,7 @@ export type WorkspaceValue = {
   onRunDeliveryPipeline: () => Promise<void>
   onCancelPipelineRun: () => Promise<void>
   onRetryPipelineJob: (jobId: string) => Promise<void>
+  onPublishPipelineRelease: () => Promise<void>
   onReleaseAndDeploy: () => Promise<void>
   onDeployProduction: () => Promise<void>
   onRollbackToTarget: (targetDeploymentId: string) => Promise<void>
@@ -237,6 +239,7 @@ function useWorkspaceState(): WorkspaceValue {
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([])
   const [pipelineRetryBusy, setPipelineRetryBusy] = useState(false)
   const [pipelineCancelBusy, setPipelineCancelBusy] = useState(false)
+  const [publishReleaseBusy, setPublishReleaseBusy] = useState(false)
   const pipelineRetryFlightRef = useRef<{ jobId: string; attemptId: string } | null>(null)
   const pipelinePollEpochRef = useRef(0)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
@@ -1300,6 +1303,48 @@ function useWorkspaceState(): WorkspaceValue {
     }
   }
 
+  async function publishReleaseFromPipeline(
+    op: DeploymentOpContext,
+  ): Promise<string | null> {
+    if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
+      return null
+    }
+    const version = `0.0.${Date.now().toString(36)}`
+    const rel = await createRelease(activeOrg, selectedRepo, {
+      version,
+      tag_name: `v${version}`,
+      commit_oid: mergedPr.head_oid,
+      pipeline_run_id: pipelineRun.id,
+      pr_id: mergedPr.id,
+    })
+    const published = await publishRelease(activeOrg, selectedRepo, rel.id)
+    if (!deploymentOpActive(op)) {
+      return null
+    }
+    setPublishedReleaseId(published.id)
+    return published.id
+  }
+
+  async function onPublishPipelineRelease() {
+    if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
+      return
+    }
+    const op = captureDeploymentOp()
+    setError(null)
+    setPublishReleaseBusy(true)
+    try {
+      await publishReleaseFromPipeline(op)
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'release publish failed')
+      }
+    } finally {
+      if (deploymentOpActive(op)) {
+        setPublishReleaseBusy(false)
+      }
+    }
+  }
+
   async function onReleaseAndDeploy() {
     if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
       return
@@ -1307,20 +1352,11 @@ function useWorkspaceState(): WorkspaceValue {
     const op = captureDeploymentOp()
     setError(null)
     try {
-      const version = `0.0.${Date.now().toString(36)}`
-      const rel = await createRelease(activeOrg, selectedRepo, {
-        version,
-        tag_name: `v${version}`,
-        commit_oid: mergedPr.head_oid,
-        pipeline_run_id: pipelineRun.id,
-        pr_id: mergedPr.id,
-      })
-      await publishRelease(activeOrg, selectedRepo, rel.id)
-      if (!deploymentOpActive(op)) {
+      const relId = await publishReleaseFromPipeline(op)
+      if (!relId) {
         return
       }
-      setPublishedReleaseId(rel.id)
-      const dep = await startDeployment(activeOrg, selectedRepo, rel.id)
+      const dep = await startDeployment(activeOrg, selectedRepo, relId)
       if (!deploymentOpActive(op)) {
         return
       }
@@ -1560,6 +1596,7 @@ function useWorkspaceState(): WorkspaceValue {
     pipelineJobs,
     pipelineRetryBusy,
     pipelineCancelBusy,
+    publishReleaseBusy,
     deploymentId,
     activeDeployment,
     publishedReleaseId,
@@ -1617,6 +1654,7 @@ function useWorkspaceState(): WorkspaceValue {
     onRunDeliveryPipeline,
     onCancelPipelineRun,
     onRetryPipelineJob,
+    onPublishPipelineRelease,
     onReleaseAndDeploy,
     onDeployProduction,
     onRollbackToTarget,
