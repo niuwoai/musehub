@@ -53,6 +53,7 @@ export function RepoSettingsPage() {
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
+  const repoSlug = selectedRepo
 
   async function submitGrant() {
     const handle = grantHandle.trim()
@@ -60,7 +61,7 @@ export function RepoSettingsPage() {
     setGrantError(null)
     setGrantsBusy(true)
     try {
-      await grantRepoCollaborator(activeOrg, selectedRepo, handle, grantRole)
+      await grantRepoCollaborator(activeOrg, repoSlug, handle, grantRole)
       setGrantHandle('')
       await reloadGrants()
     } catch (e) {
@@ -74,7 +75,7 @@ export function RepoSettingsPage() {
     setGrantError(null)
     setGrantsBusy(true)
     try {
-      await revokeRepoGrant(activeOrg, selectedRepo, principalId)
+      await revokeRepoGrant(activeOrg, repoSlug, principalId)
       await reloadGrants()
     } catch (e) {
       setGrantError(e instanceof Error ? e.message : t('repoSettings.revokeFailed'))

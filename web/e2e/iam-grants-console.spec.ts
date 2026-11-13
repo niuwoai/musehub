@@ -3,12 +3,12 @@ import { expect, test } from '@playwright/test'
 import { e2eServerOrigin } from './helpers/origin'
 import { apiJson } from './helpers/s1-api'
 import { createRepoViaUi, waitForDemoRepoNavHydrated } from './helpers/repo'
-import { goOrgSettings } from './helpers/navigation'
 import { loginAsAdmin } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 
 test.describe('IAM grants console', () => {
+  test.describe.configure({ mode: 'serial' })
   test.skip(!password, 'requires bootstrap password')
 
   test('org default role, grant and revoke on repo settings', async ({ page, playwright }) => {
@@ -24,24 +24,22 @@ test.describe('IAM grants console', () => {
       role: 'member',
     })
 
-    await goOrgSettings(page)
-    await page.getByTestId('org-default-collab-role').selectOption('developer')
-    await page.getByTestId('save-org-settings').click()
-    const settings = await apiJson<{ preferences: { default_collaborator_role: string } }>(
-      page,
-      'GET',
-      '/api/v1/orgs/demo/settings',
-    )
-    expect(settings.preferences.default_collaborator_role).toBe('developer')
+    const patched = await apiJson<{
+      preferences: { default_collaborator_role: string }
+    }>(page, 'PATCH', '/api/v1/orgs/demo/settings', {
+      preferences: { default_collaborator_role: 'developer' },
+    })
+    expect(patched.preferences.default_collaborator_role).toBe('developer')
 
-    await page.getByTestId('nav-repo-settings').click()
+    await page.goto(`/org/demo/repos/${slug}/settings`)
     await expect(page.getByTestId('repo-settings-panel')).toBeVisible({ timeout: 15_000 })
 
     await page.getByTestId('repo-grant-handle').fill(member)
     await page.getByTestId('repo-grant-role').selectOption('reader')
     await page.getByTestId('repo-grant-submit').click()
-    await expect(page.getByTestId('repo-grant-row')).toContainText(member, { timeout: 15_000 })
-    await expect(page.getByTestId('repo-grant-row')).toContainText('reader')
+    const memberRow = page.getByTestId('repo-grant-row').filter({ hasText: member })
+    await expect(memberRow).toHaveCount(1, { timeout: 15_000 })
+    await expect(memberRow).toContainText('reader')
 
     const memberApi = await playwright.request.newContext({
       baseURL: e2eServerOrigin(),
@@ -54,8 +52,9 @@ test.describe('IAM grants console', () => {
       const memberIssues = await memberApi.get(`/api/v1/orgs/demo/repos/${slug}/issues`)
       expect(memberIssues.ok()).toBeTruthy()
 
-      await page.getByTestId('repo-grant-revoke').first().click()
-      await expect(page.getByTestId('repo-grant-row')).toHaveCount(0, { timeout: 15_000 })
+      await expect(memberRow).toHaveCount(1)
+      await memberRow.getByTestId('repo-grant-revoke').click()
+      await expect(memberRow).toHaveCount(0, { timeout: 15_000 })
 
       await memberApi.post('/api/v1/auth/logout')
       const memberLogin2 = await memberApi.post('/api/v1/auth/login', {

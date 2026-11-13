@@ -48,6 +48,7 @@ export function AuditPage() {
           <option value="pipeline_run">{t('audit.resourcePipeline')}</option>
           <option value="deployment">{t('audit.resourceDeployment')}</option>
           <option value="principal">{t('audit.resourcePrincipal')}</option>
+          <option value="repository_grant">{t('audit.resourceRepositoryGrant')}</option>
         </select>
       </label>
       <button type="button" data-testid="audit-apply-filter" onClick={() => void reload()}>

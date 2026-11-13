@@ -91,7 +91,8 @@
     "resourceIssue": "Issue",
     "resourcePipeline": "流水线运行",
     "resourceDeployment": "部署",
-    "resourcePrincipal": "主体"
+    "resourcePrincipal": "主体",
+    "resourceRepositoryGrant": "仓库授权"
   },
   "orgSettings": {
     "displayName": "组织显示名称",
@@ -213,7 +214,7 @@
   },
   "sshKeys": {
     "title": "SSH 密钥",
-    "transportGap": "为将来的 Git-over-SSH 管理公钥。产品级 SSH 克隆/推送传输在 0.1.0-rc4 服务端未启用 — 请使用 HTTPS + PAT。",
+    "transportGap": "在运营方部署 musehub-git-ssh 后可在此注册 ed25519 公钥用于 Git-over-SSH（见 deploy/RUNBOOK.md）。未配置 SSH 时请使用 HTTPS 克隆地址与 PAT。",
     "name": "密钥名称",
     "publicKey": "公钥",
     "add": "添加 SSH 密钥",

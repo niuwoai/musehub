@@ -91,7 +91,8 @@
     "resourceIssue": "Issue",
     "resourcePipeline": "Pipeline run",
     "resourceDeployment": "Deployment",
-    "resourcePrincipal": "Principal"
+    "resourcePrincipal": "Principal",
+    "resourceRepositoryGrant": "Repository grant"
   },
   "orgSettings": {
     "displayName": "Org display name",
@@ -208,7 +209,7 @@
   },
   "sshKeys": {
     "title": "SSH keys",
-    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.",
+    "transportGap": "Register ed25519 public keys for Git-over-SSH when your operator exposes musehub-git-ssh (see deploy/RUNBOOK.md). Until SSH is configured, use HTTPS clone URLs with a PAT.",
     "name": "Key name",
     "publicKey": "Public key",
     "add": "Add SSH key",

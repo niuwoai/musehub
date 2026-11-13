@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test'
 import { e2eServerOrigin } from './helpers/origin'
 import { goAccountTokens, goAudit, goRunner, loginFromHome } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
+import { apiJson } from './helpers/s1-api'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 /** Full PATs are much longer than masked `token_prefix` shown in UI. */
@@ -14,6 +15,12 @@ test.describe('audit and runner status panels', () => {
   test('audit and runner panels load without exposing PAT secrets', async ({ page }) => {
     await loginFromHome(page, password!)
     await expectLoggedInAs(page, 'admin')
+
+    const repoSlug = `audit-e2e-${Date.now()}`
+    await apiJson(page, 'POST', '/api/v1/orgs/demo/repos', {
+      slug: repoSlug,
+      description: 'audit filter e2e',
+    })
 
     await goAudit(page)
     await expect(page.getByTestId('audit-panel')).toBeVisible()
