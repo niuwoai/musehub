@@ -150,11 +150,29 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
     let pid_file = tmp.path().join("sshd.pid");
     let auth_keys = tmp.path().join("authorized_keys");
     std::fs::copy(user_key.with_extension("pub"), &auth_keys).expect("authorized_keys");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600))
+            .expect("authorized_keys mode");
+        std::fs::set_permissions(&host_key, std::fs::Permissions::from_mode(0o600)).ok();
+    }
     let login_user = std::env::var("USER").unwrap_or_else(|_| "ubuntu".into());
+    #[cfg(unix)]
+    {
+        let _ = Command::new("sudo")
+            .args([
+                "-n",
+                "chown",
+                &format!("{login_user}:{login_user}"),
+                auth_keys.to_str().unwrap(),
+            ])
+            .status();
+    }
     let cfg = format!(
         "Port {ssh_port}\nListenAddress 127.0.0.1\nHostKey {hk}\nPidFile {pid}\n\
          AllowTcpForwarding yes\nAuthorizedKeysFile {auth}\nPubkeyAuthentication yes\n\
-         PasswordAuthentication no\nUsePAM no\nAllowUsers {login}\n",
+         PasswordAuthentication no\nUsePAM no\nAllowUsers {login}\nStrictModes no\n",
         hk = host_key.display(),
         pid = pid_file.display(),
         auth = auth_keys.display(),
@@ -184,14 +202,9 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
         "sshd must start"
     );
     thread::sleep(Duration::from_millis(400));
-    let (target_port, target_handle) = spawn_nonce_echo_target();
-    thread::sleep(Duration::from_millis(50));
-    let local_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let local_port = local_listener.local_addr().unwrap().port();
-    drop(local_listener);
-    let nonce = b"tunnel-positive-nonce";
-    let mut forward = Command::new("ssh");
-    forward.args([
+    let ssh_port_s = ssh_port.to_string();
+    let user_key_s = user_key.to_str().unwrap().to_string();
+    let ssh_auth_args = [
         "-o",
         "BatchMode=yes",
         "-o",
@@ -200,10 +213,42 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
         "UserKnownHostsFile=/dev/null",
         "-o",
         "ConnectTimeout=5",
+        "-o",
+        "IdentitiesOnly=yes",
         "-i",
-        user_key.to_str().unwrap(),
+        user_key_s.as_str(),
         "-p",
-        &ssh_port.to_string(),
+        ssh_port_s.as_str(),
+    ];
+    let auth_probe = Command::new("ssh")
+        .args(ssh_auth_args)
+        .arg(format!("{login_user}@127.0.0.1"))
+        .arg("true")
+        .output()
+        .expect("ssh auth probe");
+    if !auth_probe.status.success() {
+        eprintln!(
+            "skip permissive sshd tunnel: loopback pubkey auth not available ({})",
+            redact_test_output(&String::from_utf8_lossy(&auth_probe.stderr))
+        );
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            let _ = Command::new("sudo")
+                .args(["-n", "kill", pid.trim()])
+                .status();
+        }
+        return;
+    }
+    let (target_port, target_handle) = spawn_nonce_echo_target();
+    thread::sleep(Duration::from_millis(50));
+    let local_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let local_port = local_listener.local_addr().unwrap().port();
+    drop(local_listener);
+    let nonce = b"tunnel-positive-nonce";
+    let mut forward = Command::new("ssh");
+    forward.args(ssh_auth_args);
+    forward.args([
+        "-o",
+        "ExitOnForwardFailure=yes",
         "-N",
         "-L",
         &format!("127.0.0.1:{local_port}:127.0.0.1:{target_port}"),
@@ -212,7 +257,7 @@ fn forward_echo_probe_detects_allowed_sshd_tunnel() {
     let mut child = forward.spawn().expect("ssh -N -L");
     thread::sleep(Duration::from_millis(500));
     if child.try_wait().ok().flatten().is_some() {
-        eprintln!("skip permissive sshd tunnel: loopback ssh auth not available on host");
+        eprintln!("skip permissive sshd tunnel: forward session exited early");
         if let Ok(pid) = std::fs::read_to_string(&pid_file) {
             let _ = Command::new("sudo")
                 .args(["-n", "kill", pid.trim()])
