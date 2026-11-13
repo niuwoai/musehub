@@ -329,7 +329,7 @@ pub fn prepare_git_ssh_server_log(path: &Path) -> Result<(), AppError> {
             "server log must not be world-writable".into(),
         ));
     }
-    if mode & 0o040 == 0 {
+    if mode & 0o020 == 0 {
         return Err(AppError::Validation(
             "server log must be group-writable for git transport".into(),
         ));

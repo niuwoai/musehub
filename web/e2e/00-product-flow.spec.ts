@@ -27,9 +27,38 @@ test.describe('product slice browser flow', () => {
     const { slug } = await createRepoViaUi(page)
     await openRepoBySlug(page, slug)
 
-    await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
-    await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
-    const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
+    const issueCreate = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/repos/${slug}/issues`) &&
+        r.request().method() === 'POST' &&
+        r.ok(),
+    )
+    await page.getByTestId('create-issue').click()
+    await issueCreate
+    await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
+
+    const planCreate = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/repos/${slug}/issues/1/plans`) &&
+        r.request().method() === 'POST' &&
+        r.ok(),
+    )
+    const planAccept = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/repos/${slug}/issues/1/plans`) &&
+        r.request().method() === 'PATCH' &&
+        r.status() === 204,
+    )
+    await page
+      .getByTestId('issue-row-1')
+      .getByRole('button', { name: /accept plan|接受计划/i })
+      .click()
+    await planCreate
+    await planAccept
+
+    const runAgent = page
+      .getByTestId('issue-row-1')
+      .getByRole('button', { name: /run agent|运行|reference/i })
     await expect(runAgent).toBeVisible({ timeout: 15_000 })
     const agentStart = page.waitForResponse(
       (r) => r.url().includes(`/repos/${slug}/agent-runs`) && r.request().method() === 'POST',
