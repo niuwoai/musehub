@@ -93,6 +93,17 @@ export function RepoDeliveryPage() {
         <>
           <p>
             main @{mergedPr.head_oid.slice(0, 7)} (PR #{mergedPr.number})
+            {mergedPr.issue_number != null ? (
+              <>
+                {' · '}
+                <Link
+                  to={paths.repoIssue(activeOrg, selectedRepo, mergedPr.issue_number)}
+                  data-testid="delivery-merged-issue-link"
+                >
+                  issue #{mergedPr.issue_number}
+                </Link>
+              </>
+            ) : null}
           </p>
           {pipelineRun ? (
             <p data-testid="pipeline-state">

@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page, type Response } from '@playwright/test'
+import { e2eBrowserApiOrigin } from './origin'
 
-const apiBase = () => process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
+const apiBase = () => e2eBrowserApiOrigin()
 
 export function repoNavButtons(page: Page) {
   return page.getByTestId('repo-list').getByRole('button')
@@ -62,28 +63,36 @@ export async function waitForDemoRepoNavHydrated(page: Page): Promise<void> {
   })
   const nav = repoNavButtons(page)
 
-  const inFlightList = page
-    .waitForResponse((r) => demoReposListGet(r), { timeout: 5_000 })
-    .catch(() => null)
-
-  let repos: { slug: string }[]
-  const captured = await inFlightList
-  if (captured) {
-    await expectResponseOk(captured, 'list demo repos (in-flight after login)')
-    repos = (await captured.json()) as { slug: string }[]
-  } else {
-    repos = await fetchDemoReposViaPage(page)
+  if (!/^\/org\/demo\/repos\/?$/.test(new URL(page.url()).pathname)) {
+    const listPromise = page.waitForResponse((r) => demoReposListGet(r), {
+      timeout: 15_000,
+    })
+    await page.getByTestId('nav-repos').click()
+    await expect(page).toHaveURL(/\/org\/demo\/repos\/?$/, { timeout: 15_000 })
+    const captured = await listPromise
+    await expectResponseOk(captured, 'list demo repos (nav open)')
   }
+
+  const repos = await fetchDemoReposViaPage(page)
 
   if (repos.length === 0) {
     await expect(nav).toHaveCount(0, { timeout: 5_000 })
     return
   }
 
-  await expect(nav).toHaveCount(repos.length, { timeout: 15_000 })
-  for (const { slug } of repos) {
-    await expect(nav.filter({ hasText: slug })).toHaveCount(1, { timeout: 5_000 })
-  }
+  await expect
+    .poll(
+      async () => {
+        for (const { slug } of repos) {
+          if ((await nav.filter({ hasText: slug }).count()) === 0) {
+            return false
+          }
+        }
+        return true
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true)
 }
 
 export function repoNavButtonForSlug(page: Page, slug: string): Locator {

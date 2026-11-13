@@ -4,6 +4,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use common::s1_git_push::push_branch;
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
@@ -231,7 +232,9 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
         .await
         .unwrap();
     assert_eq!(in_progress.status(), StatusCode::OK);
-    assert_eq!(body_json(in_progress).await["state"], "in_progress");
+    let in_progress_json = body_json(in_progress).await;
+    assert_eq!(in_progress_json["state"], "in_progress");
+    assert!(in_progress_json["close_reason"].is_null());
 
     let reason_while_open = app
         .clone()
@@ -299,6 +302,22 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
     assert_eq!(reopen.status(), StatusCode::OK);
     assert!(body_json(reopen).await["close_reason"].is_null());
 
+    let repo_b = format!("pr-run-b-{}", Uuid::new_v4().simple());
+    let created_b = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/demo/repos")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "slug": repo_b }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_b.status(), StatusCode::CREATED);
+
     let repo_id: (Uuid,) = sqlx::query_as("SELECT id FROM repositories WHERE slug_normalized = $1")
         .bind(&repo)
         .fetch_one(&pool)
@@ -332,6 +351,41 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
     .execute(&pool)
     .await
     .unwrap();
+
+    let storage_b: (Uuid,) =
+        sqlx::query_as("SELECT storage_key FROM repositories WHERE slug_normalized = $1")
+            .bind(&repo_b)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    push_branch(
+        &git_root,
+        storage_b.0,
+        "feat/cross",
+        "branch.txt",
+        b"diff\n",
+    );
+    let cross_pr = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo_b}/pull-requests"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "foreign agent run",
+                        "source_branch": "feat/cross",
+                        "agent_run_id": run_id,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cross_pr.status(), StatusCode::NOT_FOUND);
 
     let respond = app
         .clone()

@@ -1,22 +1,15 @@
 import { expect, test } from '@playwright/test'
-import { expectLoggedInAs } from './helpers/session'
+import { apiJson } from './helpers/s1-api'
 import { createRepoViaUi, waitForDemoRepoNavHydrated } from './helpers/repo'
+import { loginAsAdmin } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
-
-async function loginAsAdmin(page: import('@playwright/test').Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded' })
-  await page.getByTestId('login-handle-input').fill('admin')
-  await page.getByLabel(/password|密码/i).fill(password!)
-  await page.getByRole('button', { name: /login|登录/i }).click()
-  await expectLoggedInAs(page, 'admin')
-}
 
 test.describe('Issue delivery console', () => {
   test.skip(!password, 'requires bootstrap password')
 
   test('detail: criteria, close/reopen, delivery trace gaps', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
@@ -39,8 +32,35 @@ test.describe('Issue delivery console', () => {
     await expect(page.getByTestId('issue-detail-state')).toContainText(/open/)
   })
 
+  test('assignee select: repo grant members only', async ({ page }) => {
+    await loginAsAdmin(page, password!)
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    const member = `e2e-assign-${Date.now()}`
+    await apiJson(page, 'POST', '/api/v1/orgs/demo/members', {
+      handle: member,
+      password: 'E2e-Assignee-Grant-12!',
+      role: 'member',
+    })
+    await apiJson(page, 'POST', `/api/v1/orgs/demo/repos/${slug}/collaborators`, {
+      handle: member,
+      role: 'maintainer',
+    })
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await page.getByTestId('create-issue').click()
+    await page.getByTestId('issue-link-1').click()
+    const assignee = page.getByTestId('issue-assignee')
+    await expect(assignee).toContainText('admin')
+    await expect(assignee).toContainText(member)
+    await assignee.selectOption(member)
+    await page.getByTestId('issue-save-meta').click()
+    await expect(assignee).toHaveValue(member)
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await expect(page.getByTestId('issue-assignee-1')).toContainText(`@${member}`)
+  })
+
   test('list: state badge visible after create', async ({ page }) => {
-    await loginAsAdmin(page)
+    await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)

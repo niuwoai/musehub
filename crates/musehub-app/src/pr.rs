@@ -19,15 +19,18 @@ pub const DEFAULT_REPO_CHECK: &str = "product-ci";
 
 async fn issue_number_for(
     pool: &sqlx::PgPool,
+    repo_id: Uuid,
     issue_id: Option<Uuid>,
 ) -> Result<Option<i64>, AppError> {
     let Some(iid) = issue_id else {
         return Ok(None);
     };
-    let row = sqlx::query_as::<_, (i64,)>("SELECT number FROM issues WHERE id = $1")
-        .bind(iid)
-        .fetch_optional(pool)
-        .await?;
+    let row =
+        sqlx::query_as::<_, (i64,)>("SELECT number FROM issues WHERE id = $1 AND repo_id = $2")
+            .bind(iid)
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(n,)| n))
 }
 
@@ -232,7 +235,9 @@ pub async fn create_pull_request(
     if issue_id.is_none() {
         if let Some(run_id) = body.agent_run_id {
             let from_run = sqlx::query_as::<_, (Uuid,)>(
-                "SELECT issue_id FROM agent_runs WHERE id = $1 AND repo_id = $2",
+                "SELECT ar.issue_id FROM agent_runs ar
+                 JOIN issues i ON i.id = ar.issue_id AND i.repo_id = ar.repo_id
+                 WHERE ar.id = $1 AND ar.repo_id = $2",
             )
             .bind(run_id)
             .bind(repo_id)
@@ -282,7 +287,7 @@ pub async fn create_pull_request(
     .execute(&state.pool)
     .await?;
     insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
-    let issue_number = issue_number_for(&state.pool, issue_id).await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, issue_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(PullRequestView {
@@ -530,7 +535,7 @@ pub async fn list_pull_requests(
         "SELECT pr.id, pr.number, pr.title, pr.source_branch, pr.target_branch, pr.state,
                 pr.head_oid, pr.base_oid, pr.issue_id, i.number AS issue_number
          FROM pull_requests pr
-         LEFT JOIN issues i ON i.id = pr.issue_id
+         LEFT JOIN issues i ON i.id = pr.issue_id AND i.repo_id = pr.repo_id
          WHERE pr.repo_id = $1 ORDER BY pr.number",
     )
     .bind(repo_id)
@@ -641,7 +646,7 @@ pub async fn sync_pull_request(
     .bind(pr_id)
     .fetch_one(&state.pool)
     .await?;
-    let issue_number = issue_number_for(&state.pool, meta.1).await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, meta.1).await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
@@ -1090,7 +1095,7 @@ pub async fn merge_pull_request(
     .bind(pr_id)
     .fetch_one(&state.pool)
     .await?;
-    let issue_number = issue_number_for(&state.pool, meta.1).await?;
+    let issue_number = issue_number_for(&state.pool, repo_id, meta.1).await?;
     Ok(Json(PullRequestView {
         id: pr_id,
         number,
@@ -1283,7 +1288,7 @@ pub async fn get_pull_request(
                 pr.head_oid, pr.base_oid, pr.issue_id, i.number AS issue_number,
                 pr.row_version, pr.author_id
          FROM pull_requests pr
-         LEFT JOIN issues i ON i.id = pr.issue_id
+         LEFT JOIN issues i ON i.id = pr.issue_id AND i.repo_id = pr.repo_id
          WHERE pr.repo_id = $1 AND pr.number = $2",
     )
     .bind(repo_id)

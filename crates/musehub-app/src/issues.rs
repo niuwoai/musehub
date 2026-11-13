@@ -517,7 +517,7 @@ pub async fn patch_issue(
                 state = COALESCE($5, state),
                 labels = COALESCE($6, labels),
                 close_reason = CASE
-                    WHEN $5 = 'open' THEN NULL
+                    WHEN $5 IN ('open', 'in_progress') THEN NULL
                     WHEN $5 = 'closed' THEN COALESCE($7, close_reason)
                     WHEN $7 IS NOT NULL THEN $7
                     ELSE close_reason
