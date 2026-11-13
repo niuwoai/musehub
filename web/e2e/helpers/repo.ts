@@ -167,7 +167,7 @@ export async function createRepoViaUi(page: Page): Promise<{
   expect(listed.some((r) => r.slug === slug)).toBe(true)
 
   await expect(page).toHaveURL(new RegExp(`/org/demo/repos/${slug}/issues`), { timeout: 15_000 })
-  await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('create-issue')).toBeVisible({ timeout: 30_000 })
   await ensureRepoListPage(page)
   const repoEntry = repoNavButtonForSlug(page, slug)
   await expect(repoEntry).toHaveCount(1, { timeout: 15_000 })
@@ -228,5 +228,5 @@ export async function openRepoBySlug(page: Page, slug: string): Promise<void> {
     timeout: 15_000,
   })
   await expectRepoSlugInSubnav(page, slug)
-  await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('create-issue')).toBeVisible({ timeout: 30_000 })
 }
