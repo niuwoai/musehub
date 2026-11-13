@@ -49,6 +49,7 @@ export function AuditPage() {
           <option value="deployment">{t('audit.resourceDeployment')}</option>
           <option value="principal">{t('audit.resourcePrincipal')}</option>
           <option value="repository_grant">{t('audit.resourceRepositoryGrant')}</option>
+          <option value="ssh_key">{t('audit.resourceSshKey')}</option>
         </select>
       </label>
       <button type="button" data-testid="audit-apply-filter" onClick={() => void reload()}>

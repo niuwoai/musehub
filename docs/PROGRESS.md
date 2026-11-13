@@ -34,7 +34,7 @@
 
 | ID | 状态 | 说明 |
 |----|------|------|
-| GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff`（根路径树、输出上限）；控制台 **Code** 页 + en/zh |
+| GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff`（根路径树、输出上限）；控制台 **Code** 页 + `repo-code-console` Playwright + en/zh |
 | ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验；负责人须为 **组织内活跃成员且具有仓库 grant（或 org admin/owner）**；Issue 列表创建后与筛选/分页一致 |
 | PR-01 | `[~]` | diff **可选行锚点** + `pr_revision_id` CAS；sync **`expected_row_version`**；outdated 与 sync 同事务 |
 | IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`，撤销可重加）；**GIT-02 SSH transport 未接线**（探针≠产品） |
@@ -51,7 +51,7 @@
 | 生产静态 Web + 反代 TLS | `[~]` | 运营路径：`render-gateway-caddyfile.sh` + production compose TLS overlay（`manual`/`acme`）；`verify-caddyfile-layout.sh` 含 fixture 证布局；**未**验收真实 DNS/ACME/公网证书 |
 | DB 迁移升级 Runbook | `[x]` 脚本 | `upgrade-production-compose.sh` + entrypoint migrate；host `verify-product-acceptance.sh` |
 | HTTP Git `clone_url` 可达 | `[x]` 配置 | `MUSEHUB_PUBLIC_HTTP_ORIGIN`（默认 localhost 网关端口）；非 0.0.0.0 展示 |
-| 最小 RBAC / PAT scope / 审计 | `[~]` | 控制台：成员/邀请、**自服务改密**（撤销其它会话）、PAT 一次展示+撤销；`iam_password_change_e2e` / `iam_org_privilege_e2e` / `iam_disabled_user_e2e`；**禁用为全局 principal**；**无** SSH key、**无**多租户 SSH 完备 |
+| 最小 RBAC / PAT scope / 审计 | `[~]` | 控制台：成员/邀请、**自服务改密**、PAT、**SSH 公钥注册/撤销**（`account-security` + `ssh_keys_http_e2e` + Playwright `ssh-keys-console`）；仓库 grant 审计；**无** 出站通知后端（见 `docs/proposals/notifications-backend.md`）；**无** 多租户 SSH 完备 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[x]` 本地 | `musehub-runnerd` + `run-ci-security-integration-local.sh`（remote pipeline/agent/deploy + cancel/kill/budget/epoch）；production stack；**非**物理双主机 |
 | 部署回滚操作 | `[x]` 本地 | `deployment_rollback_runner_e2e` + production stack rollback/trace |

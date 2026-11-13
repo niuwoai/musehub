@@ -29,7 +29,7 @@ pub struct ListAuditQuery {
     pub resource_type: Option<String>,
 }
 
-/// Records one audit row; failures are logged by caller but must not block primary operations.
+/// Records one audit row inside an open transaction.
 #[allow(clippy::too_many_arguments)]
 pub async fn record_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -65,6 +65,8 @@ pub async fn record_in_tx(
     Ok(())
 }
 
+/// Records one audit row; failures propagate to the caller when used with `?`.
+#[allow(clippy::too_many_arguments)]
 pub async fn record(
     pool: &PgPool,
     org_id: Option<Uuid>,

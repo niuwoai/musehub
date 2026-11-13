@@ -9,6 +9,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::audit;
 use crate::error::AppError;
 use crate::AppState;
 
@@ -136,6 +137,21 @@ pub async fn create_ssh_key(
         }
         return Err(e.into());
     }
+    let request_id = audit::request_id_from_headers(&headers);
+    audit::record(
+        &state.pool,
+        None,
+        None,
+        principal_id,
+        None,
+        "ssh_key.create",
+        "ssh_key",
+        id,
+        request_id,
+        "allow",
+        serde_json::json!({ "name": body.name.trim(), "fingerprint": fp }),
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         Json(SshKeyView {
@@ -165,5 +181,20 @@ pub async fn revoke_ssh_key(
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    let request_id = audit::request_id_from_headers(&headers);
+    audit::record(
+        &state.pool,
+        None,
+        None,
+        principal_id,
+        None,
+        "ssh_key.revoke",
+        "ssh_key",
+        key_id,
+        request_id,
+        "allow",
+        serde_json::json!({}),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
