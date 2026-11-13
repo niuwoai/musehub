@@ -137,9 +137,7 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
         )
         .await
         .unwrap();
-    assert!(
-        denied.status() == StatusCode::FORBIDDEN || denied.status() == StatusCode::NOT_FOUND
-    );
+    assert!(denied.status() == StatusCode::FORBIDDEN || denied.status() == StatusCode::NOT_FOUND);
 
     let create = app
         .clone()
