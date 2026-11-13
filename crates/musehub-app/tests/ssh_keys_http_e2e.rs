@@ -1,4 +1,4 @@
-//! SSH key IAM-02: create/revoke + audit trail.
+//! SSH key IAM-02: create/revoke + principal-scoped audit (org_id NULL).
 
 mod common;
 
@@ -13,7 +13,7 @@ const TEST_PUB: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1RneJ7XbTm4iJThlaXp0q55nOJkRyE5PCLUeCKKWpk e2e@test";
 
 #[tokio::test]
-async fn ssh_key_create_revoke_writes_audit() {
+async fn ssh_key_create_revoke_writes_principal_audit_not_org_audit() {
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().unwrap();
     let boot = common::bootstrap_password();
@@ -41,8 +41,36 @@ async fn ssh_key_create_revoke_writes_audit() {
     )
     .unwrap();
     let key_id = created_body["id"].as_str().expect("key id");
+    let fingerprint = created_body["fingerprint"].as_str().expect("fingerprint");
 
-    let listed = app
+    let self_audit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/me/audit/events?resource_type=ssh_key&limit=20")
+                .header(header::COOKIE, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(self_audit.status(), StatusCode::OK);
+    let self_bytes = self_audit.into_body().collect().await.unwrap().to_bytes();
+    let self_json = String::from_utf8(self_bytes.to_vec()).unwrap();
+    assert!(
+        !self_json.contains("AAAAC3NzaC1lZDI1NTE5"),
+        "audit must not contain public key material"
+    );
+    let items: Vec<serde_json::Value> = serde_json::from_slice(self_bytes.as_ref()).unwrap();
+    let create_ev = items
+        .iter()
+        .find(|e| e["action"] == "ssh_key.create" && e["resource_id"] == key_id)
+        .expect("missing ssh_key.create on self audit");
+    assert!(create_ev["org_id"].is_null());
+    assert_eq!(create_ev["metadata"]["fingerprint"], fingerprint);
+
+    let org_audit = app
         .clone()
         .oneshot(
             Request::builder()
@@ -54,19 +82,13 @@ async fn ssh_key_create_revoke_writes_audit() {
         )
         .await
         .unwrap();
-    assert_eq!(listed.status(), StatusCode::OK);
-    let events = serde_json::from_slice::<serde_json::Value>(
-        &listed.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
-    let items = events.as_array().expect("audit array");
+    let org_items: Vec<serde_json::Value> =
+        serde_json::from_slice(&org_audit.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(
-        items.iter().any(|e| {
-            e["action"] == "ssh_key.create"
-                && e["resource_id"] == key_id
-                && e["resource_type"] == "ssh_key"
-        }),
-        "missing ssh_key.create audit"
+        !org_items
+            .iter()
+            .any(|e| e["resource_type"] == "ssh_key" && e["resource_id"] == key_id),
+        "personal ssh_key must not appear in org audit"
     );
 
     let key_uuid = Uuid::parse_str(key_id).unwrap();
@@ -84,28 +106,25 @@ async fn ssh_key_create_revoke_writes_audit() {
         .unwrap();
     assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
 
-    let listed2 = app
+    let self_audit2 = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/v1/orgs/demo/audit/events?resource_type=ssh_key&limit=20")
+                .uri("/api/v1/me/audit/events?resource_type=ssh_key&limit=20")
                 .header(header::COOKIE, &admin)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    let events2 = serde_json::from_slice::<serde_json::Value>(
-        &listed2.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let items2: Vec<serde_json::Value> =
+        serde_json::from_slice(&self_audit2.into_body().collect().await.unwrap().to_bytes())
+            .unwrap();
     assert!(
-        events2
-            .as_array()
-            .unwrap()
+        items2
             .iter()
             .any(|e| e["action"] == "ssh_key.revoke" && e["resource_id"] == key_id),
-        "missing ssh_key.revoke audit"
+        "missing ssh_key.revoke on self audit"
     );
 }

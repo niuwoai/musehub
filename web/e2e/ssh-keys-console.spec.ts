@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { goAccountSecurity, goAudit } from './helpers/navigation'
+import { goAccountSecurity } from './helpers/navigation'
 import { loginAsAdmin } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -10,7 +10,7 @@ const TEST_PUB =
 test.describe('SSH keys console', () => {
   test.skip(!password, 'requires bootstrap password')
 
-  test('add and revoke key with audit filter ssh_key', async ({ page }) => {
+  test('add and revoke key; audit via self-scoped API only', async ({ page }) => {
     await loginAsAdmin(page, password!)
     await goAccountSecurity(page)
     await page.getByTestId('ssh-key-name').fill(`pw-key-${Date.now()}`)
@@ -23,14 +23,24 @@ test.describe('SSH keys console', () => {
     const { id, fingerprint } = (await created.json()) as { id: string; fingerprint: string }
     await expect(page.getByTestId('ssh-key-row')).toContainText(fingerprint)
 
-    await goAudit(page)
-    await page.getByTestId('audit-resource-type').selectOption('ssh_key')
-    await page.getByTestId('audit-apply-filter').click()
-    const rows = page.getByTestId('audit-event')
-    await expect(rows.first()).toBeVisible({ timeout: 15_000 })
-    await expect(rows.first()).toContainText('ssh_key.create')
+    const selfAudit = await page.request.get('/api/v1/me/audit/events?resource_type=ssh_key&limit=20')
+    expect(selfAudit.ok()).toBeTruthy()
+    const body = await selfAudit.text()
+    expect(body).not.toContain('AAAAC3NzaC1lZDI1NTE5')
+    const events = (await selfAudit.json()) as Array<{
+      action: string
+      resource_id: string
+      org_id: string | null
+    }>
+    const createEv = events.find((e) => e.action === 'ssh_key.create' && e.resource_id === id)
+    expect(createEv).toBeTruthy()
+    expect(createEv!.org_id).toBeNull()
 
-    await goAccountSecurity(page)
+    const orgAudit = await page.request.get('/api/v1/orgs/demo/audit/events?resource_type=ssh_key&limit=20')
+    expect(orgAudit.ok()).toBeTruthy()
+    const orgEvents = (await orgAudit.json()) as Array<{ resource_type: string; resource_id: string }>
+    expect(orgEvents.some((e) => e.resource_type === 'ssh_key' && e.resource_id === id)).toBeFalsy()
+
     const revokeResp = page.waitForResponse(
       (r) =>
         r.url().includes(`/api/v1/ssh-keys/${id}`) &&
@@ -41,12 +51,10 @@ test.describe('SSH keys console', () => {
     await revokeResp
     await expect(page.getByTestId('ssh-key-row').filter({ hasText: fingerprint })).toHaveCount(0)
 
-    await goAudit(page)
-    await page.getByTestId('audit-resource-type').selectOption('ssh_key')
-    await page.getByTestId('audit-apply-filter').click()
-  await expect(page.getByTestId('audit-event').filter({ hasText: 'ssh_key.revoke' })).toHaveCount(
-      1,
-      { timeout: 15_000 },
-    )
+    const after = await page.request.get('/api/v1/me/audit/events?resource_type=ssh_key&limit=20')
+    const afterEvents = (await after.json()) as Array<{ action: string; resource_id: string }>
+    expect(
+      afterEvents.some((e) => e.action === 'ssh_key.revoke' && e.resource_id === id),
+    ).toBeTruthy()
   })
 })

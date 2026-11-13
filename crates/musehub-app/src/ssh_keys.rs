@@ -118,18 +118,24 @@ pub async fn create_ssh_key(
     let fp = fingerprint_public_key(&body.public_key)?;
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let id = Uuid::new_v4();
-    let result = sqlx::query(
+    let request_id = audit::request_id_from_headers(&headers);
+    let name = body.name.trim().to_string();
+    let public_key = body.public_key.trim().to_string();
+    let metadata = serde_json::json!({ "name": name.as_str(), "fingerprint": fp.as_str() });
+
+    let mut tx = state.pool.begin().await?;
+    let insert = sqlx::query(
         "INSERT INTO ssh_keys (id, principal_id, name, public_key, fingerprint)
          VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(id)
     .bind(principal_id)
-    .bind(body.name.trim())
-    .bind(body.public_key.trim())
+    .bind(&name)
+    .bind(&public_key)
     .bind(&fp)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await;
-    if let Err(e) = result {
+    if let Err(e) = insert {
         if let sqlx::Error::Database(db) = &e {
             if db.code().as_deref() == Some("23505") {
                 return Err(AppError::Validation("duplicate ssh key fingerprint".into()));
@@ -137,9 +143,8 @@ pub async fn create_ssh_key(
         }
         return Err(e.into());
     }
-    let request_id = audit::request_id_from_headers(&headers);
-    audit::record(
-        &state.pool,
+    audit::record_in_tx(
+        &mut tx,
         None,
         None,
         principal_id,
@@ -149,14 +154,16 @@ pub async fn create_ssh_key(
         id,
         request_id,
         "allow",
-        serde_json::json!({ "name": body.name.trim(), "fingerprint": fp }),
+        metadata,
     )
     .await?;
+    tx.commit().await?;
+
     Ok((
         StatusCode::CREATED,
         Json(SshKeyView {
             id,
-            name: body.name.trim().to_string(),
+            name,
             fingerprint: fp,
             created_at: time::OffsetDateTime::now_utc()
                 .format(&time::format_description::well_known::Rfc3339)
@@ -171,19 +178,20 @@ pub async fn revoke_ssh_key(
     Path(key_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let principal_id = super::require_session(&state.pool, &headers).await?;
+    let request_id = audit::request_id_from_headers(&headers);
+    let mut tx = state.pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE ssh_keys SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 AND principal_id = $2 AND revoked_at IS NULL",
     )
     .bind(key_id)
     .bind(principal_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
-    let request_id = audit::request_id_from_headers(&headers);
-    audit::record(
-        &state.pool,
+    audit::record_in_tx(
+        &mut tx,
         None,
         None,
         principal_id,
@@ -196,5 +204,6 @@ pub async fn revoke_ssh_key(
         serde_json::json!({}),
     )
     .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
