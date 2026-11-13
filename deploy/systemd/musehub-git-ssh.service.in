@@ -1,0 +1,20 @@
+[Unit]
+Description=MuseHub Git-over-SSH (Docker Compose musehub-git-ssh)
+Documentation=file://@REPO_ROOT@/deploy/RUNBOOK.md
+After=docker.service network-online.target musehub-control-plane.service
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@DEPLOY_DIR@
+ExecStart=@REPO_ROOT@/scripts/systemd-compose-git-ssh.sh start
+ExecStop=@REPO_ROOT@/scripts/systemd-compose-git-ssh.sh stop
+TimeoutStartSec=600
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

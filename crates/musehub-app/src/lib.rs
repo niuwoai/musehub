@@ -6,7 +6,7 @@ pub mod agent_adapter;
 pub mod agent_pr_fix;
 pub mod agent_supervisor;
 pub mod pipeline_supervisor;
-pub use git_http::{bare_repo_path, init_bare_repository};
+pub use git_http::{apply_bare_repo_group_acl, bare_repo_path, init_bare_repository};
 mod artifacts;
 mod audit;
 mod auth;
@@ -17,6 +17,10 @@ pub use compose::{compose_mode_from_env, ComposeAdapterMode};
 mod deployment;
 mod error;
 mod git_http;
+pub mod git_ssh;
+pub mod git_ssh_pack_privilege;
+pub mod git_ssh_runtime;
+pub mod git_ssh_server_log;
 mod grants;
 mod hooks;
 pub mod lease;
@@ -45,7 +49,7 @@ mod list_cursor;
 mod pr;
 mod release;
 mod security;
-mod ssh_keys;
+pub mod ssh_keys;
 mod trace;
 
 use std::path::PathBuf;
@@ -73,6 +77,7 @@ use crate::auth::{
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
 use crate::git_http::{git_clone_url, git_http_backend};
+use crate::git_ssh::git_ssh_clone_url;
 
 /// Application state for product routes.
 #[derive(Clone)]
@@ -518,6 +523,7 @@ struct RepositoryView {
     slug: String,
     state: String,
     clone_url: String,
+    ssh_clone_url: String,
 }
 
 async fn list_repos(
@@ -558,6 +564,7 @@ async fn list_repos(
                 slug: slug.clone(),
                 state: repo_state,
                 clone_url: git_clone_url(&state.bind_display, &org, &slug),
+                ssh_clone_url: git_ssh_clone_url(&state.bind_display, &org, &slug),
             })
             .collect(),
     ))
@@ -614,6 +621,7 @@ async fn create_repo(
             slug: slug.clone(),
             state: "ready".to_string(),
             clone_url: git_clone_url(&state.bind_display, &org, &slug),
+            ssh_clone_url: git_ssh_clone_url(&state.bind_display, &org, &slug),
         }),
     ))
 }

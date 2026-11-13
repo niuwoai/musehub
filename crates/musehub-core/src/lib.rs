@@ -10,6 +10,9 @@ const VERSION_SOURCE: &str = include_str!("../../../VERSION");
 /// Environment variable that holds the HTTP listen address.
 pub const BIND_ENV: &str = "MUSEHUB_BIND";
 
+/// When set, the server writes the bound TCP port (after listen) to this file path.
+pub const LISTEN_PORT_FILE_ENV: &str = "MUSEHUB_LISTEN_PORT_FILE";
+
 /// Environment variable that holds the PostgreSQL connection URL.
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
 

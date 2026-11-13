@@ -20,6 +20,10 @@ protected="refs/heads/{default_branch}"
 while read -r old new ref; do
   case "$ref" in
     refs/heads/agent/*) ;;
+    refs/tags/*)
+      echo "refusing direct push to tag ref" 1>&2
+      exit 1
+      ;;
     "$protected")
       echo "refusing direct push to protected branch {default_branch}" 1>&2
       exit 1

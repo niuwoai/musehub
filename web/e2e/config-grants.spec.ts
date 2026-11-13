@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { goOrgSettings } from './helpers/navigation'
-import { expectLoggedInAs } from './helpers/session'
+import { expectLoggedInAs, loginAsAdmin } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
@@ -32,11 +31,9 @@ test.describe('org config and grants UI', () => {
   })
 
   test('persist org display name without echoing secrets', async ({ page }) => {
-    await page.goto('/login')
-    await page.getByLabel(/password|密码/i).fill(password!)
-    await page.getByRole('button', { name: /login|登录/i }).click()
-    await expectLoggedInAs(page, 'admin')
-    await goOrgSettings(page)
+    await loginAsAdmin(page, password!)
+    await page.goto('/org/demo/settings')
+    await expect(page.getByTestId('org-settings')).toBeVisible({ timeout: 15_000 })
   const tokenLike = /mhp_[a-zA-Z0-9]+/
     await expect(page.getByTestId('org-settings')).not.toContainText(tokenLike)
     const name = `Demo Org ${Date.now()}`

@@ -21,7 +21,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type Principal = { id: string; handle: string }
-export type Repository = { id: string; slug: string; state: string; clone_url: string }
+export type Repository = {
+  id: string
+  slug: string
+  state: string
+  clone_url: string
+  ssh_clone_url: string
+}
 export type Issue = {
   id: string
   number: number
