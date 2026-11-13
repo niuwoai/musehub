@@ -83,7 +83,8 @@ async fn git_ssh_public_scripts_contain_no_database_credentials() {
         "runtime.env must carry credentials for gateway"
     );
     assert!(
-        runtime_body.contains("MUSEHUB_GIT_STORAGE_GROUP=musehub-git"),
+        runtime_body.contains("MUSEHUB_GIT_STORAGE_GROUP='musehub-git'")
+            || runtime_body.contains("MUSEHUB_GIT_STORAGE_GROUP=musehub-git"),
         "runtime.env must export storage group for login-shell gateway sessions"
     );
 

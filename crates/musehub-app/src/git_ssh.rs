@@ -308,24 +308,32 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// How product SSH/HTTP pack helpers run git (tested to prevent login-shell env drift).
+pub(crate) fn git_pack_exec_plan(service: &str) -> (&'static str, Option<String>) {
+    if service == "receive-pack" {
+        ("sg", Some(git_storage_group()))
+    } else {
+        ("git", None)
+    }
+}
+
 /// `receive-pack` writes refs with the storage GID (HTTP uses the same via `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let safe_dir = format!("safe.directory={}", bare.display());
-    let group = git_storage_group();
-    let use_sg = service == "receive-pack";
-    let mut child = if use_sg {
-        let g = group.as_str();
+    let (program, sg_group) = git_pack_exec_plan(service);
+    let mut child = if let Some(g) = sg_group {
+        let g = g.as_str();
         let script = format!(
             "git -c {} -c core.sharedRepository=group {} {}",
             shell_single_quote(&safe_dir),
             service,
             shell_single_quote(&bare.to_string_lossy())
         );
-        let mut cmd = Command::new("sg");
+        let mut cmd = Command::new(program);
         cmd.arg(g).arg("-c").arg(script);
         cmd
     } else {
-        let mut direct = Command::new("git");
+        let mut direct = Command::new(program);
         direct
             .arg("-c")
             .arg(safe_dir)
@@ -492,10 +500,13 @@ mod tests {
     }
 
     #[test]
-    fn receive_pack_uses_storage_sg_even_without_process_env() {
+    fn receive_pack_exec_plan_uses_sg_musehub_git() {
         std::env::remove_var("MUSEHUB_GIT_STORAGE_GROUP");
-        let group = git_storage_group();
-        assert_eq!(group, "musehub-git");
-        assert_eq!(group, git_storage_group());
+        let (prog, group) = super::git_pack_exec_plan("receive-pack");
+        assert_eq!(prog, "sg");
+        assert_eq!(group.as_deref(), Some("musehub-git"));
+        let (upload_prog, upload_group) = super::git_pack_exec_plan("upload-pack");
+        assert_eq!(upload_prog, "git");
+        assert!(upload_group.is_none());
     }
 }
