@@ -13,6 +13,7 @@ export async function goNav(page: Page, testId: string) {
 }
 
 export async function goOrgSettings(page: Page) {
+  await expect(page.getByTestId('nav-org-settings')).toBeVisible({ timeout: 15_000 })
   await goNav(page, 'nav-org-settings')
   await expect(page.getByTestId('org-settings')).toBeVisible({ timeout: 15_000 })
 }

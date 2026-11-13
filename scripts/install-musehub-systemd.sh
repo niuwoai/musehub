@@ -27,11 +27,14 @@ render "$ROOT/deploy/systemd/musehub-control-plane.service.in" \
   "$UNIT_DIR/musehub-control-plane.service"
 render "$ROOT/deploy/systemd/musehub-runner.service.in" \
   "$UNIT_DIR/musehub-runner.service"
+render "$ROOT/deploy/systemd/musehub-git-ssh.service.in" \
+  "$UNIT_DIR/musehub-git-ssh.service"
 
 chmod +x "$ROOT/scripts/systemd-compose-control-plane.sh" \
-  "$ROOT/scripts/systemd-compose-runner.sh"
+  "$ROOT/scripts/systemd-compose-runner.sh" \
+  "$ROOT/scripts/systemd-compose-git-ssh.sh"
 systemctl daemon-reload
-echo "install_systemd=ok units=$UNIT_DIR/musehub-control-plane.service,$UNIT_DIR/musehub-runner.service"
+echo "install_systemd=ok units=$UNIT_DIR/musehub-control-plane.service,$UNIT_DIR/musehub-runner.service,$UNIT_DIR/musehub-git-ssh.service"
 echo "install_systemd=next:"
 echo "  systemctl enable --now musehub-control-plane.service"
 echo "  systemctl enable musehub-runner.service   # starts worker only when PAT is configured"

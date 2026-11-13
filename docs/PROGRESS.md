@@ -34,10 +34,11 @@
 
 | ID | 状态 | 说明 |
 |----|------|------|
-| GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff`（根路径树、输出上限）；控制台 **Code** 页 + en/zh |
+| GIT-02 | `[~]` | HTTPS smart HTTP + 产品 **SSH**（`musehub-git-ssh`：`AuthorizedKeysCommand` + gateway；`git_ssh_transport_e2e`）；端口/主机密钥可配置；与保护分支 hook 一致 |
+| GIT-03 | `[~]` | REST browse + **binary/路径拒绝**（`git_browse_limits_e2e`）；控制台 **Code** 页 + 输出上限 |
 | ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验；负责人须为 **组织内活跃成员且具有仓库 grant（或 org admin/owner）**；Issue 列表创建后与筛选/分页一致 |
 | PR-01 | `[~]` | diff **可选行锚点** + `pr_revision_id` CAS；sync **`expected_row_version`**；outdated 与 sync 同事务 |
-| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`，撤销可重加）；**GIT-02 SSH transport 未接线**（探针≠产品） |
+| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`）；密钥经产品传输鉴权；**非** 多租户进程隔离证明；Colima **`musehub-ssh-probe`** 仍为证据非产品 |
 
 > CI 绿 **≠** `01-product-requirements.md` §8 生产验收。
 

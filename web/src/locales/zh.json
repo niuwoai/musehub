@@ -136,7 +136,9 @@
     "pinnedCommit": "固定提交：{{oid}}",
     "loadFailed": "无法加载仓库历史。",
     "emptyTree": "此路径下无条目。",
-    "binaryFile": "二进制文件 @ {{path}}"
+    "binaryFile": "二进制文件 @ {{path}}",
+    "truncatedFile": "大文件（已截断）@ {{path}}",
+    "sshCloneLabel": "SSH 克隆"
   },
   "pull": {
     "syncHead": "同步 head",
