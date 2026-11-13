@@ -34,6 +34,8 @@
     "pipelineCancelPending": "Cancel requested — waiting for server/runner to report canceled (in-process runs may finish the current step first).",
     "pipelineCancelHonesty": "Cancel is a server request only; worker shutdown is confirmed when state becomes canceled, not when this button returns.",
     "releaseAndDeployMock": "Release + mock deploy",
+    "publishPipelineRelease": "Publish release from pipeline",
+    "deliveryRepoContextTransitioning": "Switching repository — delivery actions are paused until the route matches.",
     "deployProductionProtected": "Deploy to production (approval required)",
     "deploymentAwaitingApproval": "Deployment to {{env}} is awaiting approval",
     "approveDeployment": "Approve deployment",
@@ -169,7 +171,8 @@
     "loadFailed": "Could not load issues.",
     "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters.",
     "newTitlePlaceholder": "Issue title",
-    "titleRequired": "Enter an issue title before creating."
+    "titleRequired": "Enter an issue title before creating.",
+    "repoContextTransitioning": "Switching repository — wait a moment before creating issues."
   },
   "issueDetail": {
     "labels": "Labels",
@@ -237,6 +240,11 @@
     "grantReader": "Grant reader",
     "grantSubmit": "Grant access",
     "grantRole": "Repository role",
+    "grantRoles": {
+      "reader": "Reader",
+      "developer": "Developer",
+      "maintainer": "Maintainer"
+    },
     "grantHandlePlaceholder": "Member handle",
     "grantFailed": "Could not grant repository access.",
     "revokeGrant": "Revoke",

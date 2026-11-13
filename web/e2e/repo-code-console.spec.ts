@@ -17,9 +17,10 @@ test.describe('repo code browser', () => {
     const { slug } = await createRepoViaUi(page)
     const repos = (await (
       await page.request.get('/api/v1/orgs/demo/repos')
-    ).json()) as Array<{ id: string; slug: string; clone_url: string }>
+    ).json()) as Array<{ id: string; slug: string; clone_url: string; ssh_clone_url: string }>
     const repo = repos.find((r) => r.slug === slug)
     expect(repo?.clone_url).toBeTruthy()
+    expect(repo?.ssh_clone_url).toMatch(/^ssh:\/\//)
     const pat = await mintGitPat(page, `code-ui-${Date.now()}`, repo!.id)
     try {
       const branch = 'feature/repo-code-console'
@@ -30,6 +31,8 @@ test.describe('repo code browser', () => {
       await page.getByTestId('nav-repo-code').click()
       await expect(page.getByTestId('code-http-clone-url')).toBeVisible({ timeout: 15_000 })
       await expect(page.getByTestId('code-http-clone-url')).toContainText(repo!.clone_url)
+      await expect(page.getByTestId('code-ssh-clone-url')).toBeVisible()
+      await expect(page.getByTestId('code-ssh-clone-url')).toContainText(repo!.ssh_clone_url)
       await expect(page.getByTestId('code-ssh-keys-link')).toBeVisible()
       await page.getByTestId('code-git-ref').fill(branch)
       await page.getByTestId('code-git-ref').blur()
