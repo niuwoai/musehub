@@ -227,9 +227,11 @@ assert_unknown_ssh_key_rejected() {
   dest=$(mktemp -d)
   BAD_DIR=$(mktemp -d)
   ssh-keygen -t ed25519 -f "$BAD_DIR/bad" -N "" -q
-  local bad_cli="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlMaster=no -o ConnectTimeout=30 -i $BAD_DIR/bad -p ${MUSEHUB_GIT_SSH_PORT}"
+  local bad_cli="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o ControlMaster=no -o ConnectTimeout=30 -i $BAD_DIR/bad -p ${MUSEHUB_GIT_SSH_PORT}"
   st=0
-  if compose_git_timeout git -c "core.sshCommand=${bad_cli}" \
+  # GIT_SSH_COMMAND (set for registered-key flows) overrides core.sshCommand; must not apply here.
+  if compose_git_timeout env -u GIT_SSH_COMMAND -u GIT_SSH GIT_TERMINAL_PROMPT=0 \
+    git -c "core.sshCommand=${bad_cli}" \
     clone "$SSH_URL" "$dest" 2>"$err_file"; then
     st=1
   else

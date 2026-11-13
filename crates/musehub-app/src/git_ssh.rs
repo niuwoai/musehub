@@ -307,11 +307,13 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Run pack services with the storage group effective GID (same model as HTTP `sg` http-backend).
+/// `receive-pack` writes refs with the storage GID (HTTP uses the same via `sg` http-backend).
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
     let safe_dir = format!("safe.directory={}", bare.display());
     let group = std::env::var("MUSEHUB_GIT_STORAGE_GROUP").ok();
-    let mut child = if let Some(ref g) = group.filter(|name| !name.is_empty()) {
+    let use_sg = service == "receive-pack" && group.as_ref().is_some_and(|name| !name.is_empty());
+    let mut child = if use_sg {
+        let g = group.as_ref().expect("checked");
         let script = format!(
             "git -c {} -c core.sharedRepository=group {} {}",
             shell_single_quote(&safe_dir),
