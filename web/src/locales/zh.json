@@ -206,7 +206,7 @@
   },
   "sshKeys": {
     "title": "SSH 密钥",
-    "transportGap": "为将来的 Git-over-SSH 管理公钥。产品级 SSH 克隆/推送传输在 0.1.0-rc5 服务端未启用 — 请使用 HTTPS + PAT。",
+    "transportGap": "为将来的 Git-over-SSH 管理公钥。产品级 SSH 克隆/推送传输在 0.1.0-rc4 服务端未启用 — 请使用 HTTPS + PAT。",
     "name": "密钥名称",
     "publicKey": "公钥",
     "add": "添加 SSH 密钥",

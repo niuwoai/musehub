@@ -201,7 +201,7 @@
   },
   "sshKeys": {
     "title": "SSH keys",
-    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc5 — use HTTPS + PAT for Git.",
+    "transportGap": "Manage public keys for future Git-over-SSH. Product SSH clone/push transport is not enabled on the server in 0.1.0-rc4 — use HTTPS + PAT for Git.",
     "name": "Key name",
     "publicKey": "Public key",
     "add": "Add SSH key",

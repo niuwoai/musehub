@@ -18,14 +18,8 @@
 - GitHub `ci.yml`（可移植测试 + Postgres 集成）与 `evidence-macos.yml`（Colima 证据，非门禁）。
 - `./scripts/dev-local-stack.sh`：本地 loopback `init` / `start` / `status` / `stop`（`MUSEHUB_BIND` / `MUSEHUB_DEV_API_URL` 一致、`pg_isready`、进程 `started_epoch` 认领、失败仅回收本次子进程）；`verify-dev-local-stack*.sh` 正/负例。Linux CI 已验；**macOS 未在 Agent 环境实测**。
 - `scripts/lib/sed-portable.sh`：macOS/Linux `sed_inplace`；生产安装与 runbook 验证复用。
-
-## [0.1.0-rc5]
-
-### Added
-
-- **PR-01**：Pull sync CAS（过期 `row_version` 拒绝、head/base 未变时 no-op 不 bump）、sync 响应带 `row_version`；MCP PR 评论锚点与 REST 同规则校验；`pr_anchor` 单元测试；控制台 stale 修订提示与修订版展示。
-- **ISS 控制台复审**：列表 `label` 筛选与 `validate_labels` 一致（trim + 400）；负责人下拉在刷新/应用筛选时重载；审计活动流按 `resource_type` 筛选。
-- Issue/PR HTTP + Playwright：assignee 筛选先 grant 再断言；label 筛选 + 游标分页组合 E2E。
+- **PR-01**（PR #39 草稿）：Pull sync CAS、no-op sync、MCP PR 锚点校验、`pr_anchor` 单测、控制台 stale 修订 UX。
+- **ISS 控制台复审**（PR #39）：列表 `label` trim/校验、负责人下拉刷新、审计 `resource_type` 筛选；相关 HTTP/Playwright。
 
 ## [0.1.0-rc4]
 
