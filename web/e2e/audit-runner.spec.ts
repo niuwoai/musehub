@@ -24,14 +24,23 @@ test.describe('audit and runner status panels', () => {
 
     await goAudit(page)
     await expect(page.getByTestId('audit-panel')).toBeVisible()
+    const auditFiltered = page.waitForResponse(
+      (r) =>
+        r.url().includes('/api/v1/orgs/demo/audit/events') &&
+        r.request().method() === 'GET' &&
+        r.url().includes('resource_type=repository') &&
+        r.ok(),
+    )
     await page.getByTestId('audit-resource-type').selectOption('repository')
+    await auditFiltered
     await page.getByTestId('audit-apply-filter').click()
     await expect(page.getByTestId('audit-panel')).toBeVisible()
     const auditRows = page.getByTestId('audit-event')
+    await expect(auditRows.first()).toBeVisible({ timeout: 15_000 })
     const n = await auditRows.count()
     expect(n).toBeGreaterThan(0)
     for (let i = 0; i < n; i++) {
-      await expect(auditRows.nth(i).locator('span').first()).toContainText(/^repository\//)
+      await expect(auditRows.nth(i)).toContainText(/^repository\//)
     }
     await goRunner(page)
     await expect(page.getByTestId('runner-status-panel')).toBeVisible()
