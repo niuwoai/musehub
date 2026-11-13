@@ -34,10 +34,11 @@
 
 | ID | 状态 | 说明 |
 |----|------|------|
-| GIT-03 | `[~]` | REST `/git/commits|tree|blob|diff`（根路径树、输出上限）；控制台 **Code** 页 + `repo-code-console` Playwright + en/zh |
+| GIT-02 | `[~]` | HTTPS smart HTTP + 产品 **SSH**（`musehub-git-ssh`：`AuthorizedKeysCommand` + gateway；`git_ssh_transport_e2e`）；端口/主机密钥可配置；与保护分支 hook 一致 |
+| GIT-03 | `[~]` | REST browse + **binary/路径拒绝**（`git_browse_limits_e2e`）；控制台 **Code** 页 + `repo-code-console` Playwright + en/zh |
 | ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验；负责人须为 **组织内活跃成员且具有仓库 grant（或 org admin/owner）**；Issue 列表创建后与筛选/分页一致 |
 | PR-01 | `[~]` | diff **可选行锚点** + `pr_revision_id` CAS；sync **`expected_row_version`**；outdated 与 sync 同事务 |
-| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`）；create/revoke **同事务审计**（`org_id` NULL，仅 `GET /api/v1/me/audit/events` 可见，不进 org 审计）；**GIT-02 SSH transport 未接线** |
+| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`）；create/revoke **同事务审计**（`org_id` NULL，仅 `GET /api/v1/me/audit/events` 可见，不进 org 审计）；经产品传输鉴权 |
 
 > CI 绿 **≠** `01-product-requirements.md` §8 生产验收。
 

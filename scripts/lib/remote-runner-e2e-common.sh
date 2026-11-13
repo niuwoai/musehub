@@ -30,9 +30,11 @@ remote_runner_e2e_init() {
   export MUSEHUB_PIPELINE_EXECUTOR="${MUSEHUB_PIPELINE_EXECUTOR:-remote}"
   export MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-Remote-Runner-E2E-Strong-1!}"
   export MUSEHUB_SESSION_SECRET="${MUSEHUB_SESSION_SECRET:-$(openssl rand -hex 32)}"
-  API_PORT="${MUSEHUB_API_PORT:-$((52000 + RANDOM % 10000))}"
-  export MUSEHUB_BIND="127.0.0.1:${API_PORT}"
-  export MUSEHUB_API_BASE="http://127.0.0.1:${API_PORT}"
+  LISTEN_PORT_FILE="$(mktemp)"
+  export MUSEHUB_LISTEN_PORT_FILE="$LISTEN_PORT_FILE"
+  export MUSEHUB_BIND="${MUSEHUB_BIND:-127.0.0.1:0}"
+  API_PORT=""
+  export MUSEHUB_API_BASE=""
   command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
   cargo build -q -p musehub-server -p musehub-runnerd -p musehub-agent-adapter
   cargo run -q -p musehub-migrate -- up migrations "$DATABASE_URL" >/dev/null
@@ -43,9 +45,19 @@ remote_runner_e2e_init() {
 }
 
 remote_runner_e2e_cleanup() {
-  if [[ -n "${RUNNER_PID:-}" ]]; then kill "$RUNNER_PID" 2>/dev/null || true; fi
-  if [[ -n "${RUNNER_PID_2:-}" ]]; then kill "$RUNNER_PID_2" 2>/dev/null || true; fi
-  if [[ -n "${SERVER_PID:-}" ]]; then kill "$SERVER_PID" 2>/dev/null || true; fi
+  if [[ -n "${RUNNER_PID:-}" ]]; then
+    kill "$RUNNER_PID" 2>/dev/null || true
+    wait "$RUNNER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${RUNNER_PID_2:-}" ]]; then
+    kill "$RUNNER_PID_2" 2>/dev/null || true
+    wait "$RUNNER_PID_2" 2>/dev/null || true
+  fi
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  rm -f "${LISTEN_PORT_FILE:-}" 2>/dev/null || true
   if [[ "${E2E_CREATED_GIT_ROOT:-0}" == "1" && "${MUSEHUB_KEEP_GIT_ROOT:-}" != "1" ]]; then
     rm -rf "$GIT_ROOT"
   fi
@@ -53,7 +65,14 @@ remote_runner_e2e_cleanup() {
 
 remote_runner_wait_ready() {
   for _ in $(seq 1 80); do
-    curl -sf "http://127.0.0.1:${API_PORT}/readyz" | jq -e '.checks.product_api == "ok"' >/dev/null && return 0
+    if [[ -s "${MUSEHUB_LISTEN_PORT_FILE:-}" ]]; then
+      API_PORT="$(tr -d '[:space:]' <"$MUSEHUB_LISTEN_PORT_FILE")"
+      export API_PORT
+      export MUSEHUB_API_BASE="http://127.0.0.1:${API_PORT}"
+      if curl -sf "http://127.0.0.1:${API_PORT}/readyz" | jq -e '.checks.product_api == "ok"' >/dev/null; then
+        return 0
+      fi
+    fi
     sleep 0.5
   done
   echo "server not ready" >&2
@@ -69,6 +88,7 @@ remote_runner_start_server() {
     MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD"
     MUSEHUB_PIPELINE_EXECUTOR=remote
     MUSEHUB_BIND="$MUSEHUB_BIND"
+    MUSEHUB_LISTEN_PORT_FILE="$MUSEHUB_LISTEN_PORT_FILE"
   )
   if [[ -n "${MUSEHUB_LEASE_SECS:-}" ]]; then
     server_env+=(MUSEHUB_LEASE_SECS="$MUSEHUB_LEASE_SECS")

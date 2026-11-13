@@ -90,7 +90,16 @@ export function PullDetailPage() {
     setPath(p)
     setPick(null)
     const diff = await getPullRequestDiff(org, slug!, prNumber, p)
-    setDiffText(String((diff as { unified?: string }).unified ?? ''))
+    const typed = diff as { unified?: string | null; binary?: boolean; truncated?: boolean }
+    if (typed.binary) {
+      setDiffText(t('code.binaryFile', { path: p }))
+    } else if (typed.truncated) {
+      setDiffText(
+        `${t('code.truncatedFile', { path: p })}\n\n${String(typed.unified ?? '')}`,
+      )
+    } else {
+      setDiffText(String(typed.unified ?? ''))
+    }
   }
 
   const pickLines = useMemo(() => diffPickLines(diffText), [diffText])

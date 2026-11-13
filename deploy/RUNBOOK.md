@@ -80,6 +80,24 @@ Host / CI parity (Postgres URL, down then up idempotency): `scripts/verify-produ
 
 The API listens on `0.0.0.0:8080` inside the container; the UI **`clone_url`** uses `MUSEHUB_PUBLIC_HTTP_ORIGIN` (default `http://127.0.0.1:<gateway-port>`). For real clients, set e.g. `MUSEHUB_PUBLIC_HTTP_ORIGIN=https://musehub.internal` in `deploy/.env` to match how users reach the **gateway** (`/git/...` is proxied).
 
+## SSH Git transport (product)
+
+Product Git-over-SSH is a **separate** listener (`musehub-git-ssh serve` or the **`musehub-git-ssh`** Compose service), not the HTTP gateway port. OpenSSH runs **`AuthorizedKeysCommand`** (`musehub-git-ssh authorized-keys`) as the `git` OS user and terminates into the MuseHub **login shell** (`/usr/local/lib/musehub/musehub-git-login.sh` → `musehub-git-ssh shell` → gateway). The authorized_keys line sets **`MUSEHUB_SSH_KEY_ID`** and **`MUSEHUB_SSH_KEY_FP`** (no `command=` override).
+Gateway uses **`MUSEHUB_SSH_KEY_FP`** from the AuthorizedKeysCommand line for the authenticating key; trustworthy only when **`git` passwd home** (`pw_dir`, not session `HOME`) is **`/var/lib/musehub/git-ssh/home`** — root-owned `0555`, no `~/.ssh/environment`. Database credentials live in **`runtime.env`** under `MUSEHUB_GIT_SSH_RUN_DIR` (mode `0640`, `root:git`), not in world-readable wrapper scripts. Bare repos on the shared `gitdata` volume are **`musehub:musehub-git`** with setgid so the `git` transport user can `receive-pack`. Repository API and the Code tab show **`ssh_clone_url`** (`MUSEHUB_PUBLIC_SSH_HOST`, `MUSEHUB_GIT_SSH_PORT`, default `2222`).
+
+| Path / variable | Purpose |
+|----------------|---------|
+| `deploy/docker-compose.yml` → `musehub-git-ssh` | Product sshd sidecar; shares `gitdata` with API |
+| Volume `gitsshdata` | Persistent **host keys** + sshd pid/config under `MUSEHUB_GIT_SSH_RUN_DIR` |
+| `MUSEHUB_GIT_SSH_LISTEN` | Bind address (`0.0.0.0` in Compose; `127.0.0.1` for local acceptance) |
+| `deploy/.env` | Set `MUSEHUB_PUBLIC_SSH_HOST` to the hostname users type for `ssh://git@…` |
+
+**Trust & rotation:** Users pin the sshd host public key on first connect (`gitsshdata` or `MUSEHUB_GIT_SSH_RUN_DIR`). To rotate, stop sshd, archive old keys, let `serve` generate new host keys (or run `ssh-keygen` manually), publish the new fingerprint to your team, then restart. **Permissions:** `musehub-git-ssh serve` starts **sshd as root**; interactive OS login is only the restricted MuseHub login shell for user `git`. The ssh run dir defaults to **`0750` `root:git`** (group traverse, no world access); `runtime.env` is **`0640` `root:git`**. Login shell and AKC wrapper hard-code `/usr/local/bin/musehub-git-ssh` and fail closed if `runtime.env` is unreadable. Bare repos use **`musehub-git`** + `core.sharedRepository=group`. Product acceptance includes **`verify-product-compose-git-ssh-e2e.sh`** on the full Compose stack (API + `musehub-git-ssh`, default volume modes).
+
+**systemd:** optional `musehub-git-ssh.service` (installed by `install-musehub-systemd.sh`) starts/stops the Compose sshd service with the control plane — secrets stay in `deploy/.env` only.
+
+CI **fails** product acceptance when `openssh-server` is missing (`MUSEHUB_REQUIRE_GIT_SSH=1`); local runs without sshd exit the SSH suites as `not_run` (never as false success). This is **not** untrusted multi-tenant process isolation and **not** the Colima `musehub-ssh-probe` harness.
+
 ## Upgrade
 
 Production profile (rebuild, migrate, recreate control plane + runner when PAT is set):

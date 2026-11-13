@@ -16,6 +16,7 @@ render() {
 render "$ROOT/deploy/systemd/musehub-control-plane.service.in" \
   >"$TMP/musehub-control-plane.service"
 render "$ROOT/deploy/systemd/musehub-runner.service.in" >"$TMP/musehub-runner.service"
+render "$ROOT/deploy/systemd/musehub-git-ssh.service.in" >"$TMP/musehub-git-ssh.service"
 
 for unit in "$TMP"/*.service; do
   grep -q 'After=.*docker\.service' "$unit" || {
@@ -30,10 +31,11 @@ done
 
 bash -n "$ROOT/scripts/systemd-compose-control-plane.sh"
 bash -n "$ROOT/scripts/systemd-compose-runner.sh"
+bash -n "$ROOT/scripts/systemd-compose-git-ssh.sh"
 bash -n "$ROOT/scripts/install-musehub-systemd.sh"
 
 if command -v systemd-analyze >/dev/null 2>&1; then
-  systemd-analyze verify "$TMP/musehub-control-plane.service" "$TMP/musehub-runner.service"
+  systemd-analyze verify "$TMP/musehub-control-plane.service" "$TMP/musehub-runner.service" "$TMP/musehub-git-ssh.service"
   echo "systemd_verify=systemd-analyze ok"
 else
   grep -q "ExecStart=${VERIFY_REPO}/scripts/systemd-compose-control-plane.sh start" \

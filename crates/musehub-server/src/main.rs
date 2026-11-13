@@ -78,6 +78,24 @@ async fn main() -> ExitCode {
         }
     };
 
+    if let Ok(path) = std::env::var(musehub_core::LISTEN_PORT_FILE_ENV) {
+        let path = path.trim();
+        if !path.is_empty() {
+            match listener.local_addr() {
+                Ok(addr) => {
+                    if let Err(error) = std::fs::write(path, addr.port().to_string()) {
+                        tracing::error!(path = %path, error = %error, "cannot write listen port file");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, "cannot read bound listen address");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+
     tracing::info!(
         version = musehub_core::version(),
         bind = %config.bind(),

@@ -19,8 +19,17 @@ DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-}}"
 : "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD}"
 
 export MUSEHUB_GIT_ROOT="${MUSEHUB_GIT_ROOT:-/tmp/musehub-e2e-git}"
+export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
+export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
 export MUSEHUB_SESSION_SECRET="${MUSEHUB_SESSION_SECRET:-e2e-session-secret-32chars-min}"
 mkdir -p "$MUSEHUB_GIT_ROOT"
+if command -v sudo >/dev/null; then
+  getent group "$MUSEHUB_GIT_STORAGE_GROUP" >/dev/null 2>&1 || sudo groupadd -r "$MUSEHUB_GIT_STORAGE_GROUP" 2>/dev/null || true
+  sudo usermod -aG "$MUSEHUB_GIT_STORAGE_GROUP" "$(whoami)" 2>/dev/null || true
+  if sudo chgrp "$MUSEHUB_GIT_STORAGE_GROUP" "$MUSEHUB_GIT_ROOT" 2>/dev/null; then
+    sudo chmod 2775 "$MUSEHUB_GIT_ROOT" 2>/dev/null || true
+  fi
+fi
 
 SERVER_PIDFILE="${MUSEHUB_E2E_PIDFILE:-/tmp/musehub-e2e-server.pid}"
 SERVER_LOG="${MUSEHUB_E2E_SERVER_LOG:-/tmp/musehub-e2e-server.log}"

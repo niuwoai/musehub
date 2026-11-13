@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+pub mod git_http_pat;
+pub mod git_ssh_fixture;
+pub mod git_ssh_sshd;
+pub mod git_ssh_util;
 pub mod s1_git_push;
 
 use std::path::PathBuf;

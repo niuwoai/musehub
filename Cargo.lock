@@ -1186,6 +1186,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "musehub-git-ssh"
+version = "0.1.0-rc4"
+dependencies = [
+ "musehub-app",
+ "musehub-core",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "musehub-mcp-probe"
 version = "0.1.0-rc4"
 dependencies = [

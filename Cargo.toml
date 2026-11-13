@@ -14,6 +14,7 @@ members = [
     "crates/musehub-migrate",
     "crates/musehub-runnerd",
     "crates/musehub-server",
+    "crates/musehub-git-ssh",
 ]
 
 [workspace.dependencies]

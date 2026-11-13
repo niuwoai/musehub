@@ -98,7 +98,7 @@ echo "=== compose up ==="
 dc up -d
 sleep 5
 
-BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
+export BASE="http://127.0.0.1:${MUSEHUB_GATEWAY_HTTP_PORT}"
 echo "gateway base=$BASE postgres_port=$MUSEHUB_CI_POSTGRES_PORT api_host_port=$MUSEHUB_CI_API_HOST_PORT"
 DATABASE_URL="postgres://musehub:${POSTGRES_PASSWORD}@127.0.0.1:${MUSEHUB_CI_POSTGRES_PORT}/musehub"
 
@@ -337,4 +337,29 @@ echo "upgrade_persistence=ok"
 CID=$(dc ps -q musehub-server)
 BINDS=$(docker inspect "$CID" --format '{{json .HostConfig.Binds}}')
 [[ "$BINDS" != *"docker.sock"* ]]
+
+echo "=== product compose git-ssh (default image permissions) ==="
+wait_ready
+# Backup/restore recreates the gitdata volume; git-ssh must re-run shared storage migration.
+MUSEHUB_GIT_SSH_PORT="${MUSEHUB_GIT_SSH_PORT:-2222}"
+echo "=== git-ssh shared volume migration (post-restore) ==="
+dc restart musehub-git-ssh
+for _ in $(seq 1 60); do
+  if ss -tln 2>/dev/null | grep -qE ":${MUSEHUB_GIT_SSH_PORT}([[:space:]]|$)"; then
+    break
+  fi
+  sleep 2
+done
+ss -tln 2>/dev/null | grep -qE ":${MUSEHUB_GIT_SSH_PORT}([[:space:]]|$)" || {
+  echo "git-ssh port ${MUSEHUB_GIT_SSH_PORT} not published after restart" >&2
+  dc logs musehub-git-ssh --tail=60 >&2 || true
+  exit 1
+}
+export COOKIE_JAR POSTGRES_PASSWORD
+export MUSEHUB_STACK_DC
+# shellcheck disable=SC2068
+MUSEHUB_STACK_DC=$(printf '%q ' "${COMPOSE_BASE[@]}")
+chmod +x "$ROOT/scripts/verify-product-compose-git-ssh-e2e.sh"
+bash "$ROOT/scripts/verify-product-compose-git-ssh-e2e.sh"
+
 echo "product_stack_e2e=ok"
