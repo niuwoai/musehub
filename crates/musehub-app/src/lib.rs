@@ -185,6 +185,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             get(list_repos).post(create_repo),
         )
         .route(
+            "/api/v1/orgs/{org}/repos/{repo}/issue-assignees",
+            get(issues::list_issue_assignee_options),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/issues",
             get(issues::list_issues_page).post(create_issue),
         )

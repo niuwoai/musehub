@@ -109,6 +109,7 @@ export type PullRequest = {
   target_branch: string
   head_oid?: string | null
   issue_id?: string | null
+  issue_number?: number | null
 }
 
 export type PrCiFailedJob = {
@@ -302,6 +303,12 @@ export async function listIssues(
 
 export async function getIssue(org: string, repo: string, issueNumber: number) {
   return api<IssueDetail>(`/api/v1/orgs/${org}/repos/${repo}/issues/${issueNumber}`)
+}
+
+export type IssueAssigneeOption = { handle: string }
+
+export async function listIssueAssignees(org: string, repo: string) {
+  return api<IssueAssigneeOption[]>(`/api/v1/orgs/${org}/repos/${repo}/issue-assignees`)
 }
 
 export async function patchIssue(
@@ -535,10 +542,16 @@ export async function createPullRequest(
   repo: string,
   title: string,
   sourceBranch: string,
+  opts?: { issue_id?: string; agent_run_id?: string },
 ) {
   return api<PullRequest>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`, {
     method: 'POST',
-    body: JSON.stringify({ title, source_branch: sourceBranch }),
+    body: JSON.stringify({
+      title,
+      source_branch: sourceBranch,
+      issue_id: opts?.issue_id,
+      agent_run_id: opts?.agent_run_id,
+    }),
   })
 }
 

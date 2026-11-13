@@ -10,6 +10,7 @@ import {
   getAgentRun,
   getIssue,
   getIssueDeliveryTrace,
+  listIssueAssignees,
   listIssueComments,
   patchIssue,
   postIssueComment,
@@ -46,6 +47,14 @@ export function IssueDetailPage() {
   const [agentError, setAgentError] = useState<string | null>(null)
   const [closeReason, setCloseReason] = useState('completed')
   const [lifecycleError, setLifecycleError] = useState<string | null>(null)
+  const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!slug) return
+    void listIssueAssignees(org, slug)
+      .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
+      .catch(() => setAssigneeOptions([]))
+  }, [org, slug])
 
   const reload = useCallback(async () => {
     if (!slug || !issueNumber) return
@@ -349,7 +358,13 @@ export function IssueDetailPage() {
             ) : (
               trace.pipeline_runs.map((run) => (
                 <li key={run.id} data-testid={`issue-trace-pipeline-${run.id.slice(0, 8)}`}>
-                  {run.id.slice(0, 8)}… {run.state} @ {run.source_oid.slice(0, 7)}
+                  <Link
+                    to={paths.repoDeliveryDeepLink(org, slug!, { pipeline: run.id })}
+                    data-testid="issue-trace-pipeline-link"
+                  >
+                    {run.id.slice(0, 8)}…
+                  </Link>{' '}
+                  {run.state} @ {run.source_oid.slice(0, 7)}
                 </li>
               ))
             )}
@@ -361,7 +376,13 @@ export function IssueDetailPage() {
             ) : (
               trace.deployments.map((dep) => (
                 <li key={dep.id} data-testid={`issue-trace-deployment-${dep.id.slice(0, 8)}`}>
-                  <Link to={paths.repoDelivery(org, slug!)}>{dep.environment_slug}</Link> · {dep.state}{' '}
+                  <Link
+                    to={paths.repoDeliveryDeepLink(org, slug!, { deployment: dep.id })}
+                    data-testid="issue-trace-deployment-link"
+                  >
+                    {dep.environment_slug}
+                  </Link>{' '}
+                  · {dep.state}{' '}
                   <span data-testid="issue-trace-deployment-id">{dep.id}</span>
                 </li>
               ))
@@ -395,7 +416,21 @@ export function IssueDetailPage() {
         </label>
         <label>
           {t('issueDetail.assignee')}
-          <input data-testid="issue-assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)} />
+          <select
+            data-testid="issue-assignee"
+            value={assignee}
+            onChange={(e) => setAssignee(e.target.value)}
+          >
+            <option value="">{t('issueDetail.assigneeNone')}</option>
+            {assignee && !assigneeOptions.includes(assignee) ? (
+              <option value={assignee}>{assignee}</option>
+            ) : null}
+            {assigneeOptions.map((handle) => (
+              <option key={handle} value={handle}>
+                {handle}
+              </option>
+            ))}
+          </select>
         </label>
         {saveError ? <p role="alert">{saveError}</p> : null}
         <button type="submit" data-testid="issue-save-meta">

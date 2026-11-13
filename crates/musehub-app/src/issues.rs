@@ -31,6 +31,11 @@ pub struct IssueListPage {
     pub has_more: bool,
 }
 
+#[derive(Serialize)]
+pub struct IssueAssigneeOption {
+    pub handle: String,
+}
+
 #[derive(Deserialize)]
 pub struct IssueListQuery {
     pub state: Option<String>,
@@ -147,6 +152,39 @@ pub struct PatchIssueRequest {
     pub labels: Option<Vec<String>>,
     pub assignee_handle: Option<String>,
     pub close_reason: Option<String>,
+}
+
+/// Active org members who may be assigned (repo grant or org owner/admin), same rule as PATCH assignee.
+pub async fn list_issue_assignee_options(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+) -> Result<Json<Vec<IssueAssigneeOption>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (org_id, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let rows = sqlx::query_as::<_, (String,)>(
+        "SELECT DISTINCT p.handle FROM principals p
+         JOIN memberships m ON m.principal_id = p.id AND m.org_id = $2 AND m.status = 'active'
+         WHERE p.status = 'active'
+           AND (
+             m.role IN ('owner', 'admin')
+             OR EXISTS (
+               SELECT 1 FROM repository_grants g
+               WHERE g.repo_id = $1 AND g.principal_id = p.id
+             )
+           )
+         ORDER BY p.handle",
+    )
+    .bind(repo_id)
+    .bind(org_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(handle,)| IssueAssigneeOption { handle })
+            .collect(),
+    ))
 }
 
 pub async fn list_issues_page(
@@ -453,6 +491,15 @@ pub async fn patch_issue(
         }
     } else if let Some(reason) = &body.close_reason {
         validate_close_reason(reason)?;
+        let (current_state,): (String,) = sqlx::query_as("SELECT state FROM issues WHERE id = $1")
+            .bind(issue_id)
+            .fetch_one(&state.pool)
+            .await?;
+        if current_state != "closed" {
+            return Err(AppError::Validation(
+                "close_reason requires issue state closed".into(),
+            ));
+        }
     }
 
     let title = body.title.as_deref();
@@ -470,8 +517,9 @@ pub async fn patch_issue(
                 state = COALESCE($5, state),
                 labels = COALESCE($6, labels),
                 close_reason = CASE
-                    WHEN $5 = 'closed' THEN COALESCE($7, close_reason)
                     WHEN $5 = 'open' THEN NULL
+                    WHEN $5 = 'closed' THEN COALESCE($7, close_reason)
+                    WHEN $7 IS NOT NULL THEN $7
                     ELSE close_reason
                 END,
                 updated_at = CURRENT_TIMESTAMP

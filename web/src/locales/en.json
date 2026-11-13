@@ -125,7 +125,9 @@
     "selfApproveBlocked": "Authors cannot approve their own pull requests.",
     "outdatedAnchor": "(outdated)",
     "addComment": "Add comment",
-    "commentFailed": "Could not post comment."
+    "commentFailed": "Could not post comment.",
+    "linkedIssue": "Linked issue",
+    "noLinkedIssue": "No issue linked to this pull request."
   },
   "issues": {
     "filterState": "State",
@@ -140,6 +142,7 @@
   "issueDetail": {
     "labels": "Labels",
     "assignee": "Assignee",
+    "assigneeNone": "Unassigned",
     "save": "Save",
     "saveFailed": "Could not save issue.",
     "discussion": "Discussion",
@@ -176,6 +179,10 @@
     "markInProgress": "Mark in progress",
     "closeReasonRequired": "Enter a close reason.",
     "closedAs": "Closed: {{reason}}"
+  },
+  "delivery": {
+    "linkedIssue": "Trace → issue",
+    "linkedPull": "Trace → pull request"
   },
   "sshKeys": {
     "title": "SSH keys",

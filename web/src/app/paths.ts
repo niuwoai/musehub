@@ -17,5 +17,17 @@ export const paths = {
     `/org/${org}/repos/${slug}/pulls/${number}`,
   repoCode: (org: string, slug: string) => `/org/${org}/repos/${slug}/code`,
   repoDelivery: (org: string, slug: string) => `/org/${org}/repos/${slug}/delivery`,
+  repoDeliveryDeepLink: (
+    org: string,
+    slug: string,
+    query: { deployment?: string; pipeline?: string },
+  ) => {
+    const params = new URLSearchParams()
+    if (query.deployment) params.set('deployment', query.deployment)
+    if (query.pipeline) params.set('pipeline', query.pipeline)
+    const q = params.toString()
+    const base = `/org/${org}/repos/${slug}/delivery`
+    return q ? `${base}?${q}` : base
+  },
   repoSettings: (org: string, slug: string) => `/org/${org}/repos/${slug}/settings`,
 } as const

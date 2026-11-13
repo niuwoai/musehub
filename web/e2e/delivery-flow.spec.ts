@@ -74,6 +74,10 @@ test.describe('delivery chain browser flow', () => {
     await page.getByRole('button', { name: /create pull request|创建 pull request/i }).click()
     await goRepoPulls(page)
     await expect(page.getByTestId('pull-request-list')).toContainText(/open/i, { timeout: 30_000 })
+    await page.getByTestId('pull-link-1').click()
+    await expect(page.getByTestId('pull-linked-issue')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('pull-linked-issue')).toContainText(/#1/)
+    await goRepoPulls(page)
 
     const loginApiCookie = async (handle: string, pass: string) => {
       const ctx = await playwrightRequest.newContext({ baseURL: apiBase })
@@ -160,6 +164,9 @@ test.describe('delivery chain browser flow', () => {
     await expect(page.getByTestId('delivery-trace')).toBeVisible({
       timeout: productOci ? 240_000 : 90_000,
     })
+    await expect(page.getByTestId('delivery-trace-issue-link')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('delivery-trace-issue-link')).toContainText(/#1/)
+    await expect(page.getByTestId('delivery-trace-pr-link')).toContainText(/#1/)
     if (productOci) {
       await expect(page.getByTestId('delivery-trace')).toContainText(/compose-runner/, {
         timeout: 120_000,

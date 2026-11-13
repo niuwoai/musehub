@@ -37,6 +37,29 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
         .unwrap();
     assert_eq!(created.status(), StatusCode::CREATED);
 
+    let assignees = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issue-assignees"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(assignees.status(), StatusCode::OK);
+    let assignee_json = body_json(assignees).await;
+    assert!(
+        assignee_json
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["handle"] == "admin"),
+        "org admin must be assignee-eligible"
+    );
+
     let envs = app
         .clone()
         .oneshot(
@@ -175,12 +198,81 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
     assert_eq!(closed_json["state"], "closed");
     assert_eq!(closed_json["close_reason"], "accepted");
 
+    let patch_reason_only = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "close_reason": "duplicate" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_reason_only.status(), StatusCode::OK);
+    let reason_only_json = body_json(patch_reason_only).await;
+    assert_eq!(reason_only_json["close_reason"], "duplicate");
+
+    let in_progress = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "state": "in_progress" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(in_progress.status(), StatusCode::OK);
+    assert_eq!(body_json(in_progress).await["state"], "in_progress");
+
+    let reason_while_open = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "close_reason": "nope" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reason_while_open.status(), StatusCode::BAD_REQUEST);
+
+    let close_again = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "state": "closed", "close_reason": "accepted" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(close_again.status(), StatusCode::OK);
+
     let list_closed = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues?state=closed"))
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?state=closed"
+                ))
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())
                 .unwrap(),

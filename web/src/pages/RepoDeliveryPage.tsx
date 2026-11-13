@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
+import { paths } from '../app/paths'
 import { getPipelineJobLogs, type PipelineJob } from '../api'
 
 export function RepoDeliveryPage() {
   const ws = useWorkspace()
+  const [searchParams] = useSearchParams()
+  const deepLinkKeyRef = useRef('')
   const [jobLogText, setJobLogText] = useState<string | null>(null)
   const [jobLogKey, setJobLogKey] = useState<string | null>(null)
   const [jobLogError, setJobLogError] = useState<string | null>(null)
@@ -31,7 +35,30 @@ export function RepoDeliveryPage() {
     deploymentRollbackBusy,
     deploymentId,
     trace,
+    onPickDeploymentFromList,
+    onFocusPipelineRun,
   } = ws
+
+  useEffect(() => {
+    if (!selectedRepo) return
+    const dep = searchParams.get('deployment')
+    const pipe = searchParams.get('pipeline')
+    if (!dep && !pipe) return
+    const key = `${selectedRepo}:${dep ?? ''}:${pipe ?? ''}`
+    if (deepLinkKeyRef.current === key) return
+    deepLinkKeyRef.current = key
+    if (dep) {
+      setDeploymentLookupId(dep)
+      void onPickDeploymentFromList(dep)
+    }
+    if (pipe) void onFocusPipelineRun(pipe)
+  }, [
+    selectedRepo,
+    searchParams,
+    setDeploymentLookupId,
+    onPickDeploymentFromList,
+    onFocusPipelineRun,
+  ])
 
   async function loadJobLogs(job: PipelineJob) {
     if (!selectedRepo || !pipelineRun) return
@@ -325,6 +352,32 @@ export function RepoDeliveryPage() {
         <button type="button" onClick={() => void ws.onLoadTrace()}>
           {t('app.viewTrace')}
         </button>
+      ) : null}
+      {trace ? (
+        <div data-testid="delivery-trace-links">
+          {trace.issue_number != null ? (
+            <p>
+              {t('delivery.linkedIssue')}:{' '}
+              <Link
+                to={paths.repoIssue(activeOrg, selectedRepo, trace.issue_number)}
+                data-testid="delivery-trace-issue-link"
+              >
+                #{trace.issue_number}
+              </Link>
+            </p>
+          ) : null}
+          {trace.pr_number != null ? (
+            <p>
+              {t('delivery.linkedPull')}:{' '}
+              <Link
+                to={paths.repoPull(activeOrg, selectedRepo, trace.pr_number)}
+                data-testid="delivery-trace-pr-link"
+              >
+                #{trace.pr_number}
+              </Link>
+            </p>
+          ) : null}
+        </div>
       ) : null}
       {trace ? (
         <pre data-testid="delivery-trace" style={{ fontSize: '0.85rem' }}>

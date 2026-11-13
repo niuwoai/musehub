@@ -130,7 +130,9 @@
     "selfApproveBlocked": "作者不能批准自己的 Pull Request。",
     "outdatedAnchor": "（已过时）",
     "addComment": "发表评论",
-    "commentFailed": "无法发表评论。"
+    "commentFailed": "无法发表评论。",
+    "linkedIssue": "关联 Issue",
+    "noLinkedIssue": "此 PR 未关联 Issue。"
   },
   "issues": {
     "filterState": "状态",
@@ -145,6 +147,7 @@
   "issueDetail": {
     "labels": "标签",
     "assignee": "负责人",
+    "assigneeNone": "未指定",
     "save": "保存",
     "saveFailed": "无法保存 Issue。",
     "discussion": "讨论",
@@ -181,6 +184,10 @@
     "markInProgress": "标记为进行中",
     "closeReasonRequired": "请填写关闭原因。",
     "closedAs": "已关闭：{{reason}}"
+  },
+  "delivery": {
+    "linkedIssue": "追溯 → Issue",
+    "linkedPull": "追溯 → Pull Request"
   },
   "sshKeys": {
     "title": "SSH 密钥",
