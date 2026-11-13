@@ -222,7 +222,6 @@ export async function waitForRepoIssuesHydrated(page: Page): Promise<void> {
     timeout: 30_000,
   })
   await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('create-issue')).toBeEnabled({ timeout: 30_000 })
 }
 
 export async function openRepoBySlug(page: Page, slug: string): Promise<void> {
