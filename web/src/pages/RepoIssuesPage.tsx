@@ -25,6 +25,8 @@ export function RepoIssuesPage() {
   const {
     t,
     selectedRepo: workspaceRepo,
+    repoContextTransitioning,
+    activeRepoSlug: workspaceActiveRepoSlug,
     lastRun,
     agentRunStarting,
     onAcceptPlan,
@@ -33,10 +35,7 @@ export function RepoIssuesPage() {
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
-  const activeRepoSlug = routeSlug ?? workspaceRepo ?? null
-  const repoContextTransitioning = Boolean(
-    routeSlug && workspaceRepo && routeSlug !== workspaceRepo,
-  )
+  const activeRepoSlug = routeSlug ?? workspaceActiveRepoSlug ?? workspaceRepo ?? null
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -91,8 +90,11 @@ export function RepoIssuesPage() {
 
   useEffect(() => {
     if (!activeRepoSlug) return
+    if (workspaceRepo && workspaceRepo !== activeRepoSlug) {
+      void loadIssues(activeRepoSlug)
+    }
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
-  }, [activeRepoSlug, fetchPage, t])
+  }, [activeRepoSlug, fetchPage, loadIssues, t, workspaceRepo])
 
   useEffect(() => {
     if (!activeRepoSlug) return

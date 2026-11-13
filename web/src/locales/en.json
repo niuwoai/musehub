@@ -35,6 +35,7 @@
     "pipelineCancelHonesty": "Cancel is a server request only; worker shutdown is confirmed when state becomes canceled, not when this button returns.",
     "releaseAndDeployMock": "Release + mock deploy",
     "publishPipelineRelease": "Publish release from pipeline",
+    "deliveryRepoContextTransitioning": "Switching repository — delivery actions are paused until the route matches.",
     "deployProductionProtected": "Deploy to production (approval required)",
     "deploymentAwaitingApproval": "Deployment to {{env}} is awaiting approval",
     "approveDeployment": "Approve deployment",

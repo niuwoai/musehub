@@ -176,6 +176,8 @@ pub async fn create_release(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    crate::grants::ensure_repo_release_maintainer(&state.pool, org_id, repo_id, principal_id)
+        .await?;
     let view = create_release_core(&state, org_id, repo_id, body).await?;
     Ok((StatusCode::CREATED, Json(view)))
 }
@@ -317,8 +319,10 @@ pub async fn publish_release(
 ) -> Result<Json<ReleaseView>, AppError> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let principal_id = super::require_session(&state.pool, &headers).await?;
-    let (_, repo_id, _) =
+    let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    crate::grants::ensure_repo_release_maintainer(&state.pool, org_id, repo_id, principal_id)
+        .await?;
     let view = publish_release_core(&state, repo_id, release_id, body).await?;
     Ok(Json(view))
 }

@@ -97,6 +97,32 @@ pub async fn ensure_pat_repo_access(
     Ok(())
 }
 
+/// Release create/publish (docs/01-product-requirements.md §4 — Maintainer).
+pub async fn ensure_repo_release_maintainer(
+    pool: &PgPool,
+    org_id: Uuid,
+    repo_id: Uuid,
+    principal_id: Uuid,
+) -> Result<(), AppError> {
+    if is_org_privileged(pool, org_id, principal_id).await? {
+        return Ok(());
+    }
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM repository_grants WHERE repo_id = $1 AND principal_id = $2",
+    )
+    .bind(repo_id)
+    .bind(principal_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((role,)) = row else {
+        return Err(AppError::Forbidden);
+    };
+    if role == "maintainer" {
+        return Ok(());
+    }
+    Err(AppError::Forbidden)
+}
+
 #[derive(serde::Serialize)]
 pub struct RepoGrantView {
     pub principal_id: Uuid,

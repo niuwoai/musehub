@@ -18,8 +18,10 @@ export function RepoDeliveryPage() {
   const {
     t,
     activeOrg,
-    selectedRepo,
+    activeRepoSlug,
+    repoContextTransitioning,
     mergedPr,
+    error: workspaceError,
     pipelineRun,
     pipelineJobs,
     pipelineRetryBusy,
@@ -44,10 +46,10 @@ export function RepoDeliveryPage() {
   } = ws
 
   const refreshReleases = useCallback(() => {
-    if (!selectedRepo) return Promise.resolve()
+    if (!activeRepoSlug || repoContextTransitioning) return Promise.resolve()
     setReleasesLoading(true)
     setReleasesError(null)
-    return listReleases(activeOrg, selectedRepo)
+    return listReleases(activeOrg, activeRepoSlug)
       .then((rows) => setReleases(rows))
       .catch((err) => {
         setReleases([])
@@ -56,18 +58,18 @@ export function RepoDeliveryPage() {
         )
       })
       .finally(() => setReleasesLoading(false))
-  }, [activeOrg, selectedRepo, t])
+  }, [activeOrg, activeRepoSlug, repoContextTransitioning, t])
 
   useEffect(() => {
     void refreshReleases()
   }, [refreshReleases, publishedReleaseId, pipelineRun?.id])
 
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!activeRepoSlug || repoContextTransitioning) return
     const dep = searchParams.get('deployment')
     const pipe = searchParams.get('pipeline')
     if (!dep && !pipe) return
-    const key = `${selectedRepo}:${dep ?? ''}:${pipe ?? ''}`
+    const key = `${activeRepoSlug}:${dep ?? ''}:${pipe ?? ''}`
     if (deepLinkKeyRef.current === key) return
     deepLinkKeyRef.current = key
     if (dep) {
@@ -76,7 +78,8 @@ export function RepoDeliveryPage() {
     }
     if (pipe) void onFocusPipelineRun(pipe)
   }, [
-    selectedRepo,
+    activeRepoSlug,
+    repoContextTransitioning,
     searchParams,
     setDeploymentLookupId,
     onPickDeploymentFromList,
@@ -84,13 +87,13 @@ export function RepoDeliveryPage() {
   ])
 
   async function loadJobLogs(job: PipelineJob) {
-    if (!selectedRepo || !pipelineRun) return
+    if (!activeRepoSlug || repoContextTransitioning || !pipelineRun) return
     setJobLogError(null)
     setJobLogKey(job.job_key)
     try {
       const chunk = await getPipelineJobLogs(
         activeOrg,
-        selectedRepo,
+        activeRepoSlug,
         job.id,
         pipelineRun.run_attempt_id,
       )
@@ -101,13 +104,26 @@ export function RepoDeliveryPage() {
     }
   }
 
-  if (!selectedRepo) {
+  if (!activeRepoSlug) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
 
+  const deliveryActionsDisabled =
+    repoContextTransitioning || publishReleaseBusy
+
   return (
     <Panel data-testid="delivery-panel">
-      <h2>{selectedRepo}</h2>
+      <h2>{activeRepoSlug}</h2>
+      {repoContextTransitioning ? (
+        <p role="status" data-testid="delivery-repo-transition">
+          {t('app.deliveryRepoContextTransitioning')}
+        </p>
+      ) : null}
+      {workspaceError ? (
+        <p role="alert" data-testid="delivery-workspace-error">
+          {workspaceError}
+        </p>
+      ) : null}
       <h3>{t('app.deliveryTitle')}</h3>
       <p style={{ color: '#9a6700' }} data-testid="delivery-mode-note">
         {t('app.deliveryModeNote')}
@@ -147,7 +163,7 @@ export function RepoDeliveryPage() {
               <>
                 {' · '}
                 <Link
-                  to={paths.repoIssue(activeOrg, selectedRepo, mergedPr.issue_number)}
+                  to={paths.repoIssue(activeOrg, activeRepoSlug, mergedPr.issue_number)}
                   data-testid="delivery-merged-issue-link"
                 >
                   issue #{mergedPr.issue_number}
@@ -239,15 +255,18 @@ export function RepoDeliveryPage() {
             <button
               type="button"
               data-testid="publish-pipeline-release"
-              disabled={publishReleaseBusy}
+              disabled={deliveryActionsDisabled}
               onClick={() => void ws.onPublishPipelineRelease().then(() => refreshReleases())}
             >
-              {t('app.publishPipelineRelease')}
+              {publishReleaseBusy
+                ? t('common.loading')
+                : t('app.publishPipelineRelease')}
             </button>
           ) : null}
           <button
             type="button"
             data-testid="release-and-deploy-mock"
+            disabled={deliveryActionsDisabled}
             onClick={() => void ws.onReleaseAndDeploy()}
           >
             {t('app.releaseAndDeployMock')}
@@ -434,7 +453,7 @@ export function RepoDeliveryPage() {
             <p>
               {t('delivery.linkedIssue')}:{' '}
               <Link
-                to={paths.repoIssue(activeOrg, selectedRepo, trace.issue_number)}
+                to={paths.repoIssue(activeOrg, activeRepoSlug, trace.issue_number)}
                 data-testid="delivery-trace-issue-link"
               >
                 #{trace.issue_number}
@@ -445,7 +464,7 @@ export function RepoDeliveryPage() {
             <p>
               {t('delivery.linkedPull')}:{' '}
               <Link
-                to={paths.repoPull(activeOrg, selectedRepo, trace.pr_number)}
+                to={paths.repoPull(activeOrg, activeRepoSlug, trace.pr_number)}
                 data-testid="delivery-trace-pr-link"
               >
                 #{trace.pr_number}

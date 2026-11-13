@@ -1,4 +1,4 @@
-//! POST /releases + /publish from succeeded pipeline (REL-01); reader blocked.
+//! POST /releases + /publish: Maintainer gate (docs/01-product-requirements.md §4) and pipeline rules.
 
 mod common;
 
@@ -100,22 +100,62 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
     let (pipe_id, oid) =
         seed_succeeded_pipeline(&pool, git_root.path(), org_id.0, repo_id.0, admin_id.0).await;
 
+    let reader = format!("relread{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let developer = format!("reldev{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let maint = format!("relmnt{}", &Uuid::new_v4().simple().to_string()[..6]);
     let outsider = format!("relpubx{}", &Uuid::new_v4().simple().to_string()[..6]);
-    app.clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/orgs/demo/members")
-                .header(header::COOKIE, &admin)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "handle": outsider, "password": MEMBER_PASS, "role": "member" })
-                        .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    for handle in [
+        reader.as_str(),
+        developer.as_str(),
+        maint.as_str(),
+        outsider.as_str(),
+    ] {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/demo/members")
+                    .header(header::COOKIE, &admin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "handle": handle, "password": MEMBER_PASS, "role": "member" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    for (handle, role) in [
+        (reader.as_str(), "reader"),
+        (developer.as_str(), "developer"),
+        (maint.as_str(), "maintainer"),
+    ] {
+        let grant = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/orgs/demo/repos/{repo}/collaborators"))
+                    .header(header::COOKIE, &admin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "handle": handle, "role": role }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            grant.status() == StatusCode::CREATED || grant.status() == StatusCode::NO_CONTENT,
+            "grant {}",
+            grant.status()
+        );
+    }
+
+    let reader_cookie = common::login_cookie(&app, &reader, MEMBER_PASS).await;
+    let developer_cookie = common::login_cookie(&app, &developer, MEMBER_PASS).await;
+    let maint_cookie = common::login_cookie(&app, &maint, MEMBER_PASS).await;
     let outsider_cookie = common::login_cookie(&app, &outsider, MEMBER_PASS).await;
 
     let body = json!({
@@ -124,28 +164,36 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
         "commit_oid": oid,
         "pipeline_run_id": pipe_id,
     });
-    let denied = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/orgs/demo/repos/{repo}/releases"))
-                .header(header::COOKIE, &outsider_cookie)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(denied.status() == StatusCode::FORBIDDEN || denied.status() == StatusCode::NOT_FOUND);
+    let releases_uri = format!("/api/v1/orgs/demo/repos/{repo}/releases");
+
+    for cookie in [&reader_cookie, &developer_cookie, &outsider_cookie] {
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&releases_uri)
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            denied.status() == StatusCode::FORBIDDEN || denied.status() == StatusCode::NOT_FOUND,
+            "expected forbidden for non-maintainer, got {}",
+            denied.status()
+        );
+    }
 
     let create = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/orgs/demo/repos/{repo}/releases"))
-                .header(header::COOKIE, &admin)
+                .uri(&releases_uri)
+                .header(header::COOKIE, &maint_cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -170,7 +218,7 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
                 .uri(format!(
                     "/api/v1/orgs/demo/repos/{repo}/releases/{release_id}/publish"
                 ))
-                .header(header::COOKIE, &admin)
+                .header(header::COOKIE, &maint_cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("{}"))
                 .unwrap(),
@@ -195,17 +243,14 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
                 .uri(format!(
                     "/api/v1/orgs/demo/repos/{repo}/releases/{release_id}/publish"
                 ))
-                .header(header::COOKIE, &outsider_cookie)
+                .header(header::COOKIE, &reader_cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert!(
-        publish_denied.status() == StatusCode::FORBIDDEN
-            || publish_denied.status() == StatusCode::NOT_FOUND
-    );
+    assert_eq!(publish_denied.status(), StatusCode::FORBIDDEN);
 
     let failed_pipe = Uuid::new_v4();
     sqlx::query(
@@ -232,8 +277,8 @@ async fn release_create_and_publish_requires_maintainer_and_succeeded_pipeline()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/orgs/demo/repos/{repo}/releases"))
-                .header(header::COOKIE, &admin)
+                .uri(&releases_uri)
+                .header(header::COOKIE, &maint_cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(bad_body.to_string()))
                 .unwrap(),
