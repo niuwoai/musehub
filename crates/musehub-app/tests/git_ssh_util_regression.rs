@@ -115,7 +115,10 @@ fn forward_echo_probe_rejects_accept_without_echo() {
 #[test]
 #[cfg(unix)]
 fn forward_echo_probe_detects_allowed_sshd_tunnel() {
-    echo_probe_trace("start", "test=forward_echo_probe_detects_allowed_sshd_tunnel");
+    echo_probe_trace(
+        "start",
+        "test=forward_echo_probe_detects_allowed_sshd_tunnel",
+    );
     common::git_ssh_util::require_git_ssh_transport_prereqs();
     if !std::path::Path::new("/usr/sbin/sshd").exists() {
         echo_probe_trace("skip", "reason=no_sshd_bin");
