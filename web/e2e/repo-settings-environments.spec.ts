@@ -15,6 +15,7 @@ test.describe('repo settings environments', () => {
     await openRepoSettings(page, slug)
     await page.getByTestId('repo-env-slug').fill('staging')
     await page.getByTestId('repo-env-name').fill('Staging')
+    await page.getByTestId('repo-env-approval').check()
     const createResp = page.waitForResponse(
       (r) =>
         r.url().includes('/environments') &&
