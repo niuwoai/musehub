@@ -366,6 +366,16 @@ function useWorkspaceState(): WorkspaceValue {
     )
   }
 
+  function loadIssuesResultApplies(op: DeploymentOpContext, slug: string): boolean {
+    if (sessionEpochRef.current !== op.sessionEpoch) {
+      return false
+    }
+    if (repoSlugFromUrl && repoSlugFromUrl !== slug) {
+      return false
+    }
+    return deploymentOpActive(op) || repoSlugFromUrl === slug
+  }
+
   function tryBeginReleaseDelivery(): boolean {
     if (releaseDeliveryMutexRef.current) {
       return false
@@ -826,7 +836,7 @@ function useWorkspaceState(): WorkspaceValue {
       const data = await listIssues(activeOrg, slug)
       const s = await getOrgSettings(activeOrg)
       const g = await listRepoGrants(activeOrg, slug)
-      if (!deploymentOpActive(op)) {
+      if (!loadIssuesResultApplies(op, slug)) {
         return
       }
       selectedRepoRef.current = slug

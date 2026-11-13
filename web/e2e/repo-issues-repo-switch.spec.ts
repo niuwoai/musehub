@@ -5,6 +5,7 @@ import {
   createRepoViaUi,
   openRepoBySlug,
   waitForDemoRepoNavHydrated,
+  waitForRepoIssuesHydrated,
 } from './helpers/repo'
 import { loginAsAdmin } from './helpers/session'
 
@@ -68,9 +69,7 @@ test.describe('issue create repo route authority', () => {
 
     releaseHydration()
     hydrationReleased = true
-    await expect(page.getByTestId('issues-repo-transition')).toHaveCount(0, { timeout: 30_000 })
-    await expect(page.getByTestId('issue-create-title')).toBeVisible({ timeout: 30_000 })
-    await expect(page.getByTestId('create-issue')).toBeEnabled()
+    await waitForRepoIssuesHydrated(page)
 
     const post = page.waitForResponse(
       (r) =>

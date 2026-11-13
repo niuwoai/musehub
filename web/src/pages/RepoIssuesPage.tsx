@@ -90,11 +90,8 @@ export function RepoIssuesPage() {
 
   useEffect(() => {
     if (!activeRepoSlug) return
-    if (workspaceRepo && workspaceRepo !== activeRepoSlug) {
-      void loadIssues(activeRepoSlug)
-    }
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
-  }, [activeRepoSlug, fetchPage, loadIssues, t, workspaceRepo])
+  }, [activeRepoSlug, fetchPage, t])
 
   useEffect(() => {
     if (!activeRepoSlug) return
