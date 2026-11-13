@@ -155,41 +155,6 @@ async fn git_ssh_http_transport_alternation_on_feature_branch() {
     );
     let oid_ssh_1 = ref_oid(&bare, &format!("refs/heads/{feature}"));
 
-    musehub_app::git_ssh_runtime::ensure_shared_git_storage_root(&f.git_root)
-        .expect("shared git storage root before HTTP");
-    // SSH receive-pack writes refs as `git`; HTTP receive-pack runs via `sg musehub-git`.
-    let bare_s = bare.to_str().unwrap();
-    assert!(
-        std::process::Command::new("sudo")
-            .args(["-n", "chgrp", "-R", "musehub-git", bare_s])
-            .status()
-            .expect("sudo chgrp")
-            .success(),
-        "chgrp bare repo after SSH"
-    );
-    assert!(
-        std::process::Command::new("sudo")
-            .args(["-n", "chmod", "-R", "g+rwX", bare_s])
-            .status()
-            .expect("sudo chmod")
-            .success(),
-        "chmod bare repo after SSH"
-    );
-    let whoami = std::env::var("USER").unwrap_or_else(|_| "ubuntu".into());
-    assert!(
-        std::process::Command::new("sudo")
-            .args([
-                "-n",
-                "chown",
-                "-R",
-                &format!("{whoami}:musehub-git"),
-                &format!("{bare_s}/refs"),
-            ])
-            .status()
-            .expect("sudo chown refs")
-            .success(),
-        "chown refs for shared HTTP receive-pack"
-    );
     let basic = base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", pat.pat));
     let refs = f
         .app

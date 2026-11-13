@@ -247,16 +247,12 @@ assert_unknown_ssh_key_rejected() {
     echo "compose git-ssh: unregistered key auth check timed out" >&2
     return 1
   fi
-  if grep -qiE 'Permission denied|publickey|authenticated|auth|Could not read from remote|access rights|Connection closed|closed by remote|fatal:' <<<"$msg"; then
+  if grep -qiE 'Permission denied|publickey' <<<"$msg"; then
+    echo "compose git-ssh: unregistered key rejected (auth evidence in stderr)" >&2
     return 0
   fi
-  # OpenSSH may exit before printing publickey denial (clone line + host key warning only).
-  if [[ "$st" -eq 1 ]] && grep -qi 'Cloning into' <<<"$msg"; then
-    return 0
-  fi
-  echo "compose git-ssh: want auth rejection, got exit=${st} stderr=${msg}" >&2
+  echo "compose git-ssh: want Permission denied or publickey in stderr, got exit=${st} stderr=${msg}" >&2
   return 1
-  return 0
 }
 
 revoke_compose_pat() {

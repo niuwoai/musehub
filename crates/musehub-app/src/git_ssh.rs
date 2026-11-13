@@ -300,7 +300,12 @@ pub async fn run_ssh_gateway(
         metadata,
     )
     .await;
-    run_git_pack_inherit(&bare, service_name)
+    let code = run_git_pack_inherit(&bare, service_name)?;
+    #[cfg(unix)]
+    if service_name == "receive-pack" && code == 0 {
+        super::git_http::apply_bare_repo_group_acl(&bare)?;
+    }
+    Ok(code)
 }
 
 fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
