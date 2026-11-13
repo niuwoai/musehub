@@ -597,8 +597,9 @@ mod tests {
         assert!(validate_labels(&["ok_label".into()]).is_ok());
         assert!(validate_labels(&["".into()]).is_err());
         assert!(validate_labels(&["bad!".into()]).is_err());
-        assert!(validate_labels(&vec!["x".repeat(51)]).is_err());
-        assert!(validate_labels(&vec!["l".repeat(50); 21]).is_err());
+        assert!(validate_labels(&["x".repeat(51)]).is_err());
+        let too_many: Vec<String> = (0..21).map(|_| "l".repeat(50)).collect();
+        assert!(validate_labels(&too_many).is_err());
     }
 
     #[test]
