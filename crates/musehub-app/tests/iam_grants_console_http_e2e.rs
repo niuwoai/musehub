@@ -171,6 +171,37 @@ async fn org_default_collaborator_role_and_grant_revoke_rest() {
         .unwrap();
     assert_eq!(member_issues.status(), StatusCode::OK);
 
+    let member_grant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/collaborators"))
+                .header(header::COOKIE, &member_cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "handle": "admin" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(member_grant.status(), StatusCode::FORBIDDEN);
+
+    let member_revoke = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/grants?principal_id={principal_id}"
+                ))
+                .header(header::COOKIE, &member_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(member_revoke.status(), StatusCode::FORBIDDEN);
+
     let revoke = app
         .clone()
         .oneshot(

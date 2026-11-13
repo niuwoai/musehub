@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
 
+import { e2eServerOrigin } from './helpers/origin'
 import { goAccountTokens, goAudit, goRunner, loginFromHome } from './helpers/navigation'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
-const apiBase = process.env.MUSEHUB_E2E_API ?? 'http://127.0.0.1:8080'
 /** Full PATs are much longer than masked `token_prefix` shown in UI. */
 const fullPatLike = /mhp_[a-zA-Z0-9]{24,}/
 
@@ -20,6 +20,12 @@ test.describe('audit and runner status panels', () => {
     await page.getByTestId('audit-resource-type').selectOption('repository')
     await page.getByTestId('audit-apply-filter').click()
     await expect(page.getByTestId('audit-panel')).toBeVisible()
+    const auditRows = page.getByTestId('audit-event')
+    const n = await auditRows.count()
+    expect(n).toBeGreaterThan(0)
+    for (let i = 0; i < n; i++) {
+      await expect(auditRows.nth(i).locator('span').first()).toContainText(/^repository\//)
+    }
     await goRunner(page)
     await expect(page.getByTestId('runner-status-panel')).toBeVisible()
     await expect(page.getByTestId('runner-executors')).toBeVisible()
@@ -37,11 +43,11 @@ test.describe('audit and runner status panels', () => {
   })
 
   test('runner capabilities API is readable with session', async ({ request }) => {
-    const login = await request.post(`${apiBase}/api/v1/auth/login`, {
+    const login = await request.post(`${e2eServerOrigin()}/api/v1/auth/login`, {
       data: { handle: 'admin', password: password! },
     })
     expect(login.ok()).toBeTruthy()
-    const caps = await request.get(`${apiBase}/api/v1/runner/capabilities`)
+    const caps = await request.get(`${e2eServerOrigin()}/api/v1/runner/capabilities`)
     expect(caps.ok()).toBeTruthy()
     const json = (await caps.json()) as { pipeline_executor: string; note: string }
     expect(json.pipeline_executor).toMatch(/inprocess|remote/)
