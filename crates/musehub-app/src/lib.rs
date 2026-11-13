@@ -18,6 +18,7 @@ mod deployment;
 mod error;
 mod git_http;
 pub mod git_ssh;
+pub mod git_ssh_pack_privilege;
 pub mod git_ssh_runtime;
 mod grants;
 mod hooks;

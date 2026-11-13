@@ -79,6 +79,55 @@ fn git_ssh_akc_user() -> String {
     env::var("MUSEHUB_GIT_SSH_AKC_USER").unwrap_or_else(|_| GIT_SSH_LOGIN_USER.to_string())
 }
 
+#[cfg(unix)]
+fn validate_cap_setgid_target(bin: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(bin).map_err(|e| e.to_string())?;
+    if meta.uid() != 0 {
+        return Err(format!(
+            "{} must be root-owned before setcap",
+            bin.display()
+        ));
+    }
+    let mode = meta.mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "{} must not be group/world writable before setcap",
+            bin.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_cap_setgid_on_gateway(bin: &Path) -> Result<(), String> {
+    validate_cap_setgid_target(bin)?;
+    let path = bin.to_str().ok_or("gateway binary path")?;
+    musehub_app::git_ssh_runtime::run_privileged("setcap", &["cap_setgid+ep", path])
+        .map_err(|e| format!("setcap cap_setgid+ep on {path}: {e}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_staged_gateway_copy(staged: &Path) -> Result<(), String> {
+    let staged_s = staged.to_str().ok_or("staged gateway path")?;
+    if !is_root_euid() {
+        run_privileged(
+            "bash",
+            &[
+                "-c",
+                &format!("chown root:root {staged_s} && chmod 755 {staged_s}"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+    validate_cap_setgid_target(staged)
+}
+
 const GIT_LOGIN_SHELL: &str = "/usr/local/lib/musehub/musehub-git-login.sh";
 
 const DEFAULT_RUNTIME_ENV: &str = "/var/lib/musehub/git-ssh/runtime.env";
@@ -188,6 +237,9 @@ async fn pool() -> Result<sqlx::PgPool, Box<dyn std::error::Error + Send + Sync>
 }
 
 async fn authorized_keys(args: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(unix)]
+    musehub_app::git_ssh_pack_privilege::drop_gateway_inherited_capabilities()
+        .map_err(|e| e.to_string())?;
     let ssh_user = args.first().ok_or("missing ssh user arg")?;
     assert_git_ssh_connection_user(ssh_user).map_err(|_| "invalid ssh user")?;
     let fingerprint = args.last().ok_or("missing fingerprint arg")?;
@@ -229,19 +281,25 @@ async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map_err(|_| "unknown key")?;
     let plan = git_ssh::plan_ssh_pack_gateway(&pool, &require_git_root(), auth.key_id, &original)
         .await
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "ssh pack plan failed");
+            "pack operation failed"
+        })?;
     // Release DB handles before blocking pack I/O (do not await graceful close — can stall).
     drop(pool);
     match git_ssh::execute_ssh_pack(&plan) {
         Ok(code) => std::process::exit(code),
-        Err(e) => {
-            eprintln!("{}", e);
+        Err(_) => {
+            eprintln!("{}", git_ssh::GIT_PACK_CLIENT_FAILURE);
             std::process::exit(1);
         }
     }
 }
 
 async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(unix)]
+    musehub_app::git_ssh_pack_privilege::drop_gateway_inherited_capabilities()
+        .map_err(|e| e.to_string())?;
     let port: u16 = port_arg
         .and_then(|p| p.parse().ok())
         .or_else(|| {
@@ -273,20 +331,11 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     }
     #[cfg(unix)]
     {
-        let _ = musehub_app::git_ssh_runtime::run_privileged(
-            "setcap",
-            &[
-                "cap_setgid+ep",
-                pinned_gateway_bin().to_str().unwrap_or(PINNED_GATEWAY_BIN),
-            ],
-        );
-        let staged_s = staged_bin.to_str().unwrap_or("");
-        if !staged_s.is_empty() {
-            let _ = musehub_app::git_ssh_runtime::run_privileged(
-                "setcap",
-                &["cap_setgid+ep", staged_s],
-            );
+        harden_staged_gateway_copy(&staged_bin)?;
+        if pinned_gateway_bin().exists() {
+            apply_cap_setgid_on_gateway(&pinned_gateway_bin())?;
         }
+        apply_cap_setgid_on_gateway(&staged_bin)?;
     }
     let db_url = require_database_url()?;
     let git_root = require_git_root();

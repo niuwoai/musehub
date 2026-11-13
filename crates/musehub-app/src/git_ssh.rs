@@ -18,6 +18,9 @@ use uuid::Uuid;
 use crate::audit;
 use crate::error::AppError;
 use crate::git_http::bare_repo_path;
+use crate::git_ssh_pack_privilege::{
+    receive_pack_child_privilege_setup, resolve_trusted_storage_group_gid,
+};
 use crate::git_ssh_runtime::git_storage_group;
 use crate::grants;
 use crate::ssh_keys::sanitize_stored_ssh_public_key;
@@ -330,13 +333,24 @@ pub async fn run_ssh_gateway(
 /// Runs `upload-pack` / `receive-pack` after the DB pool is released (may block for pack I/O).
 pub fn execute_ssh_pack(plan: &SshPackPlan) -> Result<i32, AppError> {
     if plan.service == "receive-pack" {
-        eprintln!("musehub gateway: receive-pack {}", plan.bare.display());
+        tracing::debug!(bare = %plan.bare.display(), "ssh receive-pack");
     }
-    run_git_pack_inherit(&plan.bare, &plan.service)
+    run_git_pack_inherit(&plan.bare, &plan.service).map_err(|e| {
+        tracing::error!(
+            error = %e,
+            bare = %plan.bare.display(),
+            service = %plan.service,
+            "git pack failed"
+        );
+        AppError::Other("pack operation failed".into())
+    })
 }
 
+/// Client-visible git pack failures (no repository paths or group names).
+pub const GIT_PACK_CLIENT_FAILURE: &str = "fatal: pack operation failed";
+
 /// How product SSH pack helpers run git (tested to prevent login-shell env drift).
-/// Receive-pack carries the storage group via `setegid` in the child (not `sg`), avoiding
+/// Receive-pack carries the storage GID via `setresgid` in the child (not `sg`), avoiding
 /// no-TTY hangs in CI acceptance.
 pub(crate) fn git_pack_exec_plan(service: &str) -> (&'static str, Option<String>) {
     if service == "receive-pack" {
@@ -344,59 +358,6 @@ pub(crate) fn git_pack_exec_plan(service: &str) -> (&'static str, Option<String>
     } else {
         ("git", None)
     }
-}
-
-/// Probes `sg` for receive-pack without a TTY; fails fast when the group is missing or unusable.
-#[cfg(unix)]
-fn validate_sg_storage_group(group: &str) -> Result<(), AppError> {
-    let exists = Command::new("getent")
-        .args(["group", group])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !exists {
-        return Err(AppError::Other(format!(
-            "storage group {group} missing — create it and add user git (usermod -aG {group} git)"
-        )));
-    }
-    let probe = Command::new("sg")
-        .args([group, "-c", "true"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .status()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if probe.success() {
-        return Ok(());
-    }
-    Err(AppError::Other(format!(
-        "cannot run sg {group} for receive-pack — ensure git is a member of {group}"
-    )))
-}
-
-#[cfg(not(unix))]
-fn validate_sg_storage_group(_group: &str) -> Result<(), AppError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn storage_group_gid(group: &str) -> Result<libc::gid_t, AppError> {
-    let out = Command::new("getent")
-        .args(["group", group])
-        .output()
-        .map_err(|e| AppError::Other(e.to_string()))?;
-    if !out.status.success() {
-        return Err(AppError::Other(format!("storage group {group} missing")));
-    }
-    let line = String::from_utf8_lossy(&out.stdout);
-    let gid = line
-        .split(':')
-        .nth(2)
-        .and_then(|s| s.trim().parse::<libc::gid_t>().ok())
-        .ok_or_else(|| AppError::Other(format!("getent group {group} invalid")))?;
-    Ok(gid)
 }
 
 /// `receive-pack` writes refs with the storage GID (HTTP uses `sg` http-backend).
@@ -410,18 +371,19 @@ fn run_git_pack_inherit(bare: &Path, service: &str) -> Result<i32, AppError> {
         .arg("core.sharedRepository=group")
         .arg(service)
         .arg(bare);
-    if let Some(g) = storage_group.as_deref() {
-        validate_sg_storage_group(g)?;
+    if storage_group.is_some() {
         #[cfg(unix)]
         {
-            let gid = storage_group_gid(g)?;
+            let gid = resolve_trusted_storage_group_gid()?;
+            let configured = git_storage_group();
+            let plan_group = storage_group.as_deref().unwrap_or("");
+            if !plan_group.eq_ignore_ascii_case(&configured) {
+                return Err(AppError::Other(format!(
+                    "storage group mismatch: plan {plan_group} vs configured {configured}"
+                )));
+            }
             unsafe {
-                cmd.pre_exec(move || {
-                    if libc::setegid(gid) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
+                cmd.pre_exec(move || receive_pack_child_privilege_setup(gid));
             }
         }
     }
