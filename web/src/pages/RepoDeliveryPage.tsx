@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { paths } from '../app/paths'
-import { getPipelineJobLogs, type PipelineJob } from '../api'
+import { getPipelineJobLogs, listReleases, type PipelineJob, type ReleaseSummary } from '../api'
 
 export function RepoDeliveryPage() {
   const ws = useWorkspace()
@@ -12,6 +12,9 @@ export function RepoDeliveryPage() {
   const [jobLogText, setJobLogText] = useState<string | null>(null)
   const [jobLogKey, setJobLogKey] = useState<string | null>(null)
   const [jobLogError, setJobLogError] = useState<string | null>(null)
+  const [releases, setReleases] = useState<ReleaseSummary[]>([])
+  const [releasesLoading, setReleasesLoading] = useState(false)
+  const [releasesError, setReleasesError] = useState<string | null>(null)
   const {
     t,
     activeOrg,
@@ -38,6 +41,21 @@ export function RepoDeliveryPage() {
     onPickDeploymentFromList,
     onFocusPipelineRun,
   } = ws
+
+  useEffect(() => {
+    if (!selectedRepo) return
+    setReleasesLoading(true)
+    setReleasesError(null)
+    void listReleases(activeOrg, selectedRepo)
+      .then((rows) => setReleases(rows))
+      .catch((err) => {
+        setReleases([])
+        setReleasesError(
+          err instanceof Error ? err.message : t('app.releasesLoadFailed'),
+        )
+      })
+      .finally(() => setReleasesLoading(false))
+  }, [activeOrg, selectedRepo, publishedReleaseId, pipelineRun?.id, t])
 
   useEffect(() => {
     if (!selectedRepo) return
@@ -89,6 +107,33 @@ export function RepoDeliveryPage() {
       <p style={{ color: '#9a6700' }} data-testid="delivery-mode-note">
         {t('app.deliveryModeNote')}
       </p>
+      <section data-testid="delivery-releases">
+        <h4>{t('app.releasesTitle')}</h4>
+        {releasesLoading ? (
+          <p role="status" data-testid="delivery-releases-loading">
+            {t('common.loading')}
+          </p>
+        ) : null}
+        {releasesError ? (
+          <p role="alert" data-testid="delivery-releases-error">
+            {releasesError}
+          </p>
+        ) : null}
+        {!releasesLoading && !releasesError && releases.length === 0 ? (
+          <p role="status" data-testid="delivery-releases-empty">
+            {t('app.releasesEmpty')}
+          </p>
+        ) : null}
+        {!releasesLoading && !releasesError && releases.length > 0 ? (
+          <ul data-testid="delivery-release-list">
+            {releases.map((rel) => (
+              <li key={rel.id} data-testid={`release-row-${rel.tag_name}`}>
+                <code>{rel.tag_name}</code> @{rel.commit_oid.slice(0, 7)} — {rel.state}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
       {mergedPr?.head_oid ? (
         <>
           <p>

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { randomUUID } from 'crypto'
 
+import { createIssueViaUi } from './helpers/issues'
 import { expectLoggedInAs } from './helpers/session'
 import {
   createRepoViaUi,
@@ -27,7 +28,7 @@ async function prepareRepoWithAcceptedPlan(page: import('@playwright/test').Page
   await waitForDemoRepoNavHydrated(page)
   const { slug } = await createRepoViaUi(page)
   await openRepoBySlug(page, slug)
-  await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
+  await createIssueViaUi(page, 'agent cancel fixture', { slug })
   const planAccepted = page.waitForResponse(
     (r) =>
       r.url().includes(`/repos/${slug}/issues/`) &&

@@ -16,7 +16,6 @@ import {
   acceptPlan,
   AgentRun,
   cancelAgentRun,
-  createIssue,
   createPlan,
   createPullRequest,
   createRelease,
@@ -159,7 +158,6 @@ export type WorkspaceValue = {
   loadIssues: (slug: string, preservePrNumber?: number) => Promise<void>
   refreshRepos: () => Promise<void>
   selectRepo: (slug: string) => void
-  onCreateIssue: () => Promise<Issue | null>
   onAcceptPlan: (issue: Issue) => Promise<void>
   onRunAgent: (issue: Issue) => Promise<void>
   onCancelRun: () => Promise<void>
@@ -972,13 +970,6 @@ function useWorkspaceState(): WorkspaceValue {
     }
   }
 
-  async function onCreateIssue() {
-    if (!selectedRepo) return null
-    const created = await createIssue(activeOrg, selectedRepo, 'Slice issue')
-    await loadIssues(selectedRepo)
-    return created
-  }
-
   async function onAcceptPlan(issue: Issue) {
     if (!selectedRepo) return
     await createPlan(activeOrg, selectedRepo, issue.number, 'UI plan draft')
@@ -1616,7 +1607,6 @@ function useWorkspaceState(): WorkspaceValue {
     loadIssues,
     refreshRepos,
     selectRepo,
-    onCreateIssue,
     onAcceptPlan,
     onRunAgent,
     onCancelRun,

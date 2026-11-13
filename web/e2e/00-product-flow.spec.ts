@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { expectLoggedInAs } from './helpers/session'
+import { createIssueViaUi } from './helpers/issues'
 import {
   createRepoViaUi,
   expectResponseOk,
@@ -27,14 +28,7 @@ test.describe('product slice browser flow', () => {
     const { slug } = await createRepoViaUi(page)
     await openRepoBySlug(page, slug)
 
-    const issueCreate = page.waitForResponse(
-      (r) =>
-        r.url().includes(`/repos/${slug}/issues`) &&
-        r.request().method() === 'POST' &&
-        r.ok(),
-    )
-    await page.getByTestId('create-issue').click()
-    await issueCreate
+    await createIssueViaUi(page, 'product slice acceptance', { slug })
     await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
 
     const planCreate = page.waitForResponse(

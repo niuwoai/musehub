@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createIssueViaUi } from './helpers/issues'
 import { apiJson } from './helpers/s1-api'
 import { createRepoViaUi, waitForDemoRepoNavHydrated } from './helpers/repo'
 import { loginAsAdmin } from './helpers/session'
@@ -13,7 +14,7 @@ test.describe('Issue delivery console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await page.getByTestId('create-issue').click()
+    await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await page.getByTestId('issue-link-1').click()
     await expect(page.getByTestId('issue-assignee')).toBeVisible()
     await expect(page.getByTestId('issue-assignee')).toContainText('admin')
@@ -47,7 +48,7 @@ test.describe('Issue delivery console', () => {
       role: 'maintainer',
     })
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await page.getByTestId('create-issue').click()
+    await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await page.getByTestId('issue-link-1').click()
     const assignee = page.getByTestId('issue-assignee')
     await expect(assignee).toContainText('admin')
@@ -64,7 +65,7 @@ test.describe('Issue delivery console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await page.getByTestId('create-issue').click()
+    await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await page.getByTestId('issue-link-1').click()
     await page.getByTestId('issue-mark-in-progress').click()
     await expect(page.getByTestId('issue-detail-state')).toContainText(/in_progress|进行中/i)
@@ -85,7 +86,7 @@ test.describe('Issue delivery console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await page.getByTestId('create-issue').click()
+    await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await page.getByTestId('issue-link-1').click()
     await page.getByTestId('issue-assignee').selectOption('admin')
     await page.getByTestId('issue-save-meta').click()
@@ -116,7 +117,7 @@ test.describe('Issue delivery console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
-    await page.getByTestId('create-issue').click()
+    await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('issue-state-1')).toHaveText('open')
   })

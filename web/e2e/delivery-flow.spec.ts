@@ -2,6 +2,7 @@ import { expect, request as playwrightRequest, test } from '@playwright/test'
 import { randomUUID } from 'crypto'
 
 import { expectMergedPullOnPullsPage, refreshRepoAndOpenDelivery } from './helpers/delivery'
+import { createIssueViaUi } from './helpers/issues'
 import { goRepoPulls } from './helpers/navigation'
 import {
   createRepoViaUi,
@@ -15,6 +16,24 @@ const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
 const apiBase = () => e2eBrowserApiOrigin()
 const serverApi = () => e2eServerOrigin()
 
+/** Wall-clock budget = fixed UI steps + sequential segment waits in this spec. */
+function deliveryFlowTestTimeoutMs(productOci: boolean): number {
+  const agentStartWaitMs = 120_000
+  const agentFinishWaitMs = productOci ? 300_000 : 180_000
+  const pipelineTimeout = productOci ? 300_000 : 120_000
+  const traceTimeout = productOci ? 240_000 : 90_000
+  const composeTraceTimeout = productOci ? 120_000 : 60_000
+  const fixedOverheadMs = 180_000
+  return (
+    fixedOverheadMs +
+    agentStartWaitMs +
+    agentFinishWaitMs +
+    pipelineTimeout +
+    traceTimeout +
+    composeTraceTimeout
+  )
+}
+
 test.describe('delivery chain browser flow', () => {
   test.skip(
     !password,
@@ -25,7 +44,7 @@ test.describe('delivery chain browser flow', () => {
     page,
   }) => {
     const productOci = process.env.MUSEHUB_PRODUCT_OCI_E2E === '1'
-    test.setTimeout(productOci ? 600_000 : 300_000)
+    test.setTimeout(deliveryFlowTestTimeoutMs(productOci))
     const reviewerPass = 'E2e-Reviewer-Delivery-12!'
     const ciPass = 'E2e-Ci-Delivery-12!'
 
@@ -53,7 +72,7 @@ test.describe('delivery chain browser flow', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await openRepoBySlug(page, slug)
-    await page.getByRole('button', { name: /create issue|创建 issue/i }).click()
+    await createIssueViaUi(page, 'delivery chain fixture', { slug })
     await page.getByRole('button', { name: /accept plan|接受计划/i }).first().click()
     const runAgent = page.getByRole('button', { name: /run agent|运行/i }).first()
     await expect(runAgent).toBeVisible({ timeout: 15_000 })

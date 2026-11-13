@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
-import { listIssueAssignees, listIssuesPage, type Issue } from '../api'
+import { createIssue, listIssueAssignees, listIssuesPage, type Issue } from '../api'
 
 function issueMatchesFilters(
   issue: Issue,
@@ -16,7 +16,7 @@ function issueMatchesFilters(
 }
 
 export function RepoIssuesPage() {
-  const { org = DEFAULT_ORG } = useParams<{ org: string }>()
+  const { org = DEFAULT_ORG, slug: routeSlug } = useParams<{ org: string; slug?: string }>()
   const envLimit = import.meta.env.VITE_E2E_ISSUE_PAGE_LIMIT
   const pageLimit = Math.min(
     100,
@@ -24,16 +24,16 @@ export function RepoIssuesPage() {
   )
   const {
     t,
-    selectedRepo,
+    selectedRepo: workspaceRepo,
     lastRun,
     agentRunStarting,
-    onCreateIssue,
     onAcceptPlan,
     onRunAgent,
     onCancelRun,
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
+  const selectedRepo = workspaceRepo ?? routeSlug ?? null
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -44,6 +44,8 @@ export function RepoIssuesPage() {
   const [listNotice, setListNotice] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
+  const [newIssueTitle, setNewIssueTitle] = useState('')
+  const [newIssueAssignee, setNewIssueAssignee] = useState('')
 
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
@@ -94,10 +96,21 @@ export function RepoIssuesPage() {
     void loadAssigneeOptions()
   }, [selectedRepo, loadAssigneeOptions])
 
+  const canCreateIssue = newIssueTitle.trim().length > 0 && Boolean(selectedRepo)
+
   async function handleCreateIssue() {
+    const title = newIssueTitle.trim()
+    if (!title || !selectedRepo) {
+      setListError(t('issues.titleRequired'))
+      return
+    }
     setListError(null)
     setListNotice(null)
-    const created = await onCreateIssue()
+    const created = await createIssue(org, selectedRepo, title, {
+      assignee_handle: newIssueAssignee.trim() || undefined,
+    })
+    setNewIssueTitle('')
+    setNewIssueAssignee('')
     if (!created || !selectedRepo) return
     if (issueMatchesFilters(created, filters)) {
       setItems((prev) => {
@@ -181,7 +194,30 @@ export function RepoIssuesPage() {
       <button type="button" data-testid="refresh-repo" onClick={() => void refreshAll()}>
         {t('app.refreshRepo')}
       </button>
-      <button type="button" data-testid="create-issue" onClick={() => void handleCreateIssue()}>
+      <input
+        data-testid="issue-create-title"
+        placeholder={t('issues.newTitlePlaceholder')}
+        value={newIssueTitle}
+        onChange={(e) => setNewIssueTitle(e.target.value)}
+      />
+      <select
+        data-testid="issue-create-assignee"
+        value={newIssueAssignee}
+        onChange={(e) => setNewIssueAssignee(e.target.value)}
+      >
+        <option value="">{t('issues.filterAny')}</option>
+        {assigneeOptions.map((handle) => (
+          <option key={handle} value={handle}>
+            {handle}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        data-testid="create-issue"
+        disabled={!canCreateIssue}
+        onClick={() => void handleCreateIssue()}
+      >
         {t('app.createIssue')}
       </button>
       {listError ? <p role="alert">{listError}</p> : null}
