@@ -9,9 +9,10 @@ use musehub_app::git_ssh::{
     write_authorized_keys_stdout, GIT_SSH_LOGIN_USER,
 };
 use musehub_app::git_ssh_runtime::{
-    default_git_ssh_run_dir, ensure_host_ed25519_key, ensure_shared_git_storage_root,
-    finalize_git_ssh_run_dir, git_ssh_runtime_group, git_storage_group, is_root_euid,
-    prepare_git_ssh_run_dir, run_privileged, validate_git_ssh_runtime_readable,
+    apply_cap_setgid_on_gateway, default_git_ssh_run_dir, ensure_host_ed25519_key,
+    ensure_shared_git_storage_root, finalize_git_ssh_run_dir, git_ssh_runtime_group,
+    git_storage_group, is_root_euid, prepare_git_ssh_run_dir, prepare_git_ssh_server_log,
+    run_privileged, validate_cap_setgid_gateway_file, validate_git_ssh_runtime_readable,
     write_git_ssh_runtime_env, write_secure_file,
 };
 use musehub_app::ssh_keys::fingerprint_public_key_canonical;
@@ -29,7 +30,7 @@ impl Write for ServerTracingWriter {
         if let Ok(path) = env::var(SERVER_LOG_ENV) {
             let path = path.trim();
             if !path.is_empty() {
-                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+                if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
                     return f.write(buf);
                 }
             }
@@ -116,59 +117,6 @@ fn git_ssh_akc_user() -> String {
 }
 
 #[cfg(unix)]
-fn validate_cap_setgid_target(bin: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(bin).map_err(|e| e.to_string())?;
-    if meta.uid() != 0 {
-        return Err(format!(
-            "{} must be root-owned before setcap",
-            bin.display()
-        ));
-    }
-    let mode = meta.mode() & 0o777;
-    if mode & 0o022 != 0 {
-        return Err(format!(
-            "{} must not be group/world writable before setcap",
-            bin.display()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn apply_cap_setgid_on_gateway(bin: &Path) -> Result<(), String> {
-    use std::fs;
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    let meta_before = fs::metadata(bin).map_err(|e| e.to_string())?;
-    let ino_before = meta_before.ino();
-    validate_cap_setgid_target(bin)?;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(bin)
-        .map_err(|e| e.to_string())?;
-    let fd = file.as_raw_fd();
-    let mut st_fd = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe { libc::fstat(fd, st_fd.as_mut_ptr()) } != 0 {
-        return Err("fstat staged gateway failed".into());
-    }
-    let st_fd = unsafe { st_fd.assume_init() };
-    if st_fd.st_ino != ino_before {
-        return Err("gateway path inode changed before setcap".into());
-    }
-    let path = bin.to_str().ok_or("gateway binary path")?;
-    musehub_app::git_ssh_runtime::run_privileged("setcap", &["cap_setgid+ep", path])
-        .map_err(|e| format!("setcap cap_setgid+ep on {path}: {e}"))?;
-    let meta_after = fs::metadata(bin).map_err(|e| e.to_string())?;
-    if meta_after.ino() != ino_before || meta_after.uid() != 0 {
-        return Err("gateway binary changed after setcap".into());
-    }
-    validate_cap_setgid_target(bin)
-}
-
-#[cfg(unix)]
 fn harden_staged_gateway_copy(staged: &Path) -> Result<(), String> {
     let staged_s = staged.to_str().ok_or("staged gateway path")?;
     if !is_root_euid() {
@@ -179,7 +127,7 @@ fn harden_staged_gateway_copy(staged: &Path) -> Result<(), String> {
         std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
     }
-    validate_cap_setgid_target(staged)
+    validate_cap_setgid_gateway_file(staged).map_err(|e| e.to_string())
 }
 
 const GIT_LOGIN_SHELL: &str = "/usr/local/lib/musehub/musehub-git-login.sh";
@@ -387,9 +335,9 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     {
         harden_staged_gateway_copy(&staged_bin)?;
         if pinned_gateway_bin().exists() {
-            apply_cap_setgid_on_gateway(&pinned_gateway_bin())?;
+            apply_cap_setgid_on_gateway(&pinned_gateway_bin()).map_err(|e| e.to_string())?;
         }
-        apply_cap_setgid_on_gateway(&staged_bin)?;
+        apply_cap_setgid_on_gateway(&staged_bin).map_err(|e| e.to_string())?;
     }
     let db_url = require_database_url()?;
     let git_root = require_git_root();
@@ -401,6 +349,7 @@ async fn serve(port_arg: Option<&str>) -> Result<(), Box<dyn std::error::Error +
     let packaging_synthetic = env::var("MUSEHUB_GIT_SSH_PACKAGING_SYNTHETIC_SECRET").ok();
     let storage_group = git_storage_group();
     let server_log = run_dir.join("musehub-git-ssh.log");
+    prepare_git_ssh_server_log(&server_log).map_err(|e| e.to_string())?;
     let server_log_s = server_log.to_str().ok_or("server log path")?.to_string();
     let mut runtime_vars: Vec<(&str, &str)> = vec![
         ("DATABASE_URL", &db_url),

@@ -18,7 +18,7 @@ pub fn append_server_log(line: &str) {
         return;
     }
     let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
         let _ = writeln!(f, "{line}");
     }
 }

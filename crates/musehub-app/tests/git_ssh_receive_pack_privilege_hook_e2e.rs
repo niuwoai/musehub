@@ -137,10 +137,14 @@ async fn receive_pack_hook_sees_zero_caps_and_storage_gid() {
         .find(|l| l.starts_with("Gid:"))
         .expect("Gid line in probe");
     let gid_parts: Vec<&str> = gid_line.split_whitespace().collect();
-    assert_eq!(gid_parts.len(), 4, "Gid line fields: {gid_line}");
+    assert_eq!(
+        gid_parts.len(),
+        5,
+        "Gid line needs label + real/effective/saved/fs: {gid_line}"
+    );
     assert!(
-        gid_parts[1..4].iter().all(|&g| g == musehub_gid.as_str()),
-        "Gid r/e/s must all be storage gid {musehub_gid}: {gid_line}"
+        gid_parts[1..5].iter().all(|&g| g == musehub_gid.as_str()),
+        "Gid real/effective/saved/fs must all be storage gid {musehub_gid}: {gid_line}"
     );
     let groups_line = body
         .lines()

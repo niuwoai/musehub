@@ -300,6 +300,155 @@ pub fn run_privileged(_command: &str, _args: &[&str]) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Pre-create append-only server log under a validated run dir (git group can write).
+#[cfg(unix)]
+pub fn prepare_git_ssh_server_log(path: &Path) -> Result<(), AppError> {
+    reject_symlink_path(path)?;
+    if let Some(parent) = path.parent() {
+        reject_symlink_path(parent)?;
+        validate_secure_ancestor_chain(parent)?;
+    }
+    if !path.exists() {
+        write_secure_file(path, b"").map_err(|e| AppError::Other(e.to_string()))?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o660))
+            .map_err(|e| AppError::Other(e.to_string()))?;
+        chown_root_group(path, &git_ssh_runtime_group())?;
+    }
+    reject_symlink_path(path)?;
+    use std::os::unix::fs::PermissionsExt;
+    let meta = fs::metadata(path).map_err(|e| AppError::Other(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(AppError::Validation(
+            "server log must be a regular file".into(),
+        ));
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o002 != 0 {
+        return Err(AppError::Validation(
+            "server log must not be world-writable".into(),
+        ));
+    }
+    if mode & 0o040 == 0 {
+        return Err(AppError::Validation(
+            "server log must be group-writable for git transport".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn prepare_git_ssh_server_log(_path: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_cap_setgid_target_meta(meta: &fs::Metadata) -> Result<(), AppError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if meta.uid() != 0 {
+        return Err(AppError::Validation(
+            "gateway binary must be root-owned before setcap".into(),
+        ));
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Err(AppError::Validation(
+            "gateway binary must not be group/world writable before setcap".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn validate_cap_setgid_gateway_file(bin: &Path) -> Result<(), AppError> {
+    let meta = fs::symlink_metadata(bin).map_err(|e| AppError::Other(e.to_string()))?;
+    if meta.file_type().is_symlink() {
+        return Err(AppError::Validation(
+            "gateway binary path must not be a symlink".into(),
+        ));
+    }
+    if !meta.is_file() {
+        return Err(AppError::Validation("gateway binary must be a file".into()));
+    }
+    validate_cap_setgid_target_meta(&meta)
+}
+
+/// Apply `cap_setgid+ep` under `flock` while holding an `O_NOFOLLOW` open fd (inode-checked).
+#[cfg(unix)]
+pub fn apply_cap_setgid_on_gateway(bin: &Path) -> Result<(), AppError> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    reject_symlink_path(bin)?;
+    validate_secure_ancestor_chain(bin)?;
+    let meta_before = fs::symlink_metadata(bin).map_err(|e| AppError::Other(e.to_string()))?;
+    validate_cap_setgid_target_meta(&meta_before)?;
+    let ino_before = meta_before.ino();
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(bin)
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    let fd = file.as_raw_fd();
+    let mut st_fd = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe { libc::fstat(fd, st_fd.as_mut_ptr()) } != 0 {
+        return Err(AppError::Other("fstat gateway fd failed".into()));
+    }
+    let st_fd = unsafe { st_fd.assume_init() };
+    if st_fd.st_ino != ino_before {
+        return Err(AppError::Validation(
+            "gateway inode changed before setcap".into(),
+        ));
+    }
+    let path = bin
+        .to_str()
+        .ok_or_else(|| AppError::Other("gateway path utf8".into()))?;
+    unsafe {
+        if libc::flock(fd, libc::LOCK_SH) != 0 {
+            return Err(AppError::Other("flock gateway before setcap failed".into()));
+        }
+    }
+    let cap_ok = if is_root_euid() {
+        Command::new("setcap")
+            .args(["cap_setgid+ep", path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        run_privileged("setcap", &["cap_setgid+ep", path]).is_ok()
+    };
+    unsafe {
+        libc::flock(fd, libc::LOCK_UN);
+    }
+    if !cap_ok {
+        return Err(AppError::Other("setcap cap_setgid+ep failed".into()));
+    }
+    let getcap = Command::new("getcap")
+        .arg(path)
+        .output()
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    if !getcap.status.success() || !String::from_utf8_lossy(&getcap.stdout).contains("cap_setgid") {
+        return Err(AppError::Other("getcap did not show cap_setgid".into()));
+    }
+    let meta_after = fs::symlink_metadata(bin).map_err(|e| AppError::Other(e.to_string()))?;
+    if meta_after.ino() != ino_before {
+        return Err(AppError::Validation(
+            "gateway path inode changed after setcap".into(),
+        ));
+    }
+    validate_cap_setgid_target_meta(&meta_after)
+}
+
+#[cfg(not(unix))]
+pub fn validate_cap_setgid_gateway_file(_bin: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn apply_cap_setgid_on_gateway(_bin: &Path) -> Result<(), AppError> {
+    Ok(())
+}
+
 /// Run `sh -c` as an unprivileged login user (su when root, else sudo -u).
 #[cfg(unix)]
 fn run_sh_as_user(user: &str, shell_cmd: &str) -> Result<bool, AppError> {
@@ -951,6 +1100,28 @@ pub fn write_secure_file(path: &Path, body: &[u8]) -> Result<(), io::Error> {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod git_ssh_cap_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn setcap_rejects_symlink_gateway_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("musehub-git-ssh-real");
+        std::fs::write(&real, b"\x7fELF\n").expect("write");
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let link = dir.path().join("musehub-git-ssh");
+        symlink(&real, &link).expect("symlink");
+        let err = validate_cap_setgid_gateway_file(&link).expect_err("symlink");
+        assert!(
+            err.to_string().contains("symlink"),
+            "expected symlink rejection, got {err}"
+        );
+    }
 }
 
 #[cfg(all(test, unix))]

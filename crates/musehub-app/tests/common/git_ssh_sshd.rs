@@ -339,21 +339,7 @@ pub fn install_root_owned_git_ssh_bin(gateway_bin: &std::path::Path) -> std::pat
         status.success(),
         "sudo install musehub-git-ssh to /usr/local/bin required for AKC ownership"
     );
-    if Command::new("which")
-        .arg("setcap")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        let cap = Command::new("sudo")
-            .args(["setcap", "cap_setgid+ep", dest.to_str().expect("dest")])
-            .status();
-        assert!(
-            cap.map(|s| s.success()).unwrap_or(false),
-            "cap_setgid+ep on musehub-git-ssh required for receive-pack without sg stdin hang"
-        );
-    }
+    musehub_app::git_ssh_runtime::apply_cap_setgid_on_gateway(&dest)
+        .expect("cap_setgid+ep on musehub-git-ssh required for receive-pack");
     dest
 }

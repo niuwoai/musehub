@@ -1189,7 +1189,6 @@ dependencies = [
 name = "musehub-git-ssh"
 version = "0.1.0-rc4"
 dependencies = [
- "libc",
  "musehub-app",
  "musehub-core",
  "sqlx",
