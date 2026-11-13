@@ -95,7 +95,14 @@
   },
   "orgSettings": {
     "displayName": "Org display name",
-    "save": "Save org settings"
+    "defaultCollaboratorRole": "Default repository role for new grants",
+    "save": "Save org settings",
+    "saveFailed": "Could not save organization settings.",
+    "repoRole": {
+      "reader": "Reader",
+      "developer": "Developer",
+      "maintainer": "Maintainer"
+    }
   },
   "orgMembers": {
     "adminRequired": "Member admin requires org owner/admin.",
@@ -217,6 +224,12 @@
   "repoSettings": {
     "grantsTitle": "Repo grants",
     "grantReader": "Grant reader",
+    "grantSubmit": "Grant access",
+    "grantRole": "Repository role",
+    "grantHandlePlaceholder": "Member handle",
+    "grantFailed": "Could not grant repository access.",
+    "revokeGrant": "Revoke",
+    "revokeFailed": "Could not revoke grant.",
     "environmentsTitle": "Deployment environments",
     "approvalRequired": "approval required"
   }

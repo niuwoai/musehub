@@ -764,6 +764,13 @@ export async function grantRepoCollaborator(
   })
 }
 
+export async function revokeRepoGrant(org: string, repo: string, principalId: string) {
+  return api<void>(
+    `/api/v1/orgs/${org}/repos/${repo}/grants?principal_id=${encodeURIComponent(principalId)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function listRunnerTokens(org: string) {
   return api<RunnerTokenMasked[]>(`/api/v1/orgs/${org}/runner-tokens`)
 }

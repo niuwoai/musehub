@@ -20,6 +20,7 @@
 - `scripts/lib/sed-portable.sh`：macOS/Linux `sed_inplace`；生产安装与 runbook 验证复用。
 - **PR-01**（PR #39 草稿）：Pull sync CAS、no-op sync、MCP PR 锚点校验、`pr_anchor` 单测、控制台 stale 修订 UX。
 - **ISS 控制台复审**（PR #39）：列表 `label` trim/校验、负责人下拉刷新、审计 `resource_type` 筛选；相关 HTTP/Playwright。
+- **IAM 控制台**（PR #39）：组织默认仓库角色 UI；仓库设置授予角色选择 + 撤销 grant；`iam_grants_console_http_e2e` / `iam-grants-console.spec.ts`。
 
 ## [0.1.0-rc4]
 
