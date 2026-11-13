@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
-import { listIssuesPage, type Issue } from '../api'
+import { listIssueAssignees, listIssuesPage, type Issue } from '../api'
 
 function issueMatchesFilters(
   issue: Issue,
@@ -43,6 +43,7 @@ export function RepoIssuesPage() {
   const [listError, setListError] = useState<string | null>(null)
   const [listNotice, setListNotice] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
 
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
@@ -80,6 +81,13 @@ export function RepoIssuesPage() {
     if (!selectedRepo) return
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
   }, [selectedRepo, fetchPage, t])
+
+  useEffect(() => {
+    if (!selectedRepo) return
+    void listIssueAssignees(org, selectedRepo)
+      .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
+      .catch(() => setAssigneeOptions([]))
+  }, [org, selectedRepo])
 
   async function handleCreateIssue() {
     setListError(null)
@@ -119,12 +127,16 @@ export function RepoIssuesPage() {
       <div data-testid="issue-filters">
         <label>
           {t('issues.filterState')}
-          <input
+          <select
             data-testid="issue-filter-state"
             value={filterState}
             onChange={(e) => setFilterState(e.target.value)}
-            placeholder="open"
-          />
+          >
+            <option value="">{t('issues.filterAny')}</option>
+            <option value="open">open</option>
+            <option value="in_progress">in_progress</option>
+            <option value="closed">closed</option>
+          </select>
         </label>
         <label>
           {t('issues.filterLabel')}
@@ -136,11 +148,18 @@ export function RepoIssuesPage() {
         </label>
         <label>
           {t('issues.filterAssignee')}
-          <input
+          <select
             data-testid="issue-filter-assignee"
             value={filterAssignee}
             onChange={(e) => setFilterAssignee(e.target.value)}
-          />
+          >
+            <option value="">{t('issues.filterAny')}</option>
+            {assigneeOptions.map((handle) => (
+              <option key={handle} value={handle}>
+                {handle}
+              </option>
+            ))}
+          </select>
         </label>
         <button
           type="button"

@@ -133,6 +133,24 @@ export function IssueDetailPage() {
           </button>
         ) : (
           <>
+            {issue.state === 'in_progress' ? (
+              <button
+                type="button"
+                data-testid="issue-mark-open"
+                onClick={() => {
+                  setLifecycleError(null)
+                  void patchIssue(org, slug, issueNumber, { state: 'open' })
+                    .then(reload)
+                    .catch((err) =>
+                      setLifecycleError(
+                        err instanceof Error ? err.message : t('issueDetail.saveFailed'),
+                      ),
+                    )
+                }}
+              >
+                {t('issueDetail.markOpen')}
+              </button>
+            ) : null}
             {issue.state === 'open' ? (
               <button
                 type="button"

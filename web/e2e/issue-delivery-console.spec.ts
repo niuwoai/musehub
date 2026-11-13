@@ -59,6 +59,53 @@ test.describe('Issue delivery console', () => {
     await expect(page.getByTestId('issue-assignee-1')).toContainText(`@${member}`)
   })
 
+  test('list: in_progress filter and mark open', async ({ page }) => {
+    await loginAsAdmin(page, password!)
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await page.getByTestId('create-issue').click()
+    await page.getByTestId('issue-link-1').click()
+    await page.getByTestId('issue-mark-in-progress').click()
+    await expect(page.getByTestId('issue-detail-state')).toContainText(/in_progress|进行中/i)
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await page.getByTestId('issue-filter-state').selectOption('in_progress')
+    await page.getByTestId('issue-apply-filters').click()
+    await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('issue-filter-state').selectOption('open')
+    await page.getByTestId('issue-apply-filters').click()
+    await expect(page.getByTestId('issue-row-1')).toHaveCount(0)
+    await page.goto(`/org/demo/repos/${slug}/issues/1`)
+    await page.getByTestId('issue-mark-open').click()
+    await expect(page.getByTestId('issue-detail-state')).toContainText(/open/)
+  })
+
+  test('list: assignee filter', async ({ page }) => {
+    await loginAsAdmin(page, password!)
+    await waitForDemoRepoNavHydrated(page)
+    const { slug } = await createRepoViaUi(page)
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await page.getByTestId('create-issue').click()
+    await page.getByTestId('issue-link-1').click()
+    await page.getByTestId('issue-assignee').selectOption('admin')
+    await page.getByTestId('issue-save-meta').click()
+    await page.goto(`/org/demo/repos/${slug}/issues`)
+    await page.getByTestId('issue-filter-assignee').selectOption('admin')
+    await page.getByTestId('issue-apply-filters').click()
+    await expect(page.getByTestId('issue-row-1')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('issue-filter-assignee').selectOption('')
+    await page.getByTestId('issue-apply-filters').click()
+    const member = `e2e-filter-${Date.now()}`
+    await apiJson(page, 'POST', '/api/v1/orgs/demo/members', {
+      handle: member,
+      password: 'E2e-Filter-Member-12!',
+      role: 'member',
+    })
+    await page.getByTestId('issue-filter-assignee').selectOption(member)
+    await page.getByTestId('issue-apply-filters').click()
+    await expect(page.getByTestId('issue-row-1')).toHaveCount(0)
+  })
+
   test('list: state badge visible after create', async ({ page }) => {
     await loginAsAdmin(page, password!)
     await waitForDemoRepoNavHydrated(page)

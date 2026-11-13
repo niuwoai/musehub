@@ -136,6 +136,7 @@
   },
   "issues": {
     "filterState": "状态",
+    "filterAny": "全部",
     "filterLabel": "标签",
     "filterAssignee": "负责人",
     "applyFilters": "应用筛选",
@@ -182,6 +183,7 @@
     "closeIssue": "关闭 Issue",
     "reopenIssue": "重新打开",
     "markInProgress": "标记为进行中",
+    "markOpen": "标记为 open",
     "closeReasonRequired": "请填写关闭原因。",
     "closedAs": "已关闭：{{reason}}"
   },

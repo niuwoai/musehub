@@ -55,6 +55,14 @@ const MAX_LABEL_LEN: usize = 50;
 
 const MAX_CLOSE_REASON_LEN: usize = 200;
 
+pub(crate) fn validate_issue_list_state(state: &str) -> Result<(), AppError> {
+    if matches!(state, "open" | "closed" | "in_progress") {
+        Ok(())
+    } else {
+        Err(AppError::Validation("invalid state filter".into()))
+    }
+}
+
 pub(crate) fn validate_close_reason(reason: &str) -> Result<(), AppError> {
     if reason.is_empty() || reason.len() > MAX_CLOSE_REASON_LEN {
         return Err(AppError::Validation("invalid close_reason".into()));
@@ -198,6 +206,13 @@ pub async fn list_issues_page(
     let (org_id, repo_id) =
         super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
 
+    if let Some(s) = &q.state {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            validate_issue_list_state(trimmed)?;
+        }
+    }
+
     let mut cursor_number: Option<i64> = None;
     let mut cursor_id: Option<Uuid> = None;
     if let Some(c) = &q.cursor {
@@ -225,7 +240,7 @@ pub async fn list_issues_page(
          LIMIT $7",
     )
     .bind(repo_id)
-    .bind(q.state.as_deref())
+    .bind(q.state.as_deref().map(str::trim).filter(|s| !s.is_empty()))
     .bind(q.label.as_deref())
     .bind(assignee_id)
     .bind(cursor_number)
@@ -607,5 +622,13 @@ mod tests {
         assert!(validate_close_reason("completed").is_ok());
         assert!(validate_close_reason("").is_err());
         assert!(validate_close_reason(&"x".repeat(201)).is_err());
+    }
+
+    #[test]
+    fn issue_list_state_filter_validation() {
+        assert!(validate_issue_list_state("open").is_ok());
+        assert!(validate_issue_list_state("in_progress").is_ok());
+        assert!(validate_issue_list_state("closed").is_ok());
+        assert!(validate_issue_list_state("bogus").is_err());
     }
 }

@@ -131,6 +131,7 @@
   },
   "issues": {
     "filterState": "State",
+    "filterAny": "Any",
     "filterLabel": "Label",
     "filterAssignee": "Assignee",
     "applyFilters": "Apply filters",
@@ -177,6 +178,7 @@
     "closeIssue": "Close issue",
     "reopenIssue": "Reopen",
     "markInProgress": "Mark in progress",
+    "markOpen": "Mark open",
     "closeReasonRequired": "Enter a close reason.",
     "closedAs": "Closed: {{reason}}"
   },

@@ -236,6 +236,164 @@ async fn issue_criteria_environments_and_agent_respond_rest() {
     assert_eq!(in_progress_json["state"], "in_progress");
     assert!(in_progress_json["close_reason"].is_null());
 
+    let list_in_progress = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?state=in_progress"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_in_progress.status(), StatusCode::OK);
+    let in_prog_list = body_json(list_in_progress).await;
+    assert!(
+        in_prog_list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["number"] == 1),
+        "in_progress filter must return issue #1"
+    );
+
+    let bad_state = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?state=not-a-state"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_state.status(), StatusCode::BAD_REQUEST);
+
+    let bad_assignee = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?assignee=no-such-collaborator"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_assignee.status(), StatusCode::BAD_REQUEST);
+
+    let mark_open = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "state": "open" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mark_open.status(), StatusCode::OK);
+    assert_eq!(body_json(mark_open).await["state"], "open");
+
+    let list_open_after_progress = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues?state=open"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_open_after_progress.status(), StatusCode::OK);
+    assert!(body_json(list_open_after_progress).await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["number"] == 1));
+
+    let tag_issue = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/demo/repos/{repo}/issues/1"))
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "labels": ["v1-console"],
+                        "assignee_handle": "admin"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tag_issue.status(), StatusCode::OK);
+
+    let list_label = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?label=v1-console"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_label.status(), StatusCode::OK);
+    let list_label_json = body_json(list_label).await;
+    let label_items = list_label_json["items"].as_array().unwrap();
+    assert_eq!(label_items.len(), 1);
+    assert!(label_items[0]["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l == "v1-console"));
+
+    let list_assignee_admin = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/{repo}/issues?assignee=admin"
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_assignee_admin.status(), StatusCode::OK);
+    assert!(body_json(list_assignee_admin).await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["number"] == 1 && i["assignee_handle"] == "admin"));
+
     let reason_while_open = app
         .clone()
         .oneshot(
