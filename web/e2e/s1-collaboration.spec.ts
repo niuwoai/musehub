@@ -3,7 +3,11 @@ import fs from 'node:fs'
 import { expect, test } from '@playwright/test'
 import { createIssueViaUi } from './helpers/issues'
 import { loginAsAdmin } from './helpers/session'
-import { createRepoViaUi, waitForDemoRepoNavHydrated } from './helpers/repo'
+import {
+  createRepoViaUi,
+  waitForDemoRepoNavHydrated,
+  waitForRepoIssuesHydrated,
+} from './helpers/repo'
 import { apiJson, apiRaw } from './helpers/s1-api'
 import { gitPushBranch } from './helpers/s1-git-seed'
 import { mintGitPat, revokePat } from './helpers/s1-pat'
@@ -18,6 +22,7 @@ test.describe('S1 collaboration console', () => {
     await waitForDemoRepoNavHydrated(page)
     const { slug } = await createRepoViaUi(page)
     await page.goto(`/org/demo/repos/${slug}/issues`)
+    await waitForRepoIssuesHydrated(page)
     await createIssueViaUi(page, 'S1 pagination issue one', { slug })
     await expect(page.getByTestId('issue-link-1')).toBeVisible({ timeout: 15_000 })
     await createIssueViaUi(page, 'S1 pagination issue two', { slug })
@@ -25,6 +30,7 @@ test.describe('S1 collaboration console', () => {
     await createIssueViaUi(page, 'S1 pagination issue three', { slug })
     await expect(page.getByTestId('issue-link-3')).toBeVisible({ timeout: 15_000 })
     await page.goto(`/org/demo/repos/${slug}/issues`)
+    await waitForRepoIssuesHydrated(page)
     await expect(page.getByTestId('issue-row-3')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('issue-row-2')).toBeVisible()
     await expect(page.getByTestId('issue-row-1')).toHaveCount(0)
@@ -36,6 +42,7 @@ test.describe('S1 collaboration console', () => {
     await page.getByTestId('issue-link-2').click()
     await expect(page.getByTestId('issue-detail-title')).toBeVisible()
     await page.goto(`/org/demo/repos/${slug}/issues`)
+    await waitForRepoIssuesHydrated(page)
     await apiJson(page, 'PATCH', `/api/v1/orgs/demo/repos/${slug}/issues/1`, { labels: ['bug'] })
     await page.getByTestId('issue-filter-label').fill('bug')
     await page.getByTestId('issue-apply-filters').click()

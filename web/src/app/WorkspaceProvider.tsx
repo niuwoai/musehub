@@ -112,6 +112,9 @@ export type WorkspaceValue = {
   pipelineJobs: PipelineJob[]
   pipelineRetryBusy: boolean
   pipelineCancelBusy: boolean
+  publishReleaseBusy: boolean
+  repoContextTransitioning: boolean
+  activeRepoSlug: string | null
   deploymentId: string | null
   activeDeployment: Deployment | null
   publishedReleaseId: string | null
@@ -168,6 +171,7 @@ export type WorkspaceValue = {
   onRunDeliveryPipeline: () => Promise<void>
   onCancelPipelineRun: () => Promise<void>
   onRetryPipelineJob: (jobId: string) => Promise<void>
+  onPublishPipelineRelease: () => Promise<void>
   onReleaseAndDeploy: () => Promise<void>
   onDeployProduction: () => Promise<void>
   onRollbackToTarget: (targetDeploymentId: string) => Promise<void>
@@ -220,6 +224,7 @@ function useWorkspaceState(): WorkspaceValue {
   const [session, setSession] = useState<string | null>(null)
   const [repos, setRepos] = useState<Repository[]>([])
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
+  const [hydratingRepoSlug, setHydratingRepoSlug] = useState<string | null>(null)
   const [issues, setIssues] = useState<Issue[]>([])
   const [pulls, setPulls] = useState<PullRequest[]>([])
   const [prCiFailure, setPrCiFailure] = useState<PrCiFailure | null>(null)
@@ -237,6 +242,9 @@ function useWorkspaceState(): WorkspaceValue {
   const [pipelineJobs, setPipelineJobs] = useState<PipelineJob[]>([])
   const [pipelineRetryBusy, setPipelineRetryBusy] = useState(false)
   const [pipelineCancelBusy, setPipelineCancelBusy] = useState(false)
+  const [publishReleaseBusy, setPublishReleaseBusy] = useState(false)
+  const releaseDeliveryMutexRef = useRef(false)
+  const publishedForPipelineRef = useRef<string | null>(null)
   const pipelineRetryFlightRef = useRef<{ jobId: string; attemptId: string } | null>(null)
   const pipelinePollEpochRef = useRef(0)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
@@ -312,20 +320,74 @@ function useWorkspaceState(): WorkspaceValue {
     deploymentListModeRef.current = deploymentListMode
   }, [deploymentListMode])
 
+  const repoContextTransitioning = Boolean(
+    (repoSlugFromUrl &&
+      selectedRepo &&
+      repoSlugFromUrl !== selectedRepo) ||
+      (repoSlugFromUrl &&
+        hydratingRepoSlug === repoSlugFromUrl &&
+        selectedRepo !== repoSlugFromUrl),
+  )
+  const activeRepoSlug = repoSlugFromUrl ?? selectedRepo
+
+  function deliveryRepoSlug(): string | null {
+    return repoSlugFromUrl ?? selectedRepoRef.current
+  }
+
+  function deliveryRepoSynced(): boolean {
+    const urlRepo = repoSlugFromUrl
+    const selected = selectedRepoRef.current
+    if (!selected) {
+      return false
+    }
+    if (!urlRepo) {
+      return true
+    }
+    return urlRepo === selected
+  }
+
   function captureDeploymentOp(repoSlug?: string): DeploymentOpContext {
     return {
       sessionEpoch: sessionEpochRef.current,
       repoGeneration: repoDeliveryGenerationRef.current,
-      repo: repoSlug ?? selectedRepoRef.current ?? '',
+      repo: repoSlug ?? repoSlugFromUrl ?? selectedRepoRef.current ?? '',
     }
   }
 
   function deploymentOpActive(ctx: DeploymentOpContext): boolean {
+    const repoMatches =
+      selectedRepoRef.current === ctx.repo ||
+      (repoSlugFromUrl === ctx.repo && selectedRepoRef.current !== ctx.repo)
     return (
       sessionEpochRef.current === ctx.sessionEpoch &&
       repoDeliveryGenerationRef.current === ctx.repoGeneration &&
-      selectedRepoRef.current === ctx.repo
+      repoMatches &&
+      (!repoSlugFromUrl || repoSlugFromUrl === ctx.repo)
     )
+  }
+
+  function loadIssuesResultApplies(op: DeploymentOpContext, slug: string): boolean {
+    if (sessionEpochRef.current !== op.sessionEpoch) {
+      return false
+    }
+    if (repoSlugFromUrl && repoSlugFromUrl !== slug) {
+      return false
+    }
+    return deploymentOpActive(op) || repoSlugFromUrl === slug
+  }
+
+  function tryBeginReleaseDelivery(): boolean {
+    if (releaseDeliveryMutexRef.current) {
+      return false
+    }
+    releaseDeliveryMutexRef.current = true
+    setPublishReleaseBusy(true)
+    return true
+  }
+
+  function endReleaseDelivery() {
+    releaseDeliveryMutexRef.current = false
+    setPublishReleaseBusy(false)
   }
 
   function capturePipelineOp(pipelineRunId: string | null): PipelineOpContext {
@@ -355,6 +417,9 @@ function useWorkspaceState(): WorkspaceValue {
     setActiveDeployment(null)
     setDeploymentId(null)
     setPublishedReleaseId(null)
+    publishedForPipelineRef.current = null
+    releaseDeliveryMutexRef.current = false
+    setPublishReleaseBusy(false)
     setTrace(null)
     setDeploymentLookupId('')
     setDeploymentApprovalBusy(false)
@@ -502,6 +567,7 @@ function useWorkspaceState(): WorkspaceValue {
     setMintedPatFull(null)
     selectedRepoRef.current = null
     setSelectedRepo(null)
+    setHydratingRepoSlug(null)
     setAuditEvents([])
     setRunnerCaps(null)
     setRunnerTokens([])
@@ -758,22 +824,23 @@ function useWorkspaceState(): WorkspaceValue {
       invalidateAgentRunWork()
     }
     invalidateDeploymentWork()
-    selectedRepoRef.current = slug
-    setSelectedRepo(slug)
     if (preservePrNumber == null) {
       setPrCiFailure(null)
       setSelectedPrNumber(null)
     }
     const op = captureDeploymentOp(slug)
+    setHydratingRepoSlug(slug)
     setError(null)
     try {
       const prs = await listPullRequests(activeOrg, slug)
       const data = await listIssues(activeOrg, slug)
       const s = await getOrgSettings(activeOrg)
       const g = await listRepoGrants(activeOrg, slug)
-      if (!deploymentOpActive(op)) {
+      if (!loadIssuesResultApplies(op, slug)) {
         return
       }
+      selectedRepoRef.current = slug
+      setSelectedRepo(slug)
       setPulls(prs)
       setIssues(data)
       setSettings(s)
@@ -786,6 +853,8 @@ function useWorkspaceState(): WorkspaceValue {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'failed to load repository')
       }
+    } finally {
+      setHydratingRepoSlug((pending) => (pending === slug ? null : pending))
     }
   }
 
@@ -1196,14 +1265,15 @@ function useWorkspaceState(): WorkspaceValue {
   }
 
   async function onRunDeliveryPipeline() {
-    if (!selectedRepo || !mergedPr?.head_oid) return
-    const op = captureDeploymentOp()
+    const repo = deliveryRepoSlug()
+    if (!repo || !deliveryRepoSynced() || !mergedPr?.head_oid) return
+    const op = captureDeploymentOp(repo)
     setError(null)
     setPipelineJobs([])
     bumpPipelinePollEpoch()
     const pollEpoch = pipelinePollEpochRef.current
     try {
-      const run = await startPipeline(activeOrg, selectedRepo, mergedPr.head_oid)
+      const run = await startPipeline(activeOrg, repo, mergedPr.head_oid)
       if (!deploymentOpActive(op)) return
       applyPipelineRun(run)
       const pollOp = capturePipelineOp(run.id)
@@ -1300,33 +1370,97 @@ function useWorkspaceState(): WorkspaceValue {
     }
   }
 
-  async function onReleaseAndDeploy() {
-    if (!selectedRepo || !mergedPr?.head_oid || !pipelineRun || pipelineRun.state !== 'succeeded') {
+  async function publishReleaseFromPipeline(
+    op: DeploymentOpContext,
+  ): Promise<string | null> {
+    const repo = deliveryRepoSlug()
+    if (
+      !repo ||
+      !deliveryRepoSynced() ||
+      !mergedPr?.head_oid ||
+      !pipelineRun ||
+      pipelineRun.state !== 'succeeded'
+    ) {
+      return null
+    }
+    if (
+      publishedReleaseId &&
+      publishedForPipelineRef.current === pipelineRun.id
+    ) {
+      return publishedReleaseId
+    }
+    const version = `0.0.${Date.now().toString(36)}`
+    const rel = await createRelease(activeOrg, repo, {
+      version,
+      tag_name: `v${version}`,
+      commit_oid: mergedPr.head_oid,
+      pipeline_run_id: pipelineRun.id,
+      pr_id: mergedPr.id,
+    })
+    const published = await publishRelease(activeOrg, repo, rel.id)
+    if (!deploymentOpActive(op)) {
+      return null
+    }
+    setPublishedReleaseId(published.id)
+    publishedForPipelineRef.current = pipelineRun.id
+    return published.id
+  }
+
+  async function onPublishPipelineRelease() {
+    const repo = deliveryRepoSlug()
+    if (
+      !repo ||
+      !deliveryRepoSynced() ||
+      !mergedPr?.head_oid ||
+      !pipelineRun ||
+      pipelineRun.state !== 'succeeded'
+    ) {
       return
     }
-    const op = captureDeploymentOp()
+    if (!tryBeginReleaseDelivery()) {
+      return
+    }
+    const op = captureDeploymentOp(repo)
     setError(null)
     try {
-      const version = `0.0.${Date.now().toString(36)}`
-      const rel = await createRelease(activeOrg, selectedRepo, {
-        version,
-        tag_name: `v${version}`,
-        commit_oid: mergedPr.head_oid,
-        pipeline_run_id: pipelineRun.id,
-        pr_id: mergedPr.id,
-      })
-      await publishRelease(activeOrg, selectedRepo, rel.id)
-      if (!deploymentOpActive(op)) {
+      await publishReleaseFromPipeline(op)
+    } catch (err) {
+      if (deploymentOpActive(op)) {
+        setError(err instanceof Error ? err.message : 'release publish failed')
+      }
+    } finally {
+      endReleaseDelivery()
+    }
+  }
+
+  async function onReleaseAndDeploy() {
+    const repo = deliveryRepoSlug()
+    if (
+      !repo ||
+      !deliveryRepoSynced() ||
+      !mergedPr?.head_oid ||
+      !pipelineRun ||
+      pipelineRun.state !== 'succeeded'
+    ) {
+      return
+    }
+    if (!tryBeginReleaseDelivery()) {
+      return
+    }
+    const op = captureDeploymentOp(repo)
+    setError(null)
+    try {
+      const relId = await publishReleaseFromPipeline(op)
+      if (!relId) {
         return
       }
-      setPublishedReleaseId(rel.id)
-      const dep = await startDeployment(activeOrg, selectedRepo, rel.id)
+      const dep = await startDeployment(activeOrg, repo, relId)
       if (!deploymentOpActive(op)) {
         return
       }
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
-      const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
+      const tv = await getDeploymentTrace(activeOrg, repo, dep.id)
       if (!deploymentOpActive(op)) {
         return
       }
@@ -1335,17 +1469,20 @@ function useWorkspaceState(): WorkspaceValue {
       if (deploymentOpActive(op)) {
         setError(err instanceof Error ? err.message : 'release/deploy failed')
       }
+    } finally {
+      endReleaseDelivery()
     }
   }
 
   async function onDeployProduction() {
-    if (!selectedRepo || !publishedReleaseId) return
-    const op = captureDeploymentOp()
+    const repo = deliveryRepoSlug()
+    if (!repo || !deliveryRepoSynced() || !publishedReleaseId) return
+    const op = captureDeploymentOp(repo)
     setError(null)
     try {
       const dep = await startDeployment(
         activeOrg,
-        selectedRepo,
+        repo,
         publishedReleaseId,
         undefined,
         'production',
@@ -1560,6 +1697,9 @@ function useWorkspaceState(): WorkspaceValue {
     pipelineJobs,
     pipelineRetryBusy,
     pipelineCancelBusy,
+    publishReleaseBusy,
+    repoContextTransitioning,
+    activeRepoSlug,
     deploymentId,
     activeDeployment,
     publishedReleaseId,
@@ -1617,6 +1757,7 @@ function useWorkspaceState(): WorkspaceValue {
     onRunDeliveryPipeline,
     onCancelPipelineRun,
     onRetryPipelineJob,
+    onPublishPipelineRelease,
     onReleaseAndDeploy,
     onDeployProduction,
     onRollbackToTarget,

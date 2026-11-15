@@ -193,7 +193,11 @@ export function RepoSettingsPage() {
         <ul data-testid="repo-grants-list">
           {grants.map((g) => (
             <li key={g.principal_id} data-testid="repo-grant-row">
-              {g.handle} ({g.role}){' '}
+              {g.handle} (
+              {t(`repoSettings.grantRoles.${g.role as (typeof GRANT_ROLES)[number]}`, {
+                defaultValue: g.role,
+              })}
+              ){' '}
               <button
                 type="button"
                 data-testid="repo-grant-revoke"
@@ -218,7 +222,7 @@ export function RepoSettingsPage() {
         >
           {GRANT_ROLES.map((r) => (
             <option key={r} value={r}>
-              {r}
+              {t(`repoSettings.grantRoles.${r}`)}
             </option>
           ))}
         </select>
