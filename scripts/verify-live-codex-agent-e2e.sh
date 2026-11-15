@@ -28,6 +28,15 @@ export MUSEHUB_AGENT_CODEX_BIN
 
 RUN_ID=""
 RUNNER_TOKEN_ID=""
+revoke_live_codex_token() {
+  [[ -n "${RUNNER_TOKEN_ID:-}" && -n "${DATABASE_URL:-}" ]] || return 0
+  if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v token_id="$RUNNER_TOKEN_ID" \
+    -c "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = :'token_id'::uuid AND revoked_at IS NULL" \
+    >/dev/null; then
+    return 1
+  fi
+  RUNNER_TOKEN_ID=""
+}
 live_codex_cleanup() {
   local status=$?
   if [[ -n "${RUN_ID:-}" && -n "${COOKIE:-}" && -n "${API_PORT:-}" ]]; then
@@ -40,10 +49,11 @@ live_codex_cleanup() {
       sleep 1
     done
   fi
-  if [[ -n "${RUNNER_TOKEN_ID:-}" && -n "${DATABASE_URL:-}" ]]; then
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v token_id="$RUNNER_TOKEN_ID" \
-      -c "UPDATE access_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE id = :'token_id'::uuid AND revoked_at IS NULL" \
-      >/dev/null || echo "warning: could not revoke temporary runner token" >&2
+  if ! revoke_live_codex_token; then
+    echo "warning: could not revoke temporary runner token" >&2
+    if (( status == 0 )); then
+      status=1
+    fi
   fi
   remote_runner_e2e_cleanup
   exit "$status"
@@ -123,6 +133,7 @@ branch_commit=$(git --git-dir="$BARE" rev-parse "refs/heads/$branch")
 [[ "$branch_commit" == "$commit" ]] || { echo "bare branch does not point to AgentRun commit" >&2; exit 1; }
 actual_proof=$(git --git-dir="$BARE" show "$commit:LIVE_CODEX_PROOF.md")
 [[ "$actual_proof" == "$PROOF" ]] || { echo "committed proof content mismatch" >&2; exit 1; }
+revoke_live_codex_token
 
 echo "live_codex_agent_e2e=ok run_id=$RUN_ID commit=$commit usage_tokens=$tokens budget_tokens=$MUSEHUB_LIVE_CODEX_BUDGET_TOKENS"
 RUN_ID=""
