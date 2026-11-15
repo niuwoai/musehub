@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-agent-adapter"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "libc",
  "musehub-core",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-agent-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "serde",
@@ -1128,7 +1128,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-app"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "argon2",
  "axum",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-container-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "thiserror",
@@ -1172,14 +1172,14 @@ dependencies = [
 
 [[package]]
 name = "musehub-core"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "musehub-git-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "thiserror",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-git-ssh"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-app",
  "musehub-core",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-mcp-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "axum",
  "bytes",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-migrate"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "sqlx",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-rootless-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "serde_json",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-runner-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "thiserror",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-runnerd"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-agent-adapter",
  "musehub-app",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-server"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "axum",
  "http-body-util",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "musehub-ssh-probe"
-version = "0.1.0-rc6"
+version = "0.1.0-rc7"
 dependencies = [
  "musehub-core",
  "serde_json",

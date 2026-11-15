@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.0-rc7]
 
 ### Added
 
@@ -9,7 +9,7 @@
 ### Fixed
 
 - Live Codex adapter invokes `codex exec --json` with the task prompt over stdin, isolates the child environment from Runner secrets, enforces reported token budgets between turns, and requires a new assigned-branch commit for Git-backed AgentRuns; non-Git task workspaces can complete without a commit. Codex monetary usage is unavailable, so configured monetary budgets fail closed.
-- Live Codex acceptance revokes its temporary Runner PAT and cleans the temporary repository even when initialization fails.
+- Live Codex acceptance revokes its temporary Runner PAT before reporting success, exits unsuccessfully if revocation fails, and cleans the temporary repository even when initialization fails.
 - Migration `0005_fk_indexes` for BOOT-02 schema check; Git HTTP route fix (`/git/{org}/{repo}.git/...`).
 - Bootstrap 强密码策略；Agent 分支 `agent/*` 校验；Git 路径穿越拒绝。
 - `verify-product-acceptance.sh`；CI 强 bootstrap 密码与 reference 二进制预构建。
