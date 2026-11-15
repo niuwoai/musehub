@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [[ -z "${MUSEHUB_E2E_ALLOW_PLAYWRIGHT_ARGS:-}" ]]; then
+  unset PLAYWRIGHT_ARGS
+fi
+
 if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && command -v sg >/dev/null && command -v docker >/dev/null; then
   if ! docker info >/dev/null 2>&1; then
     export MUSEHUB_E2E_DOCKER_GROUP=1

@@ -92,7 +92,8 @@
     "resourcePipeline": "Pipeline run",
     "resourceDeployment": "Deployment",
     "resourcePrincipal": "Principal",
-    "resourceRepositoryGrant": "Repository grant"
+    "resourceRepositoryGrant": "Repository grant",
+    "resourceSshKey": "SSH key"
   },
   "orgSettings": {
     "displayName": "Org display name",

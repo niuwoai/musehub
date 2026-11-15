@@ -35,10 +35,10 @@
 | ID | 状态 | 说明 |
 |----|------|------|
 | GIT-02 | `[~]` | HTTPS smart HTTP + 产品 **SSH**（`musehub-git-ssh`：`AuthorizedKeysCommand` + gateway；`git_ssh_transport_e2e`）；端口/主机密钥可配置；与保护分支 hook 一致 |
-| GIT-03 | `[~]` | REST browse + **binary/路径拒绝**（`git_browse_limits_e2e`）；控制台 **Code** 页 + 输出上限 |
+| GIT-03 | `[~]` | REST browse + **binary/路径拒绝**（`git_browse_limits_e2e`）；控制台 **Code** 页 + `repo-code-console` Playwright + en/zh |
 | ISS-01 | `[~]` | 游标列表/筛选（未知负责人 **400**）、标签校验；负责人须为 **组织内活跃成员且具有仓库 grant（或 org admin/owner）**；Issue 列表创建后与筛选/分页一致 |
 | PR-01 | `[~]` | diff **可选行锚点** + `pr_revision_id` CAS；sync **`expected_row_version`**；outdated 与 sync 同事务 |
-| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`）；密钥经产品传输鉴权；**非** 多租户进程隔离证明；Colima **`musehub-ssh-probe`** 仍为证据非产品 |
+| IAM-02 SSH | `[~]` | SSH 指纹 **活跃唯一**（`0030`）；create/revoke **同事务审计**（`org_id` NULL，仅 `GET /api/v1/me/audit/events` 可见，不进 org 审计）；经产品传输鉴权 |
 
 > CI 绿 **≠** `01-product-requirements.md` §8 生产验收。
 
@@ -52,7 +52,7 @@
 | 生产静态 Web + 反代 TLS | `[~]` | 运营路径：`render-gateway-caddyfile.sh` + production compose TLS overlay（`manual`/`acme`）；`verify-caddyfile-layout.sh` 含 fixture 证布局；**未**验收真实 DNS/ACME/公网证书 |
 | DB 迁移升级 Runbook | `[x]` 脚本 | `upgrade-production-compose.sh` + entrypoint migrate；host `verify-product-acceptance.sh` |
 | HTTP Git `clone_url` 可达 | `[x]` 配置 | `MUSEHUB_PUBLIC_HTTP_ORIGIN`（默认 localhost 网关端口）；非 0.0.0.0 展示 |
-| 最小 RBAC / PAT scope / 审计 | `[~]` | 控制台：成员/邀请、**自服务改密**（撤销其它会话）、PAT 一次展示+撤销；`iam_password_change_e2e` / `iam_org_privilege_e2e` / `iam_disabled_user_e2e`；**禁用为全局 principal**；**无** SSH key、**无**多租户 SSH 完备 |
+| 最小 RBAC / PAT scope / 审计 | `[~]` | 控制台：成员/邀请、**自服务改密**、PAT、**SSH 公钥注册/撤销**（`account-security` + `ssh_keys_http_e2e` + Playwright `ssh-keys-console`）；仓库 grant 审计；**无** 出站通知后端（见 `docs/proposals/notifications-backend.md`）；**无** 多租户 SSH 完备 |
 | 安全 Git / 不可信贡献者 | `[~]` | forced-command 探针在 Colima；产品 Git HTTP + 分支保护有 E2E；**非**完整多租户 SSH 服务 |
 | 独立 Runner 进程/服务 | `[x]` 本地 | `musehub-runnerd` + `run-ci-security-integration-local.sh`（remote pipeline/agent/deploy + cancel/kill/budget/epoch）；production stack；**非**物理双主机 |
 | 部署回滚操作 | `[x]` 本地 | `deployment_rollback_runner_e2e` + production stack rollback/trace |
