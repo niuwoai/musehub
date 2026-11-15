@@ -1,12 +1,12 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc4`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc6`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
-MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc4`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。
+MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc6`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。真实 Codex Runner 验收脚本需显式启用并指定 token 预算；不会在普通 CI 中调用模型。
 
-**诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、**Live Codex** 在线凭据、OAuth/SAML、多区域 HA。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
+**诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、OAuth/SAML、多区域 HA。Live Codex 仍需运营方提供 CLI 与凭据并实际运行显式验收；仓库不代为验收在线模型能力。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
 
 ## 自托管安装（单机 Linux · Compose）
 
@@ -109,6 +109,14 @@ musehub/
 - macOS 生产安装脚本中的 `sed -i` 已改为 `scripts/lib/sed-portable.sh`（GNU/BSD 兼容）。
 
 CI 冒烟：`./scripts/verify-dev-local-stack-negative.sh` + `./scripts/verify-dev-local-stack.sh`（需 `DATABASE_URL`、`pg_isready`、`jq`、`curl`、`openssl`；Linux CI 已验，macOS 未在 Agent 环境实测）。
+
+真实 Codex Runner 验收是**可选且可能产生模型费用**的操作，不在 CI 中运行。需先准备专用的 PostgreSQL 验收数据库并设置 `MUSEHUB_TEST_DATABASE_URL`（脚本会执行迁移并留下验收记录，不要指向生产数据库），配置 Codex CLI 登录，然后显式提供 token 上限：
+
+```sh
+env MUSEHUB_LIVE_CODEX=1 MUSEHUB_TEST_DATABASE_URL=postgres://musehub:musehub@127.0.0.1:5432/musehub_live_acceptance MUSEHUB_AGENT_CODEX_BIN="$(command -v codex)" MUSEHUB_LIVE_CODEX_BUDGET_TOKENS=12000 ./scripts/verify-live-codex-agent-e2e.sh
+```
+
+脚本会创建临时仓库和 AgentRun，要求真实 Codex 在指定分支提交验收文件，并校验 run、commit 与 token 使用量。未执行该脚本不代表 Live Codex 已验收。
 
 ## 本地验证（手工 / 高级）
 
