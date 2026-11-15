@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc8]
+
+### Fixed
+
+- Web app version assertion now follows the configured application version instead of stale `0.1.0-rc4` text.
+
 ## [0.1.0-rc7]
 
 ### Added
