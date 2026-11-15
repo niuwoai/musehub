@@ -176,6 +176,8 @@ pub async fn create_release(
     let principal_id = super::require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    crate::grants::ensure_repo_release_maintainer(&state.pool, org_id, repo_id, principal_id)
+        .await?;
     let view = create_release_core(&state, org_id, repo_id, body).await?;
     Ok((StatusCode::CREATED, Json(view)))
 }
@@ -278,6 +280,37 @@ pub async fn publish_release_core(
     })
 }
 
+pub async fn list_releases(
+    State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
+    AxumPath((org, repo)): AxumPath<(String, String)>,
+) -> Result<Json<Vec<ReleaseView>>, AppError> {
+    let principal_id = super::require_session(&state.pool, &headers).await?;
+    let (_, repo_id) =
+        super::repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
+    let rows = sqlx::query_as::<_, (Uuid, String, String, String, Uuid, String, Option<String>, Option<String>)>(
+        "SELECT id, version, tag_name, commit_oid, pipeline_run_id, state, manifest_sha256, oci_image_ref
+         FROM releases WHERE repo_id = $1 ORDER BY created_at DESC LIMIT 50",
+    )
+    .bind(repo_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| ReleaseView {
+                id: row.0,
+                version: row.1,
+                tag_name: row.2,
+                commit_oid: row.3,
+                pipeline_run_id: row.4,
+                state: row.5,
+                manifest_sha256: row.6,
+                oci_image_ref: row.7,
+            })
+            .collect(),
+    ))
+}
+
 pub async fn publish_release(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
@@ -286,8 +319,10 @@ pub async fn publish_release(
 ) -> Result<Json<ReleaseView>, AppError> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let principal_id = super::require_session(&state.pool, &headers).await?;
-    let (_, repo_id, _) =
+    let (org_id, repo_id, _) =
         super::repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
+    crate::grants::ensure_repo_release_maintainer(&state.pool, org_id, repo_id, principal_id)
+        .await?;
     let view = publish_release_core(&state, repo_id, release_id, body).await?;
     Ok(Json(view))
 }

@@ -230,7 +230,11 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/environments",
-            get(environments::list_repo_environments),
+            get(environments::list_repo_environments).post(environments::create_repo_environment),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/environments/{slug}",
+            patch(environments::patch_repo_environment),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pull-requests",
@@ -318,7 +322,7 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/releases",
-            post(release::create_release),
+            get(release::list_releases).post(release::create_release),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/releases/{release_id}/publish",
@@ -654,6 +658,7 @@ struct IssueView {
 struct CreateIssueRequest {
     title: String,
     body: Option<String>,
+    assignee_handle: Option<String>,
 }
 
 async fn create_issue(
@@ -677,10 +682,18 @@ async fn create_issue(
     .await?;
     let title = body.title.trim().to_string();
     let issue_body = body.body.unwrap_or_default();
+    let mut assignee_id: Option<Uuid> = None;
+    if let Some(ref handle) = body.assignee_handle {
+        if !handle.trim().is_empty() {
+            assignee_id = Some(
+                issues::repo_assignee_id_for_create(&state.pool, org_id, repo_id, handle).await?,
+            );
+        }
+    }
     let issue_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body, assignee_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(issue_id)
     .bind(org_id)
@@ -689,6 +702,7 @@ async fn create_issue(
     .bind(principal_id)
     .bind(&title)
     .bind(&issue_body)
+    .bind(assignee_id)
     .execute(&mut *tx)
     .await?;
     let revision_id = Uuid::new_v4();

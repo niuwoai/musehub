@@ -23,6 +23,9 @@
     "prCiJobLogPath": "Log API",
     "prCiJobLogMissing": "No stored log chunks for this job attempt yet.",
     "deliveryTitle": "Delivery chain",
+    "releasesTitle": "Releases",
+    "releasesEmpty": "No releases yet — publish from a succeeded pipeline run.",
+    "releasesLoadFailed": "Could not load releases for this repository.",
     "deliveryMockNote": "Deploy uses compose-mock only (not real OCI / Docker).",
     "deliveryModeNote": "Deploy follows server policy: pipeline-built OCI + compose-runner when MUSEHUB_REQUIRE_PIPELINE_OCI=1; otherwise compose-mock for local dev.",
     "runPipelineOnMain": "Run pipeline on merged main tip",
@@ -31,6 +34,8 @@
     "pipelineCancelPending": "Cancel requested — waiting for server/runner to report canceled (in-process runs may finish the current step first).",
     "pipelineCancelHonesty": "Cancel is a server request only; worker shutdown is confirmed when state becomes canceled, not when this button returns.",
     "releaseAndDeployMock": "Release + mock deploy",
+    "publishPipelineRelease": "Publish release from pipeline",
+    "deliveryRepoContextTransitioning": "Switching repository — delivery actions are paused until the route matches.",
     "deployProductionProtected": "Deploy to production (approval required)",
     "deploymentAwaitingApproval": "Deployment to {{env}} is awaiting approval",
     "approveDeployment": "Approve deployment",
@@ -134,7 +139,9 @@
     "emptyTree": "No entries at this path.",
     "binaryFile": "Binary file @ {{path}}",
     "truncatedFile": "Large file (truncated) @ {{path}}",
-    "sshCloneLabel": "SSH clone"
+    "sshCloneLabel": "SSH clone",
+    "httpCloneLabel": "HTTPS clone",
+    "sshKeysLink": "Manage SSH keys in Account → Security"
   },
   "pull": {
     "syncHead": "Sync head",
@@ -162,7 +169,10 @@
     "loadMore": "Load more",
     "loadingMore": "Loading more…",
     "loadFailed": "Could not load issues.",
-    "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters."
+    "createdHiddenByFilters": "Issue #{{number}} was created but does not match the active filters.",
+    "newTitlePlaceholder": "Issue title",
+    "titleRequired": "Enter an issue title before creating.",
+    "repoContextTransitioning": "Switching repository — wait a moment before creating issues."
   },
   "issueDetail": {
     "labels": "Labels",
@@ -230,11 +240,22 @@
     "grantReader": "Grant reader",
     "grantSubmit": "Grant access",
     "grantRole": "Repository role",
+    "grantRoles": {
+      "reader": "Reader",
+      "developer": "Developer",
+      "maintainer": "Maintainer"
+    },
     "grantHandlePlaceholder": "Member handle",
     "grantFailed": "Could not grant repository access.",
     "revokeGrant": "Revoke",
     "revokeFailed": "Could not revoke grant.",
     "environmentsTitle": "Deployment environments",
-    "approvalRequired": "approval required"
+    "approvalRequired": "approval required",
+    "envSlugPlaceholder": "staging",
+    "envNamePlaceholder": "Staging",
+    "envCreate": "Add environment",
+    "envToggleApproval": "Toggle approval gate",
+    "envCreateFailed": "Could not create environment.",
+    "envPatchFailed": "Could not update environment."
   }
 }
