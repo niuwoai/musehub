@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc9]
+
+### Fixed
+
+- Codex fixture integration tests now fail when the required fixture binary is missing, rather than silently passing without exercising the checks.
+
 ## [0.1.0-rc8]
 
 ### Fixed

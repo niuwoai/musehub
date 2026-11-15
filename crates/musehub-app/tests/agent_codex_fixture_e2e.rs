@@ -13,12 +13,18 @@ use musehub_app::bare_repo_path;
 use tower::ServiceExt;
 
 fn codex_fixture_bin() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_musehub-agent-codex-fixture")
+    let fixture = std::env::var("CARGO_BIN_EXE_musehub-agent-codex-fixture")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../target/debug/musehub-agent-codex-fixture")
-        })
+        });
+    assert!(
+        fixture.is_file(),
+        "Codex fixture binary is required at {}; build it with `cargo build -p musehub-agent-adapter --bin musehub-agent-codex-fixture`",
+        fixture.display()
+    );
+    fixture
 }
 
 async fn start_agent_run(
@@ -135,10 +141,6 @@ async fn wait_run_state(app: &axum::Router, cookie: &str, run_id: &str) -> serde
 #[tokio::test]
 async fn agent_run_codex_fixture_ok_on_mainline() {
     let fixture = codex_fixture_bin();
-    if !fixture.is_file() {
-        eprintln!("skip: musehub-agent-codex-fixture missing");
-        return;
-    }
     std::env::set_var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN", &fixture);
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().unwrap();
@@ -171,10 +173,6 @@ async fn agent_run_codex_fixture_ok_on_mainline() {
 #[tokio::test]
 async fn agent_run_codex_fixture_budget_exceeded() {
     let fixture = codex_fixture_bin();
-    if !fixture.is_file() {
-        eprintln!("skip");
-        return;
-    }
     std::env::set_var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN", &fixture);
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().unwrap();
@@ -200,10 +198,6 @@ async fn agent_run_codex_fixture_budget_exceeded() {
 #[tokio::test]
 async fn agent_run_codex_fixture_timeout() {
     let fixture = codex_fixture_bin();
-    if !fixture.is_file() {
-        eprintln!("skip");
-        return;
-    }
     std::env::set_var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN", &fixture);
     std::env::set_var("MUSEHUB_AGENT_RUN_DEADLINE_SECS", "2");
     let pool = common::migrated_pool().await;
@@ -232,10 +226,6 @@ async fn agent_run_codex_fixture_timeout() {
 #[tokio::test]
 async fn agent_run_codex_fixture_cancel() {
     let fixture = codex_fixture_bin();
-    if !fixture.is_file() {
-        eprintln!("skip");
-        return;
-    }
     std::env::set_var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN", &fixture);
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().unwrap();
