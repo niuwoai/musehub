@@ -7,8 +7,8 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
-use std::process::Child;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +43,8 @@ pub struct UsageTotals {
     pub tokens: u64,
     pub microusd: u64,
     pub budget_unknown: bool,
+    #[serde(default)]
+    pub microusd_unknown: bool,
 }
 
 /// Outcome of a completed adapter run.
@@ -65,6 +67,16 @@ pub enum RunOutcome {
 pub struct AdapterRun {
     child: tokio::process::Child,
     canceled: Arc<AtomicBool>,
+    protocol: AdapterProtocol,
+    work_dir: PathBuf,
+    initial_commit: Option<String>,
+    expected_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdapterProtocol {
+    MuseHubNdjson,
+    CodexExecJsonl,
 }
 
 impl AdapterRun {
@@ -135,12 +147,38 @@ pub async fn spawn_codex(task: &AgentTask, work_dir: &Path) -> Result<AdapterRun
             adapter: CODEX_ADAPTER.to_string(),
             reason: "set MUSEHUB_AGENT_CODEX_BIN to the codex executable".to_string(),
         })?;
-    spawn_ndjson_adapter(
+    let has_initial_commit = git_output(work_dir, &["rev-parse", "HEAD"]).is_some();
+    let prompt = if has_initial_commit {
+        format!(
+            "You are implementing a MuseHub AgentRun in branch `{}`.\n\nTask:\n{}\n\nMake the requested changes in the current workspace. Run appropriate local checks. Commit the completed changes on the current branch with a concise commit message. Do not modify files outside this workspace. If you cannot complete the task safely, explain why and exit unsuccessfully.",
+            task.branch.as_deref().unwrap_or("the current branch"),
+            task.message
+        )
+    } else {
+        format!(
+            "You are completing a MuseHub task in a temporary workspace without Git history.\n\nTask:\n{}\n\nMake the requested changes in the current workspace and run appropriate local checks. Do not initialize Git or modify files outside this workspace. If you cannot complete the task safely, explain why and exit unsuccessfully.",
+            task.message
+        )
+    };
+    let mut args = vec![
+        "exec",
+        "--json",
+        "--sandbox",
+        "workspace-write",
+        "--ephemeral",
+    ];
+    if !has_initial_commit {
+        args.push("--skip-git-repo-check");
+    }
+    args.push("-");
+    spawn_process(
         Path::new(&binary),
-        &["exec", "--json"],
-        task,
+        &args,
+        &prompt,
         work_dir,
         CODEX_ADAPTER,
+        AdapterProtocol::CodexExecJsonl,
+        task.branch.clone(),
     )
     .await
 }
@@ -152,16 +190,63 @@ async fn spawn_ndjson_adapter(
     work_dir: &Path,
     adapter_name: &str,
 ) -> Result<AdapterRun, AdapterError> {
+    let payload = serde_json::to_string(task).map_err(|error| AdapterError::Failed {
+        detail: error.to_string(),
+    })?;
+    spawn_process(
+        binary,
+        extra_args,
+        &format!("{payload}\n"),
+        work_dir,
+        adapter_name,
+        AdapterProtocol::MuseHubNdjson,
+        None,
+    )
+    .await
+}
+
+async fn spawn_process(
+    binary: &Path,
+    extra_args: &[&str],
+    stdin_payload: &str,
+    work_dir: &Path,
+    adapter_name: &str,
+    protocol: AdapterProtocol,
+    expected_branch: Option<String>,
+) -> Result<AdapterRun, AdapterError> {
     if !binary.is_file() {
         return Err(AdapterError::Unavailable {
             adapter: adapter_name.to_string(),
             reason: format!("missing executable {}", binary.display()),
         });
     }
-    let payload = serde_json::to_string(task).map_err(|error| AdapterError::Failed {
-        detail: error.to_string(),
-    })?;
+    let initial_commit = if protocol == AdapterProtocol::CodexExecJsonl {
+        git_output(work_dir, &["rev-parse", "HEAD"])
+    } else {
+        None
+    };
     let mut command = TokioCommand::new(binary);
+    if protocol == AdapterProtocol::CodexExecJsonl {
+        command.env_clear();
+        for key in [
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "CODEX_HOME",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+    }
     command
         .args(extra_args)
         .current_dir(work_dir)
@@ -176,14 +261,7 @@ async fn spawn_ndjson_adapter(
     })?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(payload.as_bytes())
-            .await
-            .map_err(|source| AdapterError::Io {
-                step: "write adapter task",
-                source,
-            })?;
-        stdin
-            .write_all(b"\n")
+            .write_all(stdin_payload.as_bytes())
             .await
             .map_err(|source| AdapterError::Io {
                 step: "write adapter task",
@@ -193,7 +271,23 @@ async fn spawn_ndjson_adapter(
     Ok(AdapterRun {
         child,
         canceled: Arc::new(AtomicBool::new(false)),
+        protocol,
+        work_dir: work_dir.to_path_buf(),
+        initial_commit,
+        expected_branch,
     })
+}
+
+fn git_output(work_dir: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(work_dir)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Waits for the child, parses NDJSON from stdout, returns outcome.
@@ -209,6 +303,11 @@ pub async fn finish_run(
         detail: "adapter stdout missing".to_string(),
     })?;
     let mut buffer = Vec::new();
+    let mut usage_total = UsageTotals {
+        budget_unknown: run.protocol == AdapterProtocol::CodexExecJsonl,
+        microusd_unknown: run.protocol == AdapterProtocol::CodexExecJsonl,
+        ..UsageTotals::default()
+    };
     let mut reader = tokio::io::BufReader::new(&mut stdout);
     loop {
         if cancel_rx
@@ -230,9 +329,25 @@ pub async fn finish_run(
             Ok(Ok(_)) => {
                 buffer.extend_from_slice(line.as_bytes());
                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                    if event.get("type").and_then(|v| v.as_str()) == Some("usage") {
-                        let usage = parse_usage_line(&event)?;
-                        if budget_exceeded(&usage, budget_tokens, budget_microusd) {
+                    if let Some(usage) = parse_usage_event(&event, run.protocol)? {
+                        if run.protocol == AdapterProtocol::CodexExecJsonl {
+                            usage_total.tokens = usage_total.tokens.saturating_add(usage.tokens);
+                            usage_total.microusd =
+                                usage_total.microusd.saturating_add(usage.microusd);
+                            usage_total.budget_unknown &= usage.budget_unknown;
+                            usage_total.microusd_unknown |= usage.microusd_unknown;
+                        } else {
+                            usage_total = usage;
+                        }
+                        if budget_microusd.is_some() && usage_total.microusd_unknown {
+                            run.request_cancel();
+                            return Ok(RunOutcome::Failed {
+                                code: "agent_budget_unknown".to_string(),
+                                detail: "monetary budget limit set but adapter cannot report cost"
+                                    .to_string(),
+                            });
+                        }
+                        if budget_exceeded(&usage_total, budget_tokens, budget_microusd) {
                             run.request_cancel();
                             return Ok(RunOutcome::Failed {
                                 code: "agent_budget_exceeded".to_string(),
@@ -259,7 +374,7 @@ pub async fn finish_run(
     drain_remaining_stdout(&mut reader, &mut buffer).await?;
     if run.canceled.load(Ordering::SeqCst) {
         return Ok(RunOutcome::Canceled {
-            usage: parse_stream_usage(&buffer)?,
+            usage: parse_stream_usage(&buffer, run.protocol)?,
         });
     }
     if !status.success() {
@@ -268,15 +383,52 @@ pub async fn finish_run(
             detail: format!("exit {}", status),
         });
     }
-    let summary = parse_stream_summary(&buffer)?;
-    if budget_tokens.is_some() && summary.usage.budget_unknown {
+    let summary = parse_stream_summary(&buffer, run.protocol)?;
+    if (budget_tokens.is_some() && summary.usage.budget_unknown)
+        || (budget_microusd.is_some() && summary.usage.microusd_unknown)
+    {
         return Ok(RunOutcome::Failed {
             code: "agent_budget_unknown".to_string(),
-            detail: "budget limit set but adapter reported budget_unknown usage".to_string(),
+            detail: "configured budget limit has no corresponding usage measurement".to_string(),
         });
     }
+    let commit = if run.protocol == AdapterProtocol::CodexExecJsonl {
+        if !summary.completed {
+            return Ok(RunOutcome::Failed {
+                code: "agent_adapter_incomplete".to_string(),
+                detail: "Codex exited successfully without a completed turn event".to_string(),
+            });
+        }
+        let current = git_output(&run.work_dir, &["rev-parse", "HEAD"]);
+        if let Some(initial) = run.initial_commit.as_deref() {
+            let Some(current_commit) = current.as_deref() else {
+                return Ok(RunOutcome::Failed {
+                    code: "agent_commit_missing".to_string(),
+                    detail: "Codex completed without a readable HEAD commit".to_string(),
+                });
+            };
+            if current_commit == initial {
+                return Ok(RunOutcome::Failed {
+                    code: "agent_commit_missing".to_string(),
+                    detail: "Codex completed without creating a new commit".to_string(),
+                });
+            }
+        }
+        if let Some(expected) = run.expected_branch.as_deref() {
+            let branch = git_output(&run.work_dir, &["branch", "--show-current"]);
+            if branch.as_deref() != Some(expected) {
+                return Ok(RunOutcome::Failed {
+                    code: "agent_branch_changed".to_string(),
+                    detail: "Codex changed the assigned work branch".to_string(),
+                });
+            }
+        }
+        current
+    } else {
+        summary.commit
+    };
     Ok(RunOutcome::Succeeded {
-        commit: summary.commit,
+        commit,
         usage: summary.usage,
     })
 }
@@ -343,12 +495,21 @@ pub fn parse_events(input: &str) -> Result<Vec<AdapterEvent>, AdapterError> {
 struct StreamSummary {
     commit: Option<String>,
     usage: UsageTotals,
+    completed: bool,
 }
 
-fn parse_stream_summary(buffer: &[u8]) -> Result<StreamSummary, AdapterError> {
+fn parse_stream_summary(
+    buffer: &[u8],
+    protocol: AdapterProtocol,
+) -> Result<StreamSummary, AdapterError> {
     let text = String::from_utf8_lossy(buffer);
     let mut commit = None;
-    let mut usage = UsageTotals::default();
+    let mut usage = UsageTotals {
+        budget_unknown: protocol == AdapterProtocol::CodexExecJsonl,
+        microusd_unknown: protocol == AdapterProtocol::CodexExecJsonl,
+        ..UsageTotals::default()
+    };
+    let mut completed = false;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -358,21 +519,75 @@ fn parse_stream_summary(buffer: &[u8]) -> Result<StreamSummary, AdapterError> {
             serde_json::from_str(line).map_err(|error| AdapterError::Failed {
                 detail: error.to_string(),
             })?;
-        if value.get("type").and_then(|v| v.as_str()) == Some("completed") {
+        let event_type = value.get("type").and_then(|v| v.as_str());
+        if protocol == AdapterProtocol::MuseHubNdjson && event_type == Some("completed") {
+            completed = true;
             commit = value
                 .get("commit")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
         }
-        if value.get("type").and_then(|v| v.as_str()) == Some("usage") {
-            usage = parse_usage_line(&value)?;
+        if let Some(event_usage) = parse_usage_event(&value, protocol)? {
+            if protocol == AdapterProtocol::CodexExecJsonl {
+                usage.tokens = usage.tokens.saturating_add(event_usage.tokens);
+                usage.microusd = usage.microusd.saturating_add(event_usage.microusd);
+                usage.budget_unknown &= event_usage.budget_unknown;
+                usage.microusd_unknown |= event_usage.microusd_unknown;
+            } else {
+                usage = event_usage;
+            }
+        }
+        if protocol == AdapterProtocol::CodexExecJsonl && event_type == Some("turn.completed") {
+            completed = true;
         }
     }
-    Ok(StreamSummary { commit, usage })
+    Ok(StreamSummary {
+        commit,
+        usage,
+        completed,
+    })
 }
 
-fn parse_stream_usage(buffer: &[u8]) -> Result<UsageTotals, AdapterError> {
-    Ok(parse_stream_summary(buffer)?.usage)
+fn parse_usage_event(
+    value: &serde_json::Value,
+    protocol: AdapterProtocol,
+) -> Result<Option<UsageTotals>, AdapterError> {
+    let event_type = value.get("type").and_then(|v| v.as_str());
+    match protocol {
+        AdapterProtocol::MuseHubNdjson if event_type == Some("usage") => {
+            parse_usage_line(value).map(Some)
+        }
+        AdapterProtocol::CodexExecJsonl if event_type == Some("turn.completed") => {
+            let Some(usage) = value.get("usage") else {
+                return Ok(None);
+            };
+            let tokens = usage
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    Some(
+                        usage
+                            .get("input_tokens")?
+                            .as_u64()?
+                            .saturating_add(usage.get("output_tokens")?.as_u64()?),
+                    )
+                });
+            Ok(tokens.map(|tokens| UsageTotals {
+                tokens,
+                microusd: 0,
+                budget_unknown: false,
+                microusd_unknown: true,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn parse_stream_usage(
+    buffer: &[u8],
+    protocol: AdapterProtocol,
+) -> Result<UsageTotals, AdapterError> {
+    Ok(parse_stream_summary(buffer, protocol)?.usage)
 }
 
 fn parse_usage_line(value: &serde_json::Value) -> Result<UsageTotals, AdapterError> {
@@ -382,10 +597,15 @@ fn parse_usage_line(value: &serde_json::Value) -> Result<UsageTotals, AdapterErr
         .get("budget_unknown")
         .and_then(|v| v.as_bool())
         .unwrap_or(tokens == 0 && microusd == 0);
+    let microusd_unknown = value
+        .get("microusd_unknown")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| value.get("microusd").and_then(|v| v.as_u64()).is_none());
     Ok(UsageTotals {
         tokens,
         microusd,
         budget_unknown,
+        microusd_unknown,
     })
 }
 
@@ -474,7 +694,8 @@ mod tests {
         let input = r#"{"type":"started"}
 {"type":"completed","kind":"implementation","commit":"abc"}
 "#;
-        let summary = parse_stream_summary(input.as_bytes()).expect("summary");
+        let summary = parse_stream_summary(input.as_bytes(), AdapterProtocol::MuseHubNdjson)
+            .expect("summary");
         assert_eq!(summary.commit.as_deref(), Some("abc"));
     }
 }

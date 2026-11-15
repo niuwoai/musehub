@@ -381,6 +381,7 @@ async fn normalize_cancel_outcome(pool: &PgPool, run_id: Uuid, outcome: RunOutco
                     tokens: 0,
                     microusd: 0,
                     budget_unknown: true,
+                    microusd_unknown: true,
                 },
                 RunOutcome::Canceled { usage } => usage.clone(),
             };
