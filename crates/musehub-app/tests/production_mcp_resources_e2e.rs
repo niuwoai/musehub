@@ -22,12 +22,18 @@ use tower::ServiceExt as TowerServiceExt;
 use uuid::Uuid;
 
 fn codex_fixture_bin() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_musehub-agent-codex-fixture")
+    let fixture = std::env::var("CARGO_BIN_EXE_musehub-agent-codex-fixture")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../target/debug/musehub-agent-codex-fixture")
-        })
+        });
+    assert!(
+        fixture.is_file(),
+        "Codex fixture binary is required at {}; build it with `cargo build -p musehub-agent-adapter --bin musehub-agent-codex-fixture`",
+        fixture.display()
+    );
+    fixture
 }
 
 async fn mcp_client(
@@ -66,10 +72,6 @@ async fn mcp_client(
 async fn mcp_read_agent_run_summary_requires_repo_access() {
     std::env::set_var("MUSEHUB_MCP_PRODUCT", "1");
     let fixture = codex_fixture_bin();
-    if !fixture.is_file() {
-        eprintln!("skip: build musehub-agent-codex-fixture first");
-        return;
-    }
     std::env::set_var("MUSEHUB_AGENT_CODEX_FIXTURE_BIN", fixture);
     let pool = common::migrated_pool().await;
     let git_root = tempfile::tempdir().unwrap();
