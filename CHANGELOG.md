@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc11]
+
+### Fixed
+
+- AgentRun cancellation now serializes against commit publication; accepted cancellation cannot be overwritten by a later successful push, and requests arriving after publication receive a conflict.
+
 ## [0.1.0-rc10]
 
 ### Fixed

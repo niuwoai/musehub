@@ -367,7 +367,24 @@ pub async fn agent_run_cancel(
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::NotFound);
+        let current = sqlx::query_as::<_, (String,)>(
+            "SELECT state FROM agent_runs
+             WHERE id = $1 AND requested_by = $2 AND repo_id = $3",
+        )
+        .bind(agent_run_id)
+        .bind(principal_id)
+        .bind(repo_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        match current {
+            Some((current_state,)) if current_state == "cancel_requested" => {}
+            Some((current_state,)) => {
+                return Err(AppError::Conflict(format!(
+                    "agent run cannot be canceled from state={current_state}"
+                )));
+            }
+            None => return Err(AppError::NotFound),
+        }
     }
     let _ = state.supervisor.cancel(agent_run_id).await;
     Ok(json!({

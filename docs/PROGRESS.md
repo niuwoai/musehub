@@ -29,6 +29,7 @@
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
 | IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
+| AGT-02 | `[x]` | 取消与 Git commit 发布通过 AgentRun 行锁串行化；已接受的取消不会被后续成功状态覆盖，发布完成后到达的取消请求返回 409。真实 Codex 在线验收仍见下表。 |
 
 ## S1 协作（本轮 `cursor/v1-collab-git-pr-issues-5f97`）
 

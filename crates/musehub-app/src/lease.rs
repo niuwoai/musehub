@@ -369,7 +369,8 @@ pub async fn finalize_agent_run_state(
         "UPDATE agent_runs SET state = $4, error_code = $5, result_commit_oid = COALESCE($6, result_commit_oid),
          usage_tokens = COALESCE($7, usage_tokens), updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
-           AND state IN ('running','cancel_requested')",
+           AND (($4 = 'canceled' AND state IN ('running','cancel_requested'))
+             OR ($4 <> 'canceled' AND state = 'running'))",
     )
     .bind(run_id)
     .bind(instance_id)
