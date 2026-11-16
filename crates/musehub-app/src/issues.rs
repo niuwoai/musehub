@@ -99,6 +99,15 @@ pub(crate) fn validate_labels(labels: &[String]) -> Result<(), AppError> {
 }
 
 /// Assignee must be an active org member **and** have repository access (grant or org admin/owner).
+pub(crate) async fn repo_assignee_id_for_create(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    repo_id: Uuid,
+    handle: &str,
+) -> Result<Uuid, AppError> {
+    repo_assignee_id(pool, org_id, repo_id, handle).await
+}
+
 async fn repo_assignee_id(
     pool: &sqlx::PgPool,
     org_id: Uuid,

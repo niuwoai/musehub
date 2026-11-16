@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
-import { listIssueAssignees, listIssuesPage, type Issue } from '../api'
+import { createIssue, listIssueAssignees, listIssuesPage, type Issue } from '../api'
 
 function issueMatchesFilters(
   issue: Issue,
@@ -16,7 +16,7 @@ function issueMatchesFilters(
 }
 
 export function RepoIssuesPage() {
-  const { org = DEFAULT_ORG } = useParams<{ org: string }>()
+  const { org = DEFAULT_ORG, slug: routeSlug } = useParams<{ org: string; slug?: string }>()
   const envLimit = import.meta.env.VITE_E2E_ISSUE_PAGE_LIMIT
   const pageLimit = Math.min(
     100,
@@ -24,16 +24,18 @@ export function RepoIssuesPage() {
   )
   const {
     t,
-    selectedRepo,
+    selectedRepo: workspaceRepo,
+    repoContextTransitioning,
+    activeRepoSlug: workspaceActiveRepoSlug,
     lastRun,
     agentRunStarting,
-    onCreateIssue,
     onAcceptPlan,
     onRunAgent,
     onCancelRun,
     onCreatePrFromRun,
     loadIssues,
   } = useWorkspace()
+  const activeRepoSlug = routeSlug ?? workspaceActiveRepoSlug ?? workspaceRepo ?? null
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -44,17 +46,19 @@ export function RepoIssuesPage() {
   const [listNotice, setListNotice] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
+  const [newIssueTitle, setNewIssueTitle] = useState('')
+  const [newIssueAssignee, setNewIssueAssignee] = useState('')
 
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
 
   const fetchPage = useCallback(
     async (cursor?: string, append = false, opts?: { keepNotice?: boolean }) => {
-      if (!selectedRepo) return
+      if (!activeRepoSlug) return
       setListError(null)
       if (!opts?.keepNotice) {
         setListNotice(null)
       }
-      const page = await listIssuesPage(org, selectedRepo, {
+      const page = await listIssuesPage(org, activeRepoSlug, {
         state: filterState || undefined,
         label: filterLabel || undefined,
         assignee: filterAssignee || undefined,
@@ -74,44 +78,60 @@ export function RepoIssuesPage() {
       setNextCursor(page.next_cursor)
       return page
     },
-    [org, selectedRepo, filterState, filterLabel, filterAssignee, pageLimit],
+    [org, activeRepoSlug, filterState, filterLabel, filterAssignee, pageLimit],
   )
 
   const loadAssigneeOptions = useCallback(() => {
-    if (!selectedRepo) return Promise.resolve()
-    return listIssueAssignees(org, selectedRepo)
+    if (!activeRepoSlug) return Promise.resolve()
+    return listIssueAssignees(org, activeRepoSlug)
       .then((opts) => setAssigneeOptions(opts.map((o) => o.handle)))
       .catch(() => setAssigneeOptions([]))
-  }, [org, selectedRepo])
+  }, [org, activeRepoSlug])
 
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!activeRepoSlug) return
     void fetchPage().catch((e) => setListError(e instanceof Error ? e.message : t('issues.loadFailed')))
-  }, [selectedRepo, fetchPage, t])
+  }, [activeRepoSlug, fetchPage, t])
 
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!activeRepoSlug) return
     void loadAssigneeOptions()
-  }, [selectedRepo, loadAssigneeOptions])
+  }, [activeRepoSlug, loadAssigneeOptions])
+
+  const canCreateIssue =
+    newIssueTitle.trim().length > 0 && Boolean(activeRepoSlug) && !repoContextTransitioning
 
   async function handleCreateIssue() {
+    const title = newIssueTitle.trim()
+    if (!title || !activeRepoSlug) {
+      setListError(t('issues.titleRequired'))
+      return
+    }
+    if (repoContextTransitioning) {
+      setListError(t('issues.repoContextTransitioning'))
+      return
+    }
     setListError(null)
     setListNotice(null)
-    const created = await onCreateIssue()
-    if (!created || !selectedRepo) return
+    const created = await createIssue(org, activeRepoSlug, title, {
+      assignee_handle: newIssueAssignee.trim() || undefined,
+    })
+    setNewIssueTitle('')
+    setNewIssueAssignee('')
+    if (!created || !activeRepoSlug) return
     if (issueMatchesFilters(created, filters)) {
       setItems((prev) => {
         const merged = [created, ...prev.filter((i) => i.id !== created.id)]
         merged.sort((a, b) => b.number - a.number)
         return merged
       })
-      await loadIssues(selectedRepo)
+      await loadIssues(activeRepoSlug)
       void fetchPage(undefined, false).catch((e) =>
         setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
       )
     } else {
       setListNotice(t('issues.createdHiddenByFilters', { number: created.number }))
-      await loadIssues(selectedRepo)
+      await loadIssues(activeRepoSlug)
       void fetchPage(undefined, false, { keepNotice: true }).catch((e) =>
         setListError(e instanceof Error ? e.message : t('issues.loadFailed')),
       )
@@ -119,10 +139,10 @@ export function RepoIssuesPage() {
   }
 
   async function refreshAll() {
-    await Promise.all([loadIssues(selectedRepo!), fetchPage(), loadAssigneeOptions()])
+    await Promise.all([loadIssues(activeRepoSlug!), fetchPage(), loadAssigneeOptions()])
   }
 
-  if (!selectedRepo) {
+  if (!activeRepoSlug) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
 
@@ -181,16 +201,44 @@ export function RepoIssuesPage() {
       <button type="button" data-testid="refresh-repo" onClick={() => void refreshAll()}>
         {t('app.refreshRepo')}
       </button>
-      <button type="button" data-testid="create-issue" onClick={() => void handleCreateIssue()}>
+      <input
+        data-testid="issue-create-title"
+        placeholder={t('issues.newTitlePlaceholder')}
+        value={newIssueTitle}
+        onChange={(e) => setNewIssueTitle(e.target.value)}
+      />
+      <select
+        data-testid="issue-create-assignee"
+        value={newIssueAssignee}
+        onChange={(e) => setNewIssueAssignee(e.target.value)}
+      >
+        <option value="">{t('issues.filterAny')}</option>
+        {assigneeOptions.map((handle) => (
+          <option key={handle} value={handle}>
+            {handle}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        data-testid="create-issue"
+        disabled={!canCreateIssue}
+        onClick={() => void handleCreateIssue()}
+      >
         {t('app.createIssue')}
       </button>
+      {repoContextTransitioning ? (
+        <p role="status" data-testid="issues-repo-transition">
+          {t('issues.repoContextTransitioning')}
+        </p>
+      ) : null}
       {listError ? <p role="alert">{listError}</p> : null}
       {listNotice ? <p role="status" data-testid="issue-list-notice">{listNotice}</p> : null}
       <ul data-testid="issue-list">
         {items.map((issue) => (
           <li key={issue.id} data-testid={`issue-row-${issue.number}`}>
             <Link
-              to={paths.repoIssue(org, selectedRepo, issue.number)}
+              to={paths.repoIssue(org, activeRepoSlug, issue.number)}
               data-testid={`issue-link-${issue.number}`}
             >
               #{issue.number} {issue.title}

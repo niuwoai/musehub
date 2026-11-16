@@ -1,7 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { appVersion } from './app/WorkspaceProvider'
 import './i18n'
 
 vi.mock('./api', () => ({
@@ -32,7 +31,7 @@ describe('App', () => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('MuseHub')
     })
     expect(screen.getByText(/未发布的开发版/)).toBeTruthy()
-    expect(screen.getByText((text) => text.includes(appVersion))).toBeTruthy()
+    expect(screen.getByText(/0\.1\.0-rc4/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /登录/ })).toBeTruthy()
   })
 })

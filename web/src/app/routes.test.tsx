@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   listAuditEvents: vi.fn().mockResolvedValue([]),
   listRunnerTokens: vi.fn().mockResolvedValue([]),
   listOrgMembers: vi.fn().mockRejectedValue(new Error('forbidden')),
+  listReleases: vi.fn().mockResolvedValue([]),
 }))
 
 function renderAt(path: string) {

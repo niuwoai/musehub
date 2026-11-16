@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Panel } from '../components/Panel'
-import { DEFAULT_ORG } from '../app/paths'
+import { DEFAULT_ORG, paths } from '../app/paths'
 import { listGitCommits, listGitTree, listRepos, readGitBlob } from '../api'
 
 export function RepoCodePage() {
@@ -16,6 +16,7 @@ export function RepoCodePage() {
   const [fileMeta, setFileMeta] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [sshCloneUrl, setSshCloneUrl] = useState<string | null>(null)
+  const [httpCloneUrl, setHttpCloneUrl] = useState<string | null>(null)
 
   const loadTree = useCallback(async () => {
     if (!slug || !commit) return
@@ -32,8 +33,12 @@ export function RepoCodePage() {
       .then((repos) => {
         const match = repos.find((r) => r.slug === slug)
         setSshCloneUrl(match?.ssh_clone_url ?? null)
+        setHttpCloneUrl(match?.clone_url ?? null)
       })
-      .catch(() => setSshCloneUrl(null))
+      .catch(() => {
+        setSshCloneUrl(null)
+        setHttpCloneUrl(null)
+      })
   }, [org, slug])
 
   useEffect(() => {
@@ -78,12 +83,23 @@ export function RepoCodePage() {
   return (
     <Panel data-testid="repo-code">
       <h2>{t('nav.repoCode')}</h2>
+      {httpCloneUrl ? (
+        <p data-testid="code-http-clone-url">
+          <strong>{t('code.httpCloneLabel')}</strong>{' '}
+          <code>{httpCloneUrl}</code>
+        </p>
+      ) : null}
       {sshCloneUrl ? (
         <p data-testid="code-ssh-clone-url">
           <strong>{t('code.sshCloneLabel')}</strong>{' '}
           <code>{sshCloneUrl}</code>
         </p>
       ) : null}
+      <p>
+        <Link to={paths.accountSecurity()} data-testid="code-ssh-keys-link">
+          {t('code.sshKeysLink')}
+        </Link>
+      </p>
       <label>
         {t('code.refLabel')}{' '}
         <input
