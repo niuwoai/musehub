@@ -27,6 +27,7 @@ pub mod lease;
 pub mod mcp;
 mod members;
 mod org_config;
+mod organizations;
 pub mod pat;
 mod pat_auth;
 mod pat_policy;
@@ -115,6 +116,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(change_password_handler),
         )
         .route("/api/v1/me", get(me_handler))
+        .route(
+            "/api/v1/orgs",
+            get(organizations::list_organizations).post(organizations::create_organization),
+        )
         .route("/api/v1/me/audit/events", get(audit::list_self_audit))
         .route(
             "/api/v1/tokens",

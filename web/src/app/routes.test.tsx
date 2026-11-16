@@ -19,6 +19,10 @@ vi.mock('../api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   listRepos: vi.fn().mockResolvedValue([]),
+  listOrganizations: vi.fn().mockResolvedValue([
+    { id: 'org-demo', slug: 'demo', display_name: 'Demo Org', role: 'owner' },
+    { id: 'org-team-one', slug: 'team-one', display_name: 'Team One', role: 'owner' },
+  ]),
   listMyTokens: vi.fn().mockResolvedValue([]),
   getRunnerCapabilities: vi.fn().mockResolvedValue(null),
   listAuditEvents: vi.fn().mockResolvedValue([]),
@@ -81,6 +85,15 @@ describe('AppRouter', () => {
       expect(screen.getByTestId('nav-repos')).toBeTruthy()
     })
     expect(screen.getByTestId('session-handle').textContent).toBe('admin')
+  })
+
+  it('renders an accessible non-demo organization route', async () => {
+    renderAt('/org/team-one/repos')
+    meResolve({ handle: 'admin' })
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-list')).toBeTruthy()
+    })
+    expect(screen.getByRole('combobox', { name: '切换组织' })).toBeTruthy()
   })
 
   it('404 for unknown org slug', async () => {

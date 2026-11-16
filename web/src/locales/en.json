@@ -82,6 +82,16 @@
     "repoDelivery": "Delivery",
     "repoSettings": "Repository settings"
   },
+  "organizations": {
+    "title": "Organizations",
+    "switch": "Switch organization",
+    "createTitle": "Create an organization",
+    "displayName": "Organization name",
+    "slug": "Organization URL name",
+    "role": "Role: {{role}}",
+    "create": "Create organization",
+    "createFailed": "Could not create organization."
+  },
   "accountSecurity": {
     "currentPassword": "Current password",
     "newPassword": "New password",

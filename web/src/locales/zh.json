@@ -82,6 +82,16 @@
     "repoDelivery": "交付",
     "repoSettings": "仓库设置"
   },
+  "organizations": {
+    "title": "组织",
+    "switch": "切换组织",
+    "createTitle": "创建组织",
+    "displayName": "组织名称",
+    "slug": "组织 URL 名称",
+    "role": "角色：{{role}}",
+    "create": "创建组织",
+    "createFailed": "无法创建组织。"
+  },
   "accountSecurity": {
     "currentPassword": "当前密码",
     "newPassword": "新密码",

@@ -1,10 +1,10 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc15`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.2.0-rc1`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
-MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc15`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。真实 Codex Runner 验收脚本需显式启用并指定 token 预算；不会在普通 CI 中调用模型。
+MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.2.0-rc1`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。真实 Codex Runner 验收脚本需显式启用并指定 token 预算；不会在普通 CI 中调用模型。
 
 **诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、OAuth/SAML、多区域 HA。Live Codex 仍需运营方提供 CLI 与凭据并实际运行显式验收；仓库不代为验收在线模型能力。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
 
@@ -139,7 +139,7 @@ yarn --cwd web dev   # 代理 /api 与 /git → http://127.0.0.1:5173/login
 # - 登录入口 `/login`；登录后默认 `/org/demo/repos`；仓库创建后进入该仓库 `/issues`（与点击仓库列表一致）。
 # - 仓库子页：`/org/demo/repos/:slug/issues|pulls|code|delivery|settings`；Issue/PR **深链** `.../issues/:n`、`.../pulls/:n`（裸 `/org/demo/repos/:slug` 重定向到 issues）。
 # - 账户 `/account/security` 含 **SSH 公钥**管理；Git **HTTPS + PAT** 与 **SSH**（`musehub-git-ssh serve`，见 `deploy/RUNBOOK.md`）均可用于 clone/push。
-# - 组织与账户：`/org/demo/settings|members|audit|runner`，`/account/security|tokens`；**当前 API 仅支持 org `demo`**，其它 org 显示 404。
+# - 组织与账户：`/organizations` 可查看当前用户所属组织、创建组织并切换工作区；新组织创建时将创建者设为 owner。组织资源仍由后端 membership 授权。账户：`/account/security|tokens`。
 # - 生产 Compose 网关（`:8080`）静态 UI 使用 `deploy/Caddyfile*` 的 `try_files {path} /index.html` SPA 回退（与 Vite dev 深链行为一致）。
 
 # 浏览器 E2E（需 Postgres + musehub-server + bootstrap 密码）
@@ -166,7 +166,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | 受保护环境审批 + 部署列表/历史（控制台） | `[x]` | `deployment_approval_console`、`deployment-list-discovery`、`deployment-history-console`；列表 API `GET .../deployments`（limit/offset/state） |
 | 部署失败诊断与回滚（控制台） | `[x]` | `deployment-rollback-console`；REST `POST .../deployments/rollback` + 客户端 `attempt_id` 防重复点击；Playwright 为 **路由 fixture**，不替代 `deployment_rollback_runner_e2e` / 受保护环境 live 审批 |
 | 流水线失败诊断与 build job 重试（控制台） | `[x]` | `pipeline_job_retry_http_e2e`、`pipeline-job-retry-console`（**fixture**）；`POST .../pipeline-jobs/{id}/retry` + `attempt_id`；HTTP 证明 **requeue**，**非** live worker 执行完成 |
-| 流水线运行取消（控制台与 Runner） | `[x]` 控制台；验收待跑 | `pipeline_cancel_http_e2e`、`pipeline-cancel-console`（**fixture**）；`remote_pipeline_runner_e2e` 增加运行中取消、PID 退出、run/job 终态和制品隔离断言；`cancel_requested` 为观测中状态，**canceled** 才表示终态；当前环境未配置验收数据库，尚无本地运行结果 |
+| 流水线运行取消（控制台与 Runner） | `[x]` 控制台与 Linux Runner | `pipeline_cancel_http_e2e`、`pipeline-cancel-console`（**fixture**）；`remote_pipeline_runner_e2e` 实际通过：慢速 Adapter 已启动后发起取消，PID 退出、run/job 终态为 `canceled`、制品被隔离且没有 `bundle.tar`；`cancel_requested` 为观测中状态，**canceled** 才表示终态 |
 | PR CI 失败 → Agent 修复（§2 S3） | `[x]` | `GET .../ci-failure`（含失败 job **log_api_path** / **log_excerpt** 来自 `pipeline_job_logs`）+ `GET .../pipeline-jobs/{id}/logs` + `agent-fix`；`pr_ci_failure_log_http_e2e`、`pr_agent_fix_http_e2e`；每 PR 最大轮次默认 **3**；**无** check 独立日志、**非** 自动循环；CI 绿 ≠ §8 生产验收 |
 | 备份恢复 | `[x]` | `verify-backup-restore.sh`（含 Git OID） |
 | **Compose runner 真实部署** | `[x]` CI only | `compose-runner-e2e`：pull 解析 `@sha256`、无 digest 即失败；**非**用户 Release OCI |

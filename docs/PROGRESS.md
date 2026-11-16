@@ -24,11 +24,12 @@
 | DEP-02b | `[x]` 控制台 | 仓库范围列表：待审批发现 + **全部历史**分页（`offset`）、load more；`deployment_list_http_e2e` + `deployment-history-console` Playwright |
 | DEP-03 | `[x]` 控制台 | 失败摘要 + **回滚**（`POST .../deployments/rollback`，会话写权限，**attempt_id** 幂等）；`deployment_rollback_e2e` + `deployment-rollback-console` Playwright（**fixture**，非 live runner 审批链） |
 | CI-02b | `[x]` 控制台 | 流水线失败 **error_code** + job 列表；**build** job 显式重试（`GET .../pipeline-runs/{id}/jobs`，`POST .../pipeline-jobs/{id}/retry` + **attempt_id** 幂等，无自动重试）；`retry_pipeline_job` **事务 + job/run `FOR UPDATE`**：run 非 `failed`（含 **cancel**）→ **409** 回滚、job 不变；job+run **conditional UPDATE** 均验 `rows_affected` 后才 `commit`/spawn；`pipeline_job_retry_http_e2e`（含 run/job 状态错配 + 并发 distinct attempt）；`pipeline-job-retry-console` Playwright（**fixture**）；HTTP 证明 **requeue**，**非** live worker；与 MCP `musehub_job_retry` 共用核心 |
-| CI-02c | `[x]` 控制台 | **queued/running** 显式取消（`POST .../pipeline-runs/{id}/cancel`）；UI 展示 **cancel_requested** / **canceled** + 诚实说明（API 成功 ≠ worker 已停）；`pipeline_cancel_http_e2e`（auth/绑定/终态 no-op）+ `pipeline-cancel-console` Playwright（**fixture**）；`remote_pipeline_runner_e2e` 新增运行中取消验收：确认慢速 Adapter PID 已启动，再验证进程退出、run/job 为 **canceled**、制品隔离且不生成 `bundle.tar`（本地 DB 不可用，尚未执行） |
+| CI-02c | `[x]` 控制台 | **queued/running** 显式取消（`POST .../pipeline-runs/{id}/cancel`）；UI 展示 **cancel_requested** / **canceled** + 诚实说明（API 成功 ≠ worker 已停）；`pipeline_cancel_http_e2e`（auth/绑定/终态 no-op）+ `pipeline-cancel-console` Playwright（**fixture**）；`remote_pipeline_runner_e2e` 新增运行中取消验收：确认慢速 Adapter PID 已启动，再验证进程退出、run/job 为 **canceled**、制品隔离且不生成 `bundle.tar`（Linux/PostgreSQL E2E 已通过；容器内创建了测试夹具所需的 `musehub-git` 组） |
 | S3 | `[x]` | `docs/01-product-requirements.md` §2 **失败修复**：PR CI 摘要 + **pipeline job 日志定位**（`pipeline_job_logs` + `GET .../pipeline-jobs/{id}/logs`）；`pr_ci_failure_log_http_e2e`；手动 `agent-fix` + `pr_agent_fix_http_e2e`；**无** 仓库 check 独立日志存储、**无** 自动无限自修复 |
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
 | IAM/PIPE/AGT | `[~]` | 生产 MCP **52 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
+| IAM-00 | `[x]` | `GET/POST /api/v1/orgs`：只列当前用户活跃组织；创建组织、owner membership 和 `org.create` 审计同事务；Web `/organizations` 支持列表、创建和切换。`organizations_http_e2e` 与非 demo 路由用例覆盖，Linux/PostgreSQL E2E 已通过。 |
 | AGT-02 | `[x]` | 取消与 Git commit 发布通过 AgentRun 行锁串行化；已接受的取消不会被后续成功状态覆盖，发布完成后到达的取消请求返回 409。真实 Codex 在线验收仍见下表。 |
 
 ## S1 协作（本轮 `cursor/v1-collab-git-pr-issues-5f97`）

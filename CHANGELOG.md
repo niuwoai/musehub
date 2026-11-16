@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0-rc1]
+
+### Added
+
+- Organization listing, creation with transactional owner membership and audit event, and workspace organization switching.
+
+### Fixed
+
+- Live remote pipeline cancellation acceptance now waits for the slow process to start and checks process exit, canceled terminal state, and artifact quarantine.
+
 ## [0.1.0-rc15]
 
 ### Added

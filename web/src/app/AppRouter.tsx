@@ -24,6 +24,7 @@ import { RepoCodePage } from '../pages/RepoCodePage'
 import { RepoDeliveryPage } from '../pages/RepoDeliveryPage'
 import { RepoSettingsPage } from '../pages/RepoSettingsPage'
 import { SessionBootScreen } from '../pages/SessionBootScreen'
+import { OrganizationsPage } from '../pages/OrganizationsPage'
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { sessionAuth, session } = useWorkspace()
@@ -102,6 +103,7 @@ export function AppRouter() {
           </ProtectedRoute>
         }
       >
+        <Route path="/organizations" element={<OrganizationsPage />} />
         <Route
           path="/org/:org/repos"
           element={

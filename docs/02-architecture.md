@@ -1,6 +1,6 @@
 # MuseHub 技术架构
 
-> 设计基线 0.1｜开发版本：0.1.0-rc15｜2026-11-16。所有容量、时延和恢复能力须在实现后验证。
+> 设计基线 0.1｜开发版本：0.2.0-rc1｜2026-11-17。所有容量、时延和恢复能力须在实现后验证。
 
 ## 1. 总体结构
 
@@ -82,7 +82,7 @@ Git 的 pre/post-receive hook 分别位于 ref 更新前后；post-receive 失�
 
 ## 4. 应用服务、接口与事件
 
-REST `/api/v1`、Web 和 MCP 均调用同一 use case；禁止 MCP 直接更新表或执行 shell。身份上下文包括 actor、发起用户、scope、org/repo 限制、trace ID。
+REST `/api/v1`、Web 和 MCP 均调用同一 use case；禁止 MCP 直接更新表或执行 shell。身份上下文包括 actor、发起用户、scope、org/repo 限制、trace ID。组织入口 `GET/POST /api/v1/orgs` 只暴露会话用户的活跃 membership；创建组织、owner membership 与 `org.create` 审计记录在同一事务提交。Web 工作区选择用于导航，后端 membership 检查仍是每个组织资源的授权边界。
 
 所有业务写操作在数据库事务中写主记录、审计摘要和 outbox。消费者按 `(consumer,event_id)` 去重。事件至少一次投递，外部副作用使用业务操作 ID、CAS、目标对账实现可重试。
 

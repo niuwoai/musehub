@@ -1,6 +1,6 @@
 # MuseHub 产品概览
 
-> 更新：2026-11-16｜文档基线：0.1｜开发版本：0.1.0-rc15｜阶段：M0 进行中，尚未发布。
+> 更新：2026-11-17｜文档基线：0.1｜开发版本：0.2.0-rc1｜阶段：M0 进行中，尚未发布。
 
 ## 定位
 
@@ -14,7 +14,7 @@ Repository 管代码；Issue 定义问题与验收；Plan 保存实现方案；A
 
 ## 首版范围
 
-1. 内网用户、组织、角色、PAT、SSH key 和审计。
+1. 内网用户、组织创建与列表、工作区切换、角色、PAT、SSH key 和审计。
 2. 私有 Git 仓库、SSH/HTTPS clone/fetch/push、文件与 diff 浏览、同仓库分支 PR、保护分支。
 3. Issue、不可变需求版本、验收条目、实现计划、讨论和交付关联。
 4. 一个可实测的编码 Agent 适配器，任务排队、取消、预算、失败说明、反馈后新一轮执行。
@@ -41,7 +41,7 @@ Git LFS、跨仓库 fork PR、持续镜像、代码语义索引、原生 K8s/Hel
 
 ## 当前实现
 
-**产品路径（Linux CI / Compose）：** 账号与组织、Git HTTP、Issue/计划、参考 Agent 与 codex-sim、PR/流水线/Release/Compose 部署、备份恢复、产品 MCP 与多数 REST 已在 acceptance 与安全 E2E 中验证；单机安装见 README「自托管安装」与 `deploy/RUNBOOK.md`。**仍未验收：** 公网真实 TLS、物理双机长期运行、Live Codex 在线、OAuth。**探针层（M0）：** Colima digest/rootless/SSH、rmcp 互操作探针（`musehub-mcp-probe`）与 Agent fixture — 不代表生产能力。
+**产品路径（Linux CI / Compose）：** 账号与组织创建/列表/切换、Git HTTP、Issue/计划、参考 Agent 与 codex-sim、PR/流水线/Release/Compose 部署、备份恢复、产品 MCP 与多数 REST 已在 acceptance 与安全 E2E 中验证；组织创建与授权由 `organizations_http_e2e` 覆盖；单机安装见 README「自托管安装」与 `deploy/RUNBOOK.md`。**仍未验收：** 公网真实 TLS、物理双机长期运行、Live Codex 在线、OAuth。**探针层（M0）：** Colima digest/rootless/SSH、rmcp 互操作探针（`musehub-mcp-probe`）与 Agent fixture — 不代表生产能力。
 
 ## 当前待办
 

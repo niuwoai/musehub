@@ -2,6 +2,7 @@ export const DEFAULT_ORG = 'demo'
 
 export const paths = {
   login: () => '/login',
+  organizations: () => '/organizations',
   repos: (org: string) => `/org/${org}/repos`,
   orgSettings: (org: string) => `/org/${org}/settings`,
   members: (org: string) => `/org/${org}/members`,

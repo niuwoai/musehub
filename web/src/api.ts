@@ -263,6 +263,24 @@ export async function me() {
   return api<Principal>('/api/v1/me')
 }
 
+export type Organization = {
+  id: string
+  slug: string
+  display_name: string
+  role: string
+}
+
+export async function listOrganizations() {
+  return api<Organization[]>('/api/v1/orgs')
+}
+
+export async function createOrganization(slug: string, displayName: string) {
+  return api<Organization>('/api/v1/orgs', {
+    method: 'POST',
+    body: JSON.stringify({ slug, display_name: displayName }),
+  })
+}
+
 export async function changePassword(currentPassword: string, newPassword: string) {
   return api<void>('/api/v1/auth/change-password', {
     method: 'POST',
