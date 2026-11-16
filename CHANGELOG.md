@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0-rc2]
+
+### Fixed
+
+- Grouped AgentRun commit publication inputs into a named context to satisfy Clippy without suppressing the lint.
+
 ## [0.2.0-rc1]
 
 ### Added

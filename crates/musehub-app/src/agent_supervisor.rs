@@ -302,13 +302,15 @@ pub async fn run_agent_job(
         } => {
             publish_agent_commit(
                 &pool,
-                run_id,
-                instance_id,
-                epoch,
-                work_dir.path(),
-                &branch,
-                &commit,
-                usage,
+                AgentCommitPublication {
+                    run_id,
+                    instance_id,
+                    epoch,
+                    work_dir: work_dir.path(),
+                    branch: &branch,
+                    commit: &commit,
+                    usage,
+                },
             )
             .await;
             let _ = repo_id;
@@ -368,16 +370,26 @@ pub async fn run_agent_job(
     }
 }
 
-async fn publish_agent_commit(
-    pool: &PgPool,
+struct AgentCommitPublication<'a> {
     run_id: Uuid,
     instance_id: Uuid,
     epoch: i64,
-    work_dir: &Path,
-    branch: &str,
-    commit: &str,
+    work_dir: &'a Path,
+    branch: &'a str,
+    commit: &'a str,
     usage: UsageTotals,
-) {
+}
+
+async fn publish_agent_commit(pool: &PgPool, publication: AgentCommitPublication<'_>) {
+    let AgentCommitPublication {
+        run_id,
+        instance_id,
+        epoch,
+        work_dir,
+        branch,
+        commit,
+        usage,
+    } = publication;
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(error) => {
