@@ -1,6 +1,6 @@
 # MuseHub MCP 接口契约
 
-> 契约草案 v1｜2026-10-30。工具名称、字段和错误码是实现基线；尚未生成 SDK、实现 server 或完成互操作验收。
+> 契约 v1｜2026-10-30。工具名称、字段和错误码是实现基线；生产 `/mcp` 已实现 Bearer PAT、工具目录、Resources 与幂等写入。OAuth 远程授权不属于 V1 承诺。
 
 ## 1. 接入与兼容范围
 
@@ -91,6 +91,7 @@ MCP `CallToolResult.structuredContent`：
 | musehub_repository_read_file | Repo、commit_oid:OID、path:string、start_line?:int≥1、max_lines?:int1..500 | path、oid、text?、binary、truncated、next_line? | repository:read；最大 256 KiB |
 | musehub_repository_search | Repo、commit_oid:OID、query:string1..256、path_prefix?:string、Page | items: SearchHit[]、truncated | repository:read；V1 字面文本搜索，无任意正则执行 |
 | musehub_commit_compare | Repo、base_oid:OID、head_oid:OID、path?:string、Page | items: FileDiff[]、summary、truncated | repository:read；大 diff 分文件读取 |
+| musehub_repository_history | Repo、commit_oid:OID、Page | items: Commit[]、page.next_cursor、truncated | repository:read；按 commit 固定历史；cursor 绑定仓库、主体、commit 与 limit，最多翻阅 100,000 条 |
 
 ## 6. 工具目录：Issue 与计划
 
@@ -175,6 +176,7 @@ PipelineState=`queued/running/succeeded/failed/cancel_requested/canceled`。agen
 | 资源 | 除公共字段外必须提供 |
 |---|---|
 | Repository | org_id、slug、description、default_branch、state、clone_urls、object_format、permissions |
+| Commit | oid、author、summary、committed_at_epoch |
 | TreeEntry | path、kind、oid、size?；无内容 |
 | SearchHit | path、line、snippet、commit_oid |
 | FileDiff | old_path、new_path、change_type、binary、additions、deletions、hunks?、truncated |

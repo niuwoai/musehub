@@ -1,10 +1,10 @@
 # MuseHub
 
-> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc11`（开发中，尚未发布）。
+> AI 时代的内网研发与交付平台。文档基线：0.1，2026-10-30。开发版本：`0.1.0-rc13`（开发中，尚未发布）。
 
 GitHub 仓库：[niuwoai/musehub](https://github.com/niuwoai/musehub)。初始文档快照标签：`v0.0.0-docs1`，仅用于标识设计资料，不代表可运行产品发布。
 
-MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc11`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。真实 Codex Runner 验收脚本需显式启用并指定 token 预算；不会在普通 CI 中调用模型。
+MuseHub 是可私有部署的研发与交付控制面：Rust API、React 控制台、PostgreSQL 状态、bare Git 与独立 **Runner** worker。模型网关为外接依赖。**当前开发版本见 `VERSION`（`0.1.0-rc13`）**：账号/组织/PAT、Git HTTP、Issue·计划·Agent（reference / codex-sim）、PR·门禁、流水线、Release、Compose 部署、审计与产品 MCP 路径已在 Linux CI 与 acceptance 脚本中验证，可通过 **单机 Docker Compose** 安装使用。真实 Codex Runner 验收脚本需显式启用并指定 token 预算；不会在普通 CI 中调用模型。
 
 **诚实边界（需运营方自行补齐，本仓库不代为验收）：** 公网 **真实 TLS** 证书与 DNS、控制面与 Runner **另一台物理机** 的长期运行、OAuth/SAML、多区域 HA。Live Codex 仍需运营方提供 CLI 与凭据并实际运行显式验收；仓库不代为验收在线模型能力。商业许可证与正式发布日期待定。细粒度进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
 
@@ -173,7 +173,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 | **Pipeline OCI → Release → runner 产品路径** | `[x]` CI | `pipeline-oci-product`：本地 registry build/push、双 commit 不同 digest、`pipeline_oci_product_e2e` + `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 浏览器 E2E |
 | Compose **经产品 API** mock 回退 | `[x]` 显式拒绝 | `MUSEHUB_REQUIRE_PIPELINE_OCI=1` 时禁止 compose-mock / mock health；无 OCI 制品不得发布 |
 | **生产 compose 远程 worker 全链** | `[x]` 本地 | `verify-product-production-stack-e2e.sh`；`install-production-compose.sh` |
-| OCI / 多环境 / 业务 MCP | `[~]` | **51** 工具 + **22** 写幂等 + **5** §13 读；`writes_thin`（merge/respond/pipeline 幂等）+ `resources_v1_*`（含跨 org）；**无** OAuth 远程 |
+| OCI / 多环境 / 业务 MCP | `[~]` | **52** 工具 + **23** 写幂等 + **5** §13 读；`writes_thin`（merge/respond/pipeline 幂等）+ `resources_v1_*`（含跨 org）；**无** OAuth 远程 |
 
 `/readyz` 在 DB 与 `MUSEHUB_GIT_ROOT` 均就绪时为 200，并暴露 `compose_adapter_mode`（产品镜像默认 **mock**）与 `pipeline_executor`（默认 **in_process**；远程 worker 为 `MUSEHUB_PIPELINE_EXECUTOR=remote`）。
 
@@ -198,7 +198,7 @@ cargo test -p musehub-app --test product_slice   # 需 Postgres（CI 提供）
 
 - 真实 Agent 适配器选型，以及真实任务的提交、取消和预算证据。当前 Agent 探针只是 fixture。
 - 生产级多租户隔离。当前 rootless 与 OpenSSH 证据只覆盖 Colima Linux VM 内的单个普通用户和临时 sshd，不代表不可信贡献者隔离，也不是选定的 Git 服务实现。
-- 生产 MCP 服务（完整工具目录、领域授权、写工具幂等、OAuth）与正式兼容矩阵发布。
+- 生产 MCP V1 工具目录、领域授权、写工具幂等和资源读取已实现；仍需正式发布客户端兼容矩阵。OAuth 远程授权不属于 V1 承诺。
 - 同类产品最小任务试用和差异结论。
 
 **环境相关测试（本机证据，Linux CI 可能失败且未用 skip 掩盖）：** Colima/Homebrew 绑定的 `musehub-container-probe`、`musehub-rootless-probe`、`musehub-ssh-probe` 集成测试，以及 Homebrew PostgreSQL@17 上的 `musehub-migrate` 集成测试。若在 macOS 开发者机上跑全量 `cargo test --workspace`，需具备对应路径的二进制。

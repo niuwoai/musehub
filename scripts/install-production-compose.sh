@@ -10,8 +10,18 @@ if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && getent group docker >/dev/null 2>
   exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1; cd '$PWD' && '$ROOT/scripts/install-production-compose.sh'"
 fi
 
-if [[ ! -f .env ]]; then
-  cp .env.example .env
+if [[ -L .env ]]; then
+  echo "install_production=fail deploy/.env must not be a symlink" >&2
+  exit 1
+fi
+if [[ -e .env && ! -f .env ]]; then
+  echo "install_production=fail deploy/.env must be a regular file" >&2
+  exit 1
+fi
+if [[ -f .env ]]; then
+  chmod u=rw,go= .env
+else
+  install -m 600 .env.example .env
   PW="$(openssl rand -hex 16)"
   SEC="$(openssl rand -hex 24)"
   ADM="Admin-$(openssl rand -hex 8)"
@@ -24,6 +34,7 @@ if [[ ! -f .env ]]; then
   echo "install_production=generated_secrets env=deploy/.env admin_password=$ADM"
   echo "install_production=hint set MUSEHUB_PUBLIC_HTTP_ORIGIN in deploy/.env to your gateway hostname for Git clone"
 fi
+chmod u=rw,go= .env
 
 export MUSEHUB_RUNNER_PAT="${MUSEHUB_RUNNER_PAT:-placeholder-set-after-bootstrap}"
 export MUSEHUB_OCI_REGISTRY="${MUSEHUB_OCI_REGISTRY:-host.docker.internal:5000}"

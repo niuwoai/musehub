@@ -5,11 +5,13 @@ Clean Linux install uses **Docker Compose** only. The API container has **no** h
 ## Quick start (demo / lab stack)
 
 ```bash
-cp deploy/.env.example deploy/.env
+install -m 600 deploy/.env.example deploy/.env
 # Edit secrets (POSTGRES_PASSWORD, MUSEHUB_SESSION_SECRET, MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD)
 cd deploy
 docker compose up -d --build
 ```
+
+For an existing `deploy/.env`, run `chmod u=rw,go= deploy/.env` before editing or starting services. Keep the file owned by the account that manages the Compose stack.
 
 Automated smoke (throwaway project, no worker): from repo root  
 `./scripts/verify-clean-install-runbook.sh` → `clean_install_runbook=ok`.
@@ -42,7 +44,7 @@ Gateway serves **production static** `web/dist` (built in the gateway image) and
 | `MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD` | First-boot `admin` user (used once at migrate/prepare) |
 | `POSTGRES_PASSWORD` | Database password |
 
-Do not commit `deploy/.env`. Rotate secrets on compromise; backup before destructive ops.
+Do not commit `deploy/.env`. The production installer and Runner PAT configurator reject symlink paths and enforce mode `0600`; for a manually created or existing file, run `chmod u=rw,go= deploy/.env` and keep it owned by the account that manages the Compose stack. Rotate secrets on compromise; backup before destructive ops.
 
 ## Boot persistence (systemd)
 

@@ -7,6 +7,8 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 const CURSOR_PREFIX: &str = "mh1:";
+const HISTORY_CURSOR_PREFIX: &str = "mhh1:";
+pub const MAX_HISTORY_CURSOR_OFFSET: u64 = 100_000;
 
 pub fn encode_repo_cursor(created_at: OffsetDateTime, repo_id: Uuid) -> String {
     let ts = created_at
@@ -36,4 +38,58 @@ pub fn decode_repo_cursor(cursor: &str) -> Result<(OffsetDateTime, Uuid), AppErr
     let repo_id =
         Uuid::parse_str(id).map_err(|_| AppError::Validation("invalid cursor id".into()))?;
     Ok((created_at, repo_id))
+}
+
+pub fn encode_history_cursor(
+    repo_id: Uuid,
+    principal_id: Uuid,
+    commit_oid: &str,
+    offset: u64,
+    limit: i64,
+) -> String {
+    let raw = format!("{repo_id}|{principal_id}|{commit_oid}|{offset}|{limit}");
+    format!(
+        "{HISTORY_CURSOR_PREFIX}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes())
+    )
+}
+
+pub fn decode_history_cursor(
+    cursor: Option<&str>,
+    repo_id: Uuid,
+    principal_id: Uuid,
+    commit_oid: &str,
+    limit: i64,
+) -> Result<u64, AppError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let encoded = cursor
+        .strip_prefix(HISTORY_CURSOR_PREFIX)
+        .ok_or_else(|| AppError::Validation("invalid history cursor".into()))?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| AppError::Validation("invalid history cursor encoding".into()))?;
+    let raw = String::from_utf8(bytes)
+        .map_err(|_| AppError::Validation("invalid history cursor".into()))?;
+    let fields: Vec<&str> = raw.split('|').collect();
+    if fields.len() != 5
+        || fields[0] != repo_id.to_string()
+        || fields[1] != principal_id.to_string()
+        || fields[2] != commit_oid
+        || fields[4].parse::<i64>().ok() != Some(limit)
+    {
+        return Err(AppError::Validation(
+            "history cursor does not match query".into(),
+        ));
+    }
+    let offset = fields[3]
+        .parse::<u64>()
+        .map_err(|_| AppError::Validation("invalid history cursor offset".into()))?;
+    if offset >= MAX_HISTORY_CURSOR_OFFSET {
+        return Err(AppError::Validation(
+            "history cursor offset exceeds limit".into(),
+        ));
+    }
+    Ok(offset)
 }

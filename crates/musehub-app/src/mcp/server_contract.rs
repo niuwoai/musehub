@@ -20,7 +20,7 @@ use crate::mcp::contract_domain::{
 };
 use crate::mcp::envelope::ToolEnvelope;
 use crate::mcp::git_read::{
-    git_commit_compare, git_literal_search, git_read_file_at, git_tree_entries,
+    git_commit_compare, git_literal_search, git_log_commits, git_read_file_at, git_tree_entries,
 };
 use crate::mcp::idempotency::{
     begin_idempotent_write, complete_idempotent_write, fail_idempotent_write, IdempotencyAction,
@@ -75,6 +75,15 @@ struct CommitCompareInput {
     head_oid: String,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default, flatten)]
+    page: PageInput,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct RepositoryHistoryInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    commit_oid: String,
     #[serde(default, flatten)]
     page: PageInput,
 }
@@ -459,6 +468,63 @@ impl ProductionMcpServer {
                 "truncated": truncated,
             }))),
             Err(e) => Ok(domain_err(e)),
+        }
+    }
+
+    #[tool(
+        name = "musehub_repository_history",
+        description = "List commit history reachable from a commit",
+        annotations(read_only_hint = true)
+    )]
+    async fn musehub_repository_history(
+        &self,
+        Parameters(input): Parameters<RepositoryHistoryInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(error) = require_scope(&pat, READ_SCOPE) {
+            return Ok(domain_err(error));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(access) => access,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let bare = match git_repo_access(&self.state, &access).await {
+            Ok(path) => path,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let requested_limit = page_limit(input.page.limit);
+        let offset = match crate::mcp::pagination::decode_history_cursor(
+            input.page.cursor.as_deref(),
+            access.repo_id,
+            pat.principal_id,
+            &input.commit_oid,
+            requested_limit,
+        ) {
+            Ok(offset) => offset,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let remaining = crate::mcp::pagination::MAX_HISTORY_CURSOR_OFFSET.saturating_sub(offset);
+        let limit = requested_limit.min(remaining as i64);
+        match git_log_commits(&bare, &input.commit_oid, limit, offset) {
+            Ok((items, has_more)) => {
+                let next_offset = offset.saturating_add(items.len() as u64);
+                let can_continue =
+                    has_more && next_offset < crate::mcp::pagination::MAX_HISTORY_CURSOR_OFFSET;
+                let next_cursor = can_continue.then(|| {
+                    crate::mcp::pagination::encode_history_cursor(
+                        access.repo_id,
+                        pat.principal_id,
+                        &input.commit_oid,
+                        next_offset,
+                        limit,
+                    )
+                });
+                Ok(domain_ok_page(
+                    json!({ "items": items, "truncated": has_more && !can_continue }),
+                    page_meta(can_continue, next_cursor),
+                ))
+            }
+            Err(error) => Ok(domain_err(error)),
         }
     }
 

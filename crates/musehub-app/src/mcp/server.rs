@@ -65,7 +65,6 @@ impl ProductionMcpServer {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PageInput {
     #[serde(default)]
-    #[allow(dead_code)]
     cursor: Option<String>,
     #[serde(default)]
     limit: Option<u32>,

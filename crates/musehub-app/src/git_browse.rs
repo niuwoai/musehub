@@ -83,7 +83,7 @@ pub async fn list_commits(
     } else {
         crate::pr::git_rev_parse_public(&bare, &format!("refs/heads/{}", q.r#ref))?
     };
-    let (items, has_more) = git_log_commits(&bare, &oid, q.limit.clamp(1, 100))?;
+    let (items, has_more) = git_log_commits(&bare, &oid, q.limit.clamp(1, 100), 0)?;
     Ok(Json(serde_json::json!({
         "ref": q.r#ref,
         "commit_oid": oid,

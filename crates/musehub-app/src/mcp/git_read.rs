@@ -332,6 +332,7 @@ pub fn git_log_commits(
     bare: &Path,
     ref_oid: &str,
     limit: i64,
+    offset: u64,
 ) -> Result<(Vec<Value>, bool), AppError> {
     validate_git_oid(ref_oid).map_err(AppError::Validation)?;
     let fetch_n = limit.saturating_add(1).max(1);
@@ -347,6 +348,8 @@ pub fn git_log_commits(
             "--format=%H%x09%an%x09%s%x09%ct",
             "-n",
             &fetch_n.to_string(),
+            "--skip",
+            &offset.to_string(),
         ],
         MAX_GIT_CMD_OUTPUT_BYTES,
     )?;

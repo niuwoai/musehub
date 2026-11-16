@@ -28,7 +28,7 @@
 | S3 | `[x]` | `docs/01-product-requirements.md` §2 **失败修复**：PR CI 摘要 + **pipeline job 日志定位**（`pipeline_job_logs` + `GET .../pipeline-jobs/{id}/logs`）；`pr_ci_failure_log_http_e2e`；手动 `agent-fix` + `pr_agent_fix_http_e2e`；**无** 仓库 check 独立日志存储、**无** 自动无限自修复 |
 | DEP-COMPOSE | `[x]` 产品路径 | pipeline OCI → publish → compose-runner；`pipeline_oci_product_e2e` |
 | OPS-01 | `[x]` | backup：`verify-backup-restore.sh`（含 Git OID） |
-| IAM/PIPE/AGT | `[~]` | 生产 MCP **51 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
+| IAM/PIPE/AGT | `[~]` | 生产 MCP **52 工具**（§5–9 `v1_implemented`）+ **5** 个 §13 资源读；side-effect 矩阵 E2E；`adapter=codex` **仅 live**（未配置 fail closed）；`adapter=codex-sim` 显式 sim |
 | AGT-02 | `[x]` | 取消与 Git commit 发布通过 AgentRun 行锁串行化；已接受的取消不会被后续成功状态覆盖，发布完成后到达的取消请求返回 409。真实 Codex 在线验收仍见下表。 |
 
 ## S1 协作（本轮 `cursor/v1-collab-git-pr-issues-5f97`）
@@ -60,7 +60,7 @@
 | 备份恢复 | `[x]` | `verify-backup-restore.sh` |
 | 用户可编辑配置（非密钥） | `[~]` | `organizations.preferences` + PATCH settings（display_name/default_collaborator_role）；Web `config-grants.spec.ts` |
 | 受保护环境部署审批 | `[x]` 本地 | `0027` + MCP `deployment_approve` 状态机；`protected_deployment_approval_e2e` |
-| MCP V1 完整工具/Resources 读实现 | `[~]`（契约本地可停扩） | **22** 写幂等均有 MCP 副作用/门禁/幂等证明（`writes_thin` 含 `agent_run_start`；OCI 链 `pipeline_run` replay）；§13 catalog + negatives；**无** Live Codex/OAuth |
+| MCP V1 完整工具/Resources 读实现 | `[~]`（契约本地可停扩） | **23** 写幂等均有 MCP 副作用/门禁/幂等证明（`writes_thin` 含 `agent_run_start`；OCI 链 `pipeline_run` replay）；§13 catalog + negatives；**无** Live Codex/OAuth |
 | Codex live 在线 | `[~]` | `adapter=codex` 调用 Codex CLI JSONL、解析 turn token usage，Git-backed AgentRun 成功需在指定分支产生新 commit；Codex 不提供费用用量，显式金额预算 fail closed；`scripts/verify-live-codex-agent-e2e.sh` 要求显式 opt-in 和 token 预算，清理时撤销临时 Runner PAT，**未在本机执行**；`codex-sim` 显式；**无** CI 在线凭据（刻意） |
 
 ## 未验证边界

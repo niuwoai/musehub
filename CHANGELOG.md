@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-rc13]
+
+### Added
+
+- Added paginated repository commit history to the production MCP tool catalog, with cursors bound to the authorized principal, repository, commit, and page size.
+
+## [0.1.0-rc12]
+
+### Fixed
+
+- Production installation and Runner PAT updates now enforce mode `0600` for `deploy/.env`, reject symlink paths, and use a private same-directory temporary file for atomic PAT replacement.
+
 ## [0.1.0-rc11]
 
 ### Fixed

@@ -23,7 +23,12 @@ done
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
-[[ -f "$ENV_FILE" ]] || { echo "missing env file: $ENV_FILE" >&2; exit 1; }
+if [[ -L "$ENV_FILE" ]]; then
+  echo "configure_runner_pat=fail env file must not be a symlink: $ENV_FILE" >&2
+  exit 1
+fi
+[[ -f "$ENV_FILE" ]] || { echo "missing regular env file: $ENV_FILE" >&2; exit 1; }
+chmod u=rw,go= "$ENV_FILE"
 
 # shellcheck disable=SC1090
 set -a
@@ -44,7 +49,14 @@ fi
 curl -fsS "$BASE/readyz" | jq -e '.ready == true and .checks.product_api == "ok"' >/dev/null
 
 COOKIE_JAR=$(mktemp)
-trap 'rm -f "$COOKIE_JAR"' EXIT
+TEMP_ENV_FILE=""
+cleanup() {
+  rm -f "$COOKIE_JAR"
+  if [[ -n "$TEMP_ENV_FILE" ]]; then
+    rm -f "$TEMP_ENV_FILE"
+  fi
+}
+trap cleanup EXIT
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -H 'Content-Type: application/json' \
   -d "$(jq -n --arg h admin --arg p "$BOOTSTRAP_PW" '{handle:$h,password:$p}')" \
   "$BASE/api/v1/auth/login" | jq -e '.ok == true' >/dev/null
@@ -84,9 +96,22 @@ PAT_JSON=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST -H 'Content-Type:
 RUNNER_PAT=$(echo "$PAT_JSON" | jq -r .token)
 [[ ${#RUNNER_PAT} -gt 20 ]] || { echo "configure_runner_pat=fail mint" >&2; exit 1; }
 
-grep -v '^MUSEHUB_RUNNER_PAT=' "$ENV_FILE" >"${ENV_FILE}.new"
-printf 'MUSEHUB_RUNNER_PAT=%s\n' "$RUNNER_PAT" >>"${ENV_FILE}.new"
-mv "${ENV_FILE}.new" "$ENV_FILE"
+if [[ -L "$ENV_FILE" || ! -f "$ENV_FILE" ]]; then
+  echo "configure_runner_pat=fail env file changed or is not regular: $ENV_FILE" >&2
+  exit 1
+fi
+TEMP_ENV_FILE=$(mktemp "${ENV_FILE}.new.XXXXXX")
+chmod u=rw,go= "$TEMP_ENV_FILE"
+awk '!/^MUSEHUB_RUNNER_PAT=/' "$ENV_FILE" >"$TEMP_ENV_FILE"
+printf 'MUSEHUB_RUNNER_PAT=%s\n' "$RUNNER_PAT" >>"$TEMP_ENV_FILE"
+chmod u=rw,go= "$TEMP_ENV_FILE"
+if [[ -L "$ENV_FILE" ]]; then
+  echo "configure_runner_pat=fail env file must not be a symlink: $ENV_FILE" >&2
+  exit 1
+fi
+mv -f "$TEMP_ENV_FILE" "$ENV_FILE"
+TEMP_ENV_FILE=""
+chmod u=rw,go= "$ENV_FILE"
 echo "configure_runner_pat=ok env=$ENV_FILE runner_handle=$RUNNER_MEMBER"
 
 if [[ "$START_RUNNER" -eq 1 ]]; then
