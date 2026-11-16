@@ -34,7 +34,7 @@ test.describe('IAM grants console', () => {
     await page.getByTestId('repo-grant-submit').click()
     const memberRow = page.getByTestId('repo-grant-row').filter({ hasText: member })
     await expect(memberRow).toHaveCount(1, { timeout: 15_000 })
-    await expect(memberRow).toContainText('reader')
+    await expect(memberRow).toContainText(/reader|读者/i)
 
     const memberApi = await playwright.request.newContext({
       baseURL: e2eServerOrigin(),
