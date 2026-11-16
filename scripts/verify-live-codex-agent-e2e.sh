@@ -28,6 +28,17 @@ export MUSEHUB_AGENT_CODEX_BIN
 
 RUN_ID=""
 RUNNER_TOKEN_ID=""
+CANCEL_CONFIRM_TIMEOUT_SECS="${MUSEHUB_LIVE_CODEX_CANCEL_CONFIRM_TIMEOUT_SECS:-30}"
+[[ "$CANCEL_CONFIRM_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "MUSEHUB_LIVE_CODEX_CANCEL_CONFIRM_TIMEOUT_SECS must be a positive integer" >&2
+  exit 2
+}
+is_terminal_agent_run_state() {
+  case "${1:-}" in
+    succeeded|failed|canceled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 revoke_live_codex_token() {
   [[ -n "${RUNNER_TOKEN_ID:-}" && -n "${DATABASE_URL:-}" ]] || return 0
   if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v token_id="$RUNNER_TOKEN_ID" \
@@ -39,15 +50,24 @@ revoke_live_codex_token() {
 }
 live_codex_cleanup() {
   local status=$?
+  local state=""
+  local elapsed
   if [[ -n "${RUN_ID:-}" && -n "${COOKIE:-}" && -n "${API_PORT:-}" ]]; then
     curl --max-time 5 -sf -X POST \
       -H "Cookie: musehub_session=$COOKIE" \
       "http://127.0.0.1:${API_PORT}/api/v1/agent-runs/${RUN_ID}/cancel" >/dev/null || true
-    for _ in $(seq 1 30); do
+    for ((elapsed=0; elapsed<CANCEL_CONFIRM_TIMEOUT_SECS; elapsed++)); do
       state=$(psql "$DATABASE_URL" -Atc "SELECT state FROM agent_runs WHERE id='$RUN_ID'" 2>/dev/null || true)
-      [[ "$state" == "succeeded" || "$state" == "failed" || "$state" == "canceled" ]] && break
+      is_terminal_agent_run_state "$state" && break
       sleep 1
     done
+    state=$(psql "$DATABASE_URL" -Atc "SELECT state FROM agent_runs WHERE id='$RUN_ID'" 2>/dev/null || true)
+    if ! is_terminal_agent_run_state "$state"; then
+      printf 'error: AgentRun cancellation unconfirmed after %s seconds (run_id=%s state=%s); preserving workspace at %s\n' \
+        "$CANCEL_CONFIRM_TIMEOUT_SECS" "$RUN_ID" "${state:-unknown}" "$GIT_ROOT" >&2
+      export MUSEHUB_KEEP_GIT_ROOT=1
+      status=1
+    fi
   fi
   if ! revoke_live_codex_token; then
     echo "warning: could not revoke temporary runner token" >&2
@@ -101,10 +121,10 @@ MAX_WAIT_SECS="${MUSEHUB_LIVE_CODEX_TIMEOUT_SECS:-900}"
 [[ "$MAX_WAIT_SECS" =~ ^[1-9][0-9]*$ ]] || { echo "invalid timeout" >&2; exit 2; }
 for ((elapsed=0; elapsed<MAX_WAIT_SECS; elapsed++)); do
   state=$(psql "$DATABASE_URL" -Atc "SELECT state FROM agent_runs WHERE id='$RUN_ID'")
-  [[ "$state" == "succeeded" || "$state" == "failed" || "$state" == "canceled" ]] && break
+  is_terminal_agent_run_state "$state" && break
   sleep 1
 done
-if [[ "$state" != "succeeded" && "$state" != "failed" && "$state" != "canceled" ]]; then
+if ! is_terminal_agent_run_state "$state"; then
   echo "live Codex acceptance timed out; requesting cancellation for run $RUN_ID" >&2
   curl --max-time 5 -sf -X POST \
     -H "Cookie: musehub_session=$COOKIE" \

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc10]
+
+### Fixed
+
+- Live Codex acceptance now reports unconfirmed AgentRun cancellation after timeout and preserves the temporary workspace for investigation.
+
 ## [0.1.0-rc9]
 
 ### Fixed
