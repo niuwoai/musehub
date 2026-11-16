@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc15]
+
+### Added
+
+- Remote Runner acceptance now cancels a running pipeline adapter and verifies process termination, canceled run/job states, and artifact quarantine.
+
 ## [0.1.0-rc14]
 
 ### Fixed

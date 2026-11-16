@@ -23,6 +23,11 @@ fn main() {
         .filter(|&s| s > 0 && s <= 3600)
         .unwrap_or(120);
     println!(r#"{{"type":"started","source_oid":"{source_oid}","run_id":"{run_id}"}}"#);
+    let marker = std::env::temp_dir().join(format!("musehub-pipeline-{run_id}.started"));
+    if std::fs::write(marker, std::process::id().to_string()).is_err() {
+        emit_error("start_marker_failed");
+        std::process::exit(1);
+    }
     println!(r#"{{"type":"holding","seconds":{hold_secs}}}"#);
     thread::sleep(Duration::from_secs(hold_secs));
     let tree = Command::new("git")
