@@ -154,19 +154,18 @@ async fn product_mcp_rust_streamable_http_matrix() {
 
 #[tokio::test]
 async fn product_mcp_python_streamable_http_matrix() {
-    if Command::new("python3")
-        .args(["-c", "import mcp"])
+    let dependency_check = Command::new("python3")
+        .args(["-c", "import httpx2, mcp"])
         .env(
             "PYTHONPATH",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mcp-matrix-pydeps"),
         )
         .status()
-        .map(|s| !s.success())
-        .unwrap_or(true)
-    {
-        eprintln!("skip python matrix: mcp SDK not on PYTHONPATH (run scripts/setup-mcp-matrix-python-deps.sh)");
-        return;
-    }
+        .expect("python3 is required for the production MCP client matrix");
+    assert!(
+        dependency_check.success(),
+        "production MCP Python matrix dependencies are missing; run scripts/setup-mcp-matrix-python-deps.sh"
+    );
 
     let fx = product_mcp_fixture().await;
     let script =
@@ -198,5 +197,35 @@ async fn product_mcp_python_streamable_http_matrix() {
         String::from_utf8_lossy(&output.stdout)
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("json summary");
-    assert!(summary.get("checks_passed").is_some());
+    assert_eq!(
+        summary.get("client_name").and_then(Value::as_str),
+        Some("musehub-product-mcp-matrix-python")
+    );
+    assert_eq!(
+        summary
+            .get("python_mcp_sdk_version")
+            .and_then(Value::as_str),
+        Some("2.3.0")
+    );
+    assert_eq!(
+        summary.get("product_scope").and_then(Value::as_str),
+        Some(PRODUCTION_SCOPE)
+    );
+    let checks = summary
+        .get("checks_passed")
+        .and_then(Value::as_array)
+        .expect("checks_passed");
+    for expected in [
+        "initialize",
+        "list_tools",
+        "capabilities_get",
+        "repository_list",
+        "unknown_tool_rejected",
+        "session_reconnect",
+    ] {
+        assert!(
+            checks.iter().any(|check| check.as_str() == Some(expected)),
+            "missing Python MCP matrix check {expected}"
+        );
+    }
 }

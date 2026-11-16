@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.0-rc14]
+
+### Fixed
+
+- The production MCP Python client matrix now fails when its SDK dependencies are missing, validates expected checks, and correctly rejects an unexpectedly accepted unknown tool.
+
 ## [0.1.0-rc13]
 
 ### Added
