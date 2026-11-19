@@ -723,7 +723,9 @@ mod tests {
             .unwrap();
         let signature_bytes = signature
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect::<Vec<_>>();
         let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret).unwrap();

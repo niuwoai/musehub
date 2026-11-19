@@ -270,8 +270,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      DOCKER_BUILDKIT: 0
-      COMPOSE_DOCKER_CLI_BUILD: 0
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
     steps:
       - uses: actions/checkout@v4
       - name: production compose stack E2E (remote worker)

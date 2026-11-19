@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.0-rc7]
+
+### Fixed
+
+- Authorize destructive restore only for the isolated product-stack backup/restore acceptance run.
+- Enable BuildKit for the production-stack image build and use the runner image's installed `curl` for readiness checks.
+- Resolve current stable Clippy diagnostics in pipeline history and webhook signature test code.
+
 ## [0.20.0-rc6]
 
 ### Fixed

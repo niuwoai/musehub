@@ -1022,7 +1022,7 @@ pub async fn list_pipeline_runs(
     .fetch_all(&state.pool)
     .await?;
     let has_more = rows.len() > limit as usize;
-    let mut items = rows
+    let items = rows
         .into_iter()
         .take(limit as usize)
         .map(

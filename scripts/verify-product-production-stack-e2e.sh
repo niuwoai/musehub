@@ -216,16 +216,22 @@ mv "${ENV_FILE}.pat" "$ENV_FILE"
 
 echo "=== phase 2: start musehub-runner (selected PAT) ==="
 dc up -d musehub-runner
+runner_ready=0
 for _ in $(seq 1 60); do
-  if dc logs musehub-runner --tail=20 2>/dev/null | grep -q 'musehub-runnerd starting'; then
-    if dc exec -T musehub-runner wget -qO- \
+  if dc logs musehub-runner --tail=20 2>/dev/null | grep -q 'musehub-runnerd starting' \
+    && dc exec -T musehub-runner curl -fsS \
       "http://127.0.0.1:${MUSEHUB_CI_API_HOST_PORT}/readyz" 2>/dev/null \
       | jq -e '.ready == true' >/dev/null 2>&1; then
-      break
-    fi
+    runner_ready=1
+    break
   fi
   sleep 1
 done
+[[ "$runner_ready" == "1" ]] || {
+  dc logs musehub-runner --tail=50 >&2
+  echo "musehub-runner did not become ready within 60 seconds" >&2
+  exit 1
+}
 dc ps musehub-runner | grep -q 'Up'
 dc logs musehub-runner --tail=15
 
