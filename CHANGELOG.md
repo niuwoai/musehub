@@ -2,6 +2,10 @@
 
 ## [0.20.0-rc6]
 
+### Fixed
+
+- Group AgentRun commit publication inputs into a named context to satisfy Clippy without suppressing the lint.
+
 ### Added
 
 - Extend the opt-in Runner probe to enqueue a concurrent batch, record peak observed running jobs, and fail unless the requested concurrency is observed alongside the scheduler latency target.
