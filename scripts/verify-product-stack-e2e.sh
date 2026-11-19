@@ -312,7 +312,7 @@ docker run --rm --network host "$MUSEHUB_PG_CLIENT_IMAGE" \
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 rm -rf "$GIT_EX/git" "$ART_EX/artifacts"
 mkdir -p "$GIT_EX/git" "$ART_EX/artifacts"
-"$ROOT/scripts/restore-musehub-state.sh" "$BACKUP_DIR"
+MUSEHUB_RESTORE_ALLOW_DESTRUCTIVE=1 "$ROOT/scripts/restore-musehub-state.sh" "$BACKUP_DIR"
 GIT_VOL=$(docker volume ls -q | grep "${STACK_ID}.*gitdata" | head -1)
 ART_VOL=$(docker volume ls -q | grep "${STACK_ID}.*artifacts" | head -1)
 [[ -n "$GIT_VOL" && -n "$ART_VOL" ]] || { echo "missing compose volumes" >&2; exit 1; }

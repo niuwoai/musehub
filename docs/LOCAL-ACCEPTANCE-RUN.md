@@ -17,7 +17,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 工具目录 | **51** `implemented_tools`；`maturity=v1_implemented` |
+| 工具目录 | **52** `implemented_tools`；`maturity=v1_implemented` |
 | 写 side-effect 矩阵 | `production_mcp_contract_side_effects_e2e`（7 条：discussion、criteria、plan、release、resolve、幂等冲突等） |
 | 写工具余量矩阵 | `writes_remainder`（5）+ `writes_thin`（**6**）：含 `agent_run_start` 门禁/幂等；`pipeline_oci_product_e2e` MCP `pipeline_run` **replay** |
 | plan / 受保护部署 | `production_mcp_plan_steps_e2e`、`protected_deployment_approval_e2e` |
@@ -25,7 +25,7 @@
 
 ## 本地 V1 契约（停扩判断）
 
-`WRITE_IDEMPOTENCY_TOOLS` **22/22** 均已有 MCP 矩阵或专用 E2E（副作用 / 门禁负例 / 幂等 replay 或冲突）。除下表外部项外，**本地 VM 无明确 V1 契约缺口**；后续宜等用户联跑 CI 或提供 Live Codex 凭据再扩。
+`WRITE_IDEMPOTENCY_TOOLS` **23/23** 均已有 MCP 矩阵或专用 E2E（副作用 / 门禁负例 / 幂等 replay 或冲突）。除下表外部项外，**本地 VM 无明确 V1 契约缺口**；后续宜等用户联跑 CI 或提供 Live Codex 凭据再扩。
 
 ## 诚实外部缺口
 

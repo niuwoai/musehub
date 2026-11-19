@@ -1,4 +1,4 @@
-//! Full migration chain on the CI/acceptance Postgres (requires `MUSEHUB_TEST_DATABASE_URL`).
+//! Full migration chain on the dedicated CI/acceptance Postgres; requires `MUSEHUB_TEST_DATABASE_URL` and explicit reset authorization.
 //!
 //! Simulates the acceptance flake: an idle pooled connection during `migrate down`.
 
@@ -14,9 +14,13 @@ fn migrations_dir() -> PathBuf {
 }
 
 fn require_database_url() -> String {
+    assert_eq!(
+        std::env::var("MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET").as_deref(),
+        Ok("1"),
+        "set MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET=1 to authorize the migration up/down reset"
+    );
     std::env::var("MUSEHUB_TEST_DATABASE_URL")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .expect("MUSEHUB_TEST_DATABASE_URL or DATABASE_URL")
+        .expect("set MUSEHUB_TEST_DATABASE_URL to the dedicated acceptance database")
 }
 
 #[tokio::test]
@@ -25,18 +29,31 @@ async fn full_schema_up_down_up_round_trip() {
     std::env::set_var("MUSEHUB_MIGRATE_TERMINATE_IDLE_PEERS", "1");
     let pool = connect(&url).await.expect("connect");
     let migrations = load_migrations(&migrations_dir()).expect("load");
+    migrate_down(&pool, &migrations)
+        .await
+        .expect("reset dedicated test database");
+    let peer = connect(&url).await.expect("second instance connect");
     assert!(
         migrations.len() >= 27,
         "expected full migration set, got {}",
         migrations.len()
     );
 
-    let up = migrate_up(&pool, &migrations).await.expect("up");
-    assert!(
-        up.skipped().len() == migrations.len() || !up.applied().is_empty(),
-        "up produced no work: skipped={:?} applied={:?}",
-        up.skipped(),
-        up.applied()
+    let (up, peer_up) = tokio::join!(
+        migrate_up(&pool, &migrations),
+        migrate_up(&peer, &migrations)
+    );
+    let up = up.expect("first concurrent up");
+    let peer_up = peer_up.expect("second concurrent up");
+    assert_eq!(
+        up.applied().len() + peer_up.applied().len(),
+        migrations.len(),
+        "concurrent up must apply each migration exactly once"
+    );
+    assert_eq!(
+        up.skipped().len() + peer_up.skipped().len(),
+        migrations.len(),
+        "each migration must be applied by one instance and observed by the other"
     );
 
     let down = migrate_down(&pool, &migrations).await.expect("down");

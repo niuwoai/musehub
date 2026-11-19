@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigationType, useParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
@@ -14,6 +14,8 @@ function issueMatchesFilters(
   if (filters.assignee && issue.assignee_handle !== filters.assignee) return false
   return true
 }
+
+const issueListScrollPositions = new Map<string, number>()
 
 export function RepoIssuesPage() {
   const { org = DEFAULT_ORG, slug: routeSlug } = useParams<{ org: string; slug?: string }>()
@@ -36,6 +38,9 @@ export function RepoIssuesPage() {
     loadIssues,
   } = useWorkspace()
   const activeRepoSlug = routeSlug ?? workspaceActiveRepoSlug ?? workspaceRepo ?? null
+  const location = useLocation()
+  const navigationType = useNavigationType()
+  const pendingScrollRestore = useRef<number | null>(null)
   const [items, setItems] = useState<Issue[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -50,6 +55,27 @@ export function RepoIssuesPage() {
   const [newIssueAssignee, setNewIssueAssignee] = useState('')
 
   const filters = { state: filterState, label: filterLabel, assignee: filterAssignee }
+
+  useEffect(() => {
+    pendingScrollRestore.current =
+      navigationType === 'POP' ? issueListScrollPositions.get(location.key) ?? null : null
+    if (navigationType !== 'POP') {
+      window.scrollTo(0, 0)
+    }
+    return () => {
+      issueListScrollPositions.set(location.key, window.scrollY)
+    }
+  }, [location.key, navigationType])
+
+  useEffect(() => {
+    const scrollY = pendingScrollRestore.current
+    if (scrollY === null || items.length === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo(0, scrollY)
+      pendingScrollRestore.current = null
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [items.length])
 
   const fetchPage = useCallback(
     async (cursor?: string, append = false, opts?: { keepNotice?: boolean }) => {
@@ -247,10 +273,18 @@ export function RepoIssuesPage() {
             {issue.assignee_handle ? (
               <span data-testid={`issue-assignee-${issue.number}`}> @{issue.assignee_handle}</span>
             ) : null}{' '}
-            <button type="button" onClick={() => void onAcceptPlan(issue)}>
+            <button
+              type="button"
+              disabled={repoContextTransitioning}
+              onClick={() => void onAcceptPlan(issue)}
+            >
               {t('app.acceptPlan')}
             </button>
-            <button type="button" onClick={() => void onRunAgent(issue)}>
+            <button
+              type="button"
+              disabled={repoContextTransitioning || agentRunStarting}
+              onClick={() => void onRunAgent(issue)}
+            >
               {t('app.runReferenceAgent')}
             </button>
           </li>

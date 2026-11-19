@@ -1,0 +1,20 @@
+# Apply to both Kubernetes clusters after installing the compatible
+# CloudNativePG Barman Cloud Plugin. Replace the destination path/endpoints and
+# create the referenced Secret through the site's secret manager.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: musehub-region-b-store
+  namespace: musehub
+spec:
+  configuration:
+    destinationPath: s3://musehub-dr-region-b/postgresql
+    s3Credentials:
+      accessKeyId:
+        name: musehub-region-b-object-store
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: musehub-region-b-object-store
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip

@@ -24,6 +24,14 @@ pub const SESSION_SECRET_ENV: &str = "MUSEHUB_SESSION_SECRET";
 
 /// One-time bootstrap password for the default org admin (optional).
 pub const BOOTSTRAP_ADMIN_PASSWORD_ENV: &str = "MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD";
+pub const OIDC_ISSUER_URL_ENV: &str = "MUSEHUB_OIDC_ISSUER_URL";
+pub const OIDC_CLIENT_ID_ENV: &str = "MUSEHUB_OIDC_CLIENT_ID";
+pub const OIDC_CLIENT_SECRET_ENV: &str = "MUSEHUB_OIDC_CLIENT_SECRET";
+pub const OIDC_REDIRECT_URI_ENV: &str = "MUSEHUB_OIDC_REDIRECT_URI";
+pub const GITHUB_OAUTH_CLIENT_ID_ENV: &str = "MUSEHUB_GITHUB_OAUTH_CLIENT_ID";
+pub const GITHUB_OAUTH_CLIENT_SECRET_ENV: &str = "MUSEHUB_GITHUB_OAUTH_CLIENT_SECRET";
+pub const GITHUB_OAUTH_REDIRECT_URI_ENV: &str = "MUSEHUB_GITHUB_OAUTH_REDIRECT_URI";
+pub const COOKIE_SECURE_ENV: &str = "MUSEHUB_COOKIE_SECURE";
 
 /// Listen address used when [`BIND_ENV`] is unset or blank.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -43,12 +51,83 @@ pub trait ErrorCode {
 
 /// Process configuration derived from the environment.
 #[derive(Clone, PartialEq, Eq)]
+pub struct OidcConfig {
+    issuer_url: String,
+    client_id: String,
+    client_secret: Option<String>,
+    redirect_uri: String,
+}
+
+impl OidcConfig {
+    pub fn issuer_url(&self) -> &str {
+        &self.issuer_url
+    }
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+    pub fn client_secret(&self) -> Option<&str> {
+        self.client_secret.as_deref()
+    }
+    pub fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+}
+
+impl std::fmt::Debug for OidcConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OidcConfig")
+            .field("issuer_url", &self.issuer_url)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<configured>"),
+            )
+            .field("redirect_uri", &self.redirect_uri)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct GithubOAuthConfig {
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+impl GithubOAuthConfig {
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+    pub fn client_secret(&self) -> &str {
+        &self.client_secret
+    }
+    pub fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+}
+
+impl std::fmt::Debug for GithubOAuthConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GithubOAuthConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<configured>")
+            .field("redirect_uri", &self.redirect_uri)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     bind: SocketAddr,
     database_url: Option<String>,
     git_root: Option<PathBuf>,
     session_secret: Option<String>,
     bootstrap_admin_password: Option<String>,
+    oidc: Option<OidcConfig>,
+    github_oauth: Option<GithubOAuthConfig>,
+    cookie_secure: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -71,6 +150,11 @@ impl std::fmt::Debug for Config {
                     .bootstrap_admin_password
                     .as_ref()
                     .map(|_| "<configured>"),
+            )
+            .field("oidc", &self.oidc.as_ref().map(|_| "<configured>"))
+            .field(
+                "github_oauth",
+                &self.github_oauth.as_ref().map(|_| "<configured>"),
             )
             .finish()
     }
@@ -98,12 +182,24 @@ impl Config {
         let git_root = optional_nonempty_path(GIT_ROOT_ENV)?;
         let session_secret = optional_nonempty_string(SESSION_SECRET_ENV)?;
         let bootstrap_admin_password = optional_nonempty_string(BOOTSTRAP_ADMIN_PASSWORD_ENV)?;
+        let oidc = oidc_config_from_env()?;
+        let github_oauth = github_oauth_config_from_env()?;
+        let cookie_secure = bool_env(COOKIE_SECURE_ENV)?
+            || oidc
+                .as_ref()
+                .is_some_and(|config| config.redirect_uri.starts_with("https://"))
+            || github_oauth
+                .as_ref()
+                .is_some_and(|config| config.redirect_uri.starts_with("https://"));
         Ok(Self {
             bind: config.bind,
             database_url,
             git_root,
             session_secret,
             bootstrap_admin_password,
+            oidc,
+            github_oauth,
+            cookie_secure,
         })
     }
 
@@ -123,6 +219,9 @@ impl Config {
             git_root: None,
             session_secret: None,
             bootstrap_admin_password: None,
+            oidc: None,
+            github_oauth: None,
+            cookie_secure: false,
         })
     }
 
@@ -151,9 +250,55 @@ impl Config {
         self.bootstrap_admin_password.as_deref()
     }
 
+    /// Optional deployment-level OpenID Connect provider configuration.
+    pub fn oidc(&self) -> Option<&OidcConfig> {
+        self.oidc.as_ref()
+    }
+
+    pub fn github_oauth(&self) -> Option<&GithubOAuthConfig> {
+        self.github_oauth.as_ref()
+    }
+
+    /// Whether auth cookies should carry the Secure attribute.
+    pub fn cookie_secure(&self) -> bool {
+        self.cookie_secure
+    }
+
     /// Whether product API routes should be active.
     pub fn product_api_enabled(&self) -> bool {
         self.database_url.is_some() && self.git_root.is_some() && self.session_secret.is_some()
+    }
+}
+
+fn oidc_config_from_env() -> Result<Option<OidcConfig>, ConfigError> {
+    let issuer_url = optional_nonempty_string(OIDC_ISSUER_URL_ENV)?;
+    let client_id = optional_nonempty_string(OIDC_CLIENT_ID_ENV)?;
+    let client_secret = optional_nonempty_string(OIDC_CLIENT_SECRET_ENV)?;
+    let redirect_uri = optional_nonempty_string(OIDC_REDIRECT_URI_ENV)?;
+    match (issuer_url, client_id, redirect_uri) {
+        (None, None, None) if client_secret.is_none() => Ok(None),
+        (Some(issuer_url), Some(client_id), Some(redirect_uri)) => Ok(Some(OidcConfig {
+            issuer_url,
+            client_id,
+            client_secret,
+            redirect_uri,
+        })),
+        _ => Err(ConfigError::IncompleteOidcConfiguration),
+    }
+}
+
+fn github_oauth_config_from_env() -> Result<Option<GithubOAuthConfig>, ConfigError> {
+    let client_id = optional_nonempty_string(GITHUB_OAUTH_CLIENT_ID_ENV)?;
+    let client_secret = optional_nonempty_string(GITHUB_OAUTH_CLIENT_SECRET_ENV)?;
+    let redirect_uri = optional_nonempty_string(GITHUB_OAUTH_REDIRECT_URI_ENV)?;
+    match (client_id, client_secret, redirect_uri) {
+        (None, None, None) => Ok(None),
+        (Some(client_id), Some(client_secret), Some(redirect_uri)) => Ok(Some(GithubOAuthConfig {
+            client_id,
+            client_secret,
+            redirect_uri,
+        })),
+        _ => Err(ConfigError::IncompleteGithubOAuthConfiguration),
     }
 }
 
@@ -162,6 +307,22 @@ fn optional_nonempty_string(name: &str) -> Result<Option<String>, ConfigError> {
         Ok(value) if value.trim().is_empty() => Ok(None),
         Ok(value) => Ok(Some(value.trim().to_owned())),
         Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(ConfigError::InvalidEnv {
+            variable: name.to_string(),
+            reason: "value is not valid unicode".to_string(),
+        }),
+    }
+}
+
+fn bool_env(name: &str) -> Result<bool, ConfigError> {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() || value.trim() == "0" => Ok(false),
+        Ok(value) if value.trim() == "1" => Ok(true),
+        Ok(_) => Err(ConfigError::InvalidEnv {
+            variable: name.to_string(),
+            reason: "expected 0 or 1".to_string(),
+        }),
+        Err(VarError::NotPresent) => Ok(false),
         Err(VarError::NotUnicode(_)) => Err(ConfigError::InvalidEnv {
             variable: name.to_string(),
             reason: "value is not valid unicode".to_string(),
@@ -188,6 +349,10 @@ pub enum ConfigError {
     InvalidBind { value: String, reason: String },
     #[error("{DATABASE_URL_ENV} must be valid unicode")]
     InvalidDatabaseUrl,
+    #[error("OIDC requires {OIDC_ISSUER_URL_ENV}, {OIDC_CLIENT_ID_ENV}, and {OIDC_REDIRECT_URI_ENV}; client secret is optional")]
+    IncompleteOidcConfiguration,
+    #[error("GitHub OAuth requires {GITHUB_OAUTH_CLIENT_ID_ENV}, {GITHUB_OAUTH_CLIENT_SECRET_ENV}, and {GITHUB_OAUTH_REDIRECT_URI_ENV}")]
+    IncompleteGithubOAuthConfiguration,
     #[error("invalid {variable} value: {reason}")]
     InvalidEnv { variable: String, reason: String },
 }
@@ -195,9 +360,11 @@ pub enum ConfigError {
 impl ErrorCode for ConfigError {
     fn code(&self) -> &'static str {
         match self {
-            Self::InvalidBind { .. } | Self::InvalidDatabaseUrl | Self::InvalidEnv { .. } => {
-                "invalid_config"
-            }
+            Self::InvalidBind { .. }
+            | Self::InvalidDatabaseUrl
+            | Self::IncompleteOidcConfiguration
+            | Self::IncompleteGithubOAuthConfiguration
+            | Self::InvalidEnv { .. } => "invalid_config",
         }
     }
 }

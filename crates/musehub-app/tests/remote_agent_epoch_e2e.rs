@@ -74,6 +74,7 @@ async fn remote_stale_epoch_cannot_finalize_after_bump() {
         None,
         Some("f".repeat(40).as_str()),
         Some(1),
+        None,
     )
     .await
     .unwrap();

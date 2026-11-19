@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use musehub_core::ErrorCode;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{timeout, Instant};
 
@@ -45,6 +45,9 @@ pub struct UsageTotals {
     pub budget_unknown: bool,
     #[serde(default)]
     pub microusd_unknown: bool,
+    /// Minimal provider-reported usage object; excludes prompts and conversation output.
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
 }
 
 /// Outcome of a completed adapter run.
@@ -57,6 +60,7 @@ pub enum RunOutcome {
     Failed {
         code: String,
         detail: String,
+        usage: Option<UsageTotals>,
     },
     Canceled {
         usage: UsageTotals,
@@ -140,6 +144,54 @@ pub async fn spawn_codex_sim(
     spawn_ndjson_adapter(binary, &[], task, work_dir, CODEX_ADAPTER).await
 }
 
+fn codex_reasoning_effort_config() -> Result<Option<String>, AdapterError> {
+    let Ok(value) = std::env::var("MUSEHUB_AGENT_CODEX_REASONING_EFFORT") else {
+        return Ok(None);
+    };
+    let effort = match value.as_str() {
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        _ => {
+            return Err(AdapterError::Failed {
+                detail: "MUSEHUB_AGENT_CODEX_REASONING_EFFORT must be low, medium, high, or xhigh"
+                    .into(),
+            });
+        }
+    };
+    Ok(Some(format!("model_reasoning_effort=\"{effort}\"")))
+}
+
+fn codex_exec_args(
+    reasoning_config: Option<&str>,
+    git_dir: Option<&Path>,
+    has_initial_commit: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "exec".to_string(),
+        "--json".to_string(),
+        "--config".to_string(),
+        "approval_policy=\"never\"".to_string(),
+        "--config".to_string(),
+        "sandbox_mode=\"workspace-write\"".to_string(),
+        "--ignore-user-config".to_string(),
+        "--ephemeral".to_string(),
+    ];
+    if let Some(git_dir) = git_dir {
+        args.push("--add-dir".to_string());
+        args.push(git_dir.to_string_lossy().into_owned());
+    }
+    if let Some(config) = reasoning_config {
+        args.extend(["--config".to_string(), config.to_string()]);
+    }
+    if !has_initial_commit {
+        args.push("--skip-git-repo-check".to_string());
+    }
+    args.push("-".to_string());
+    args
+}
+
 /// Spawns Codex CLI when `MUSEHUB_AGENT_CODEX_BIN` is set (live path — not verified without credentials).
 pub async fn spawn_codex(task: &AgentTask, work_dir: &Path) -> Result<AdapterRun, AdapterError> {
     let binary =
@@ -160,17 +212,24 @@ pub async fn spawn_codex(task: &AgentTask, work_dir: &Path) -> Result<AdapterRun
             task.message
         )
     };
-    let mut args = vec![
-        "exec",
-        "--json",
-        "--sandbox",
-        "workspace-write",
-        "--ephemeral",
-    ];
-    if !has_initial_commit {
-        args.push("--skip-git-repo-check");
-    }
-    args.push("-");
+    let reasoning_config = codex_reasoning_effort_config()?;
+    let git_dir = if has_initial_commit {
+        Some(
+            git_output(work_dir, &["rev-parse", "--absolute-git-dir"])
+                .map(PathBuf::from)
+                .ok_or_else(|| AdapterError::Failed {
+                    detail: "unable to resolve AgentRun Git metadata directory".to_string(),
+                })?,
+        )
+    } else {
+        None
+    };
+    let args = codex_exec_args(
+        reasoning_config.as_deref(),
+        git_dir.as_deref(),
+        has_initial_commit,
+    );
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     spawn_process(
         Path::new(&binary),
         &args,
@@ -290,6 +349,15 @@ fn git_output(work_dir: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn git_worktree_has_changes(work_dir: &Path) -> Option<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .current_dir(work_dir)
+        .output()
+        .ok()?;
+    output.status.success().then_some(!output.stdout.is_empty())
+}
+
 /// Waits for the child, parses NDJSON from stdout, returns outcome.
 pub async fn finish_run(
     mut run: AdapterRun,
@@ -299,6 +367,22 @@ pub async fn finish_run(
     cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<RunOutcome, AdapterError> {
     let started = Instant::now();
+    let stderr_task = run.child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            const CAPTURE_LIMIT: usize = 8192;
+            let mut captured = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let read = match stderr.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                let remaining = CAPTURE_LIMIT.saturating_sub(captured.len());
+                captured.extend_from_slice(&chunk[..read.min(remaining)]);
+            }
+            captured
+        })
+    });
     let mut stdout = run.child.stdout.take().ok_or(AdapterError::Failed {
         detail: "adapter stdout missing".to_string(),
     })?;
@@ -321,6 +405,7 @@ pub async fn finish_run(
             return Ok(RunOutcome::Failed {
                 code: "agent_timeout".to_string(),
                 detail: format!("exceeded {:?}", deadline),
+                usage: Some(usage_total),
             });
         }
         let mut line = String::new();
@@ -330,28 +415,24 @@ pub async fn finish_run(
                 buffer.extend_from_slice(line.as_bytes());
                 if let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) {
                     if let Some(usage) = parse_usage_event(&event, run.protocol)? {
-                        if run.protocol == AdapterProtocol::CodexExecJsonl {
-                            usage_total.tokens = usage_total.tokens.saturating_add(usage.tokens);
-                            usage_total.microusd =
-                                usage_total.microusd.saturating_add(usage.microusd);
-                            usage_total.budget_unknown &= usage.budget_unknown;
-                            usage_total.microusd_unknown |= usage.microusd_unknown;
-                        } else {
-                            usage_total = usage;
-                        }
+                        // Codex `turn.completed.usage` reports cumulative session totals,
+                        // so keep the newest snapshot instead of summing each completed turn.
+                        usage_total = usage;
                         if budget_microusd.is_some() && usage_total.microusd_unknown {
                             run.request_cancel();
                             return Ok(RunOutcome::Failed {
                                 code: "agent_budget_unknown".to_string(),
                                 detail: "monetary budget limit set but adapter cannot report cost"
                                     .to_string(),
+                                usage: Some(usage_total),
                             });
                         }
                         if budget_exceeded(&usage_total, budget_tokens, budget_microusd) {
                             run.request_cancel();
                             return Ok(RunOutcome::Failed {
                                 code: "agent_budget_exceeded".to_string(),
-                                detail: "usage exceeded configured limit".to_string(),
+                                detail: "reported usage exceeded the configured limit after a usage event".to_string(),
+                                usage: Some(usage_total),
                             });
                         }
                     }
@@ -371,16 +452,36 @@ pub async fn finish_run(
         step: "wait adapter",
         source,
     })?;
+    let stderr_category = match stderr_task {
+        Some(task) => match task.await {
+            Ok(stderr) => codex_stderr_category(&stderr),
+            Err(_) => "read_failed",
+        },
+        None => "unavailable",
+    };
     drain_remaining_stdout(&mut reader, &mut buffer).await?;
-    if run.canceled.load(Ordering::SeqCst) {
-        return Ok(RunOutcome::Canceled {
-            usage: parse_stream_usage(&buffer, run.protocol)?,
+    let stdout_error_category = codex_jsonl_error_category(&buffer);
+    let final_usage = parse_stream_usage(&buffer, run.protocol)?;
+    if budget_exceeded(&final_usage, budget_tokens, budget_microusd) {
+        return Ok(RunOutcome::Failed {
+            code: "agent_budget_exceeded".to_string(),
+            detail: "reported usage exceeded the configured limit after a usage event".to_string(),
+            usage: Some(final_usage),
         });
+    }
+    if run.canceled.load(Ordering::SeqCst) {
+        return Ok(RunOutcome::Canceled { usage: final_usage });
     }
     if !status.success() {
         return Ok(RunOutcome::Failed {
             code: "agent_adapter_failed".to_string(),
-            detail: format!("exit {}", status),
+            detail: if run.protocol == AdapterProtocol::CodexExecJsonl {
+                let category = stdout_error_category.unwrap_or(stderr_category);
+                format!("exit {}; diagnostic_category={category}", status)
+            } else {
+                format!("exit {}", status)
+            },
+            usage: Some(final_usage),
         });
     }
     let summary = parse_stream_summary(&buffer, run.protocol)?;
@@ -390,6 +491,7 @@ pub async fn finish_run(
         return Ok(RunOutcome::Failed {
             code: "agent_budget_unknown".to_string(),
             detail: "configured budget limit has no corresponding usage measurement".to_string(),
+            usage: Some(summary.usage.clone()),
         });
     }
     let commit = if run.protocol == AdapterProtocol::CodexExecJsonl {
@@ -397,20 +499,37 @@ pub async fn finish_run(
             return Ok(RunOutcome::Failed {
                 code: "agent_adapter_incomplete".to_string(),
                 detail: "Codex exited successfully without a completed turn event".to_string(),
+                usage: Some(summary.usage.clone()),
             });
         }
         let current = git_output(&run.work_dir, &["rev-parse", "HEAD"]);
         if let Some(initial) = run.initial_commit.as_deref() {
             let Some(current_commit) = current.as_deref() else {
                 return Ok(RunOutcome::Failed {
-                    code: "agent_commit_missing".to_string(),
+                    code: "agent_head_unreadable".to_string(),
                     detail: "Codex completed without a readable HEAD commit".to_string(),
+                    usage: Some(summary.usage.clone()),
                 });
             };
             if current_commit == initial {
+                let (code, detail) = match git_worktree_has_changes(&run.work_dir) {
+                    Some(true) => (
+                        "agent_changes_uncommitted",
+                        "Codex completed with worktree changes but without creating a commit",
+                    ),
+                    Some(false) => (
+                        "agent_commit_missing",
+                        "Codex completed without creating changes or a new commit",
+                    ),
+                    None => (
+                        "agent_worktree_status_unavailable",
+                        "Codex completed without a new commit and Git status could not be read",
+                    ),
+                };
                 return Ok(RunOutcome::Failed {
-                    code: "agent_commit_missing".to_string(),
-                    detail: "Codex completed without creating a new commit".to_string(),
+                    code: code.to_string(),
+                    detail: detail.to_string(),
+                    usage: Some(summary.usage.clone()),
                 });
             }
         }
@@ -420,6 +539,7 @@ pub async fn finish_run(
                 return Ok(RunOutcome::Failed {
                     code: "agent_branch_changed".to_string(),
                     detail: "Codex changed the assigned work branch".to_string(),
+                    usage: Some(summary.usage.clone()),
                 });
             }
         }
@@ -528,14 +648,8 @@ fn parse_stream_summary(
                 .map(str::to_owned);
         }
         if let Some(event_usage) = parse_usage_event(&value, protocol)? {
-            if protocol == AdapterProtocol::CodexExecJsonl {
-                usage.tokens = usage.tokens.saturating_add(event_usage.tokens);
-                usage.microusd = usage.microusd.saturating_add(event_usage.microusd);
-                usage.budget_unknown &= event_usage.budget_unknown;
-                usage.microusd_unknown |= event_usage.microusd_unknown;
-            } else {
-                usage = event_usage;
-            }
+            // Codex turn usage is a cumulative session snapshot; use the latest one.
+            usage = event_usage;
         }
         if protocol == AdapterProtocol::CodexExecJsonl && event_type == Some("turn.completed") {
             completed = true;
@@ -577,6 +691,11 @@ fn parse_usage_event(
                 microusd: 0,
                 budget_unknown: false,
                 microusd_unknown: true,
+                evidence: Some(serde_json::json!({
+                    "protocol": "codex_exec_jsonl",
+                    "event_type": "turn.completed",
+                    "usage": usage,
+                })),
             }))
         }
         _ => Ok(None),
@@ -587,7 +706,20 @@ fn parse_stream_usage(
     buffer: &[u8],
     protocol: AdapterProtocol,
 ) -> Result<UsageTotals, AdapterError> {
-    Ok(parse_stream_summary(buffer, protocol)?.usage)
+    let text = String::from_utf8_lossy(buffer);
+    let mut usage = UsageTotals {
+        budget_unknown: protocol == AdapterProtocol::CodexExecJsonl,
+        microusd_unknown: protocol == AdapterProtocol::CodexExecJsonl,
+        ..UsageTotals::default()
+    };
+    for line in text.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+            if let Some(event_usage) = parse_usage_event(&value, protocol)? {
+                usage = event_usage;
+            }
+        }
+    }
+    Ok(usage)
 }
 
 fn parse_usage_line(value: &serde_json::Value) -> Result<UsageTotals, AdapterError> {
@@ -606,7 +738,94 @@ fn parse_usage_line(value: &serde_json::Value) -> Result<UsageTotals, AdapterErr
         microusd,
         budget_unknown,
         microusd_unknown,
+        evidence: None,
     })
+}
+
+fn codex_jsonl_error_category(stdout: &[u8]) -> Option<&'static str> {
+    let text = String::from_utf8_lossy(stdout);
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        let event_type = event.get("type").and_then(serde_json::Value::as_str);
+        let error = event.get("error");
+        if event_type.is_some_and(|kind| kind == "error" || kind.ends_with(".failed"))
+            || error.is_some()
+        {
+            let message = event
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    error.and_then(|value| value.get("message").and_then(serde_json::Value::as_str))
+                });
+            return Some(message.map_or("codex_error_event", |message| {
+                codex_stderr_category(message.as_bytes())
+            }));
+        }
+    }
+    None
+}
+
+fn codex_stderr_category(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.trim().is_empty() {
+        "empty"
+    } else if [
+        "unknown argument",
+        "unexpected argument",
+        "unrecognized option",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+    {
+        "cli_arguments"
+    } else if ["401", "unauthorized", "authentication", "not logged in"]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        "authentication"
+    } else if ["429", "rate limit", "too many requests"]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        "rate_limit"
+    } else if ["approval", "auto-review", "automatic review"]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        "approval"
+    } else if [
+        "invalid configuration",
+        "failed to parse config",
+        "config file",
+        "model_reasoning_effort",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+    {
+        "configuration"
+    } else if message.contains("sandbox") {
+        "sandbox"
+    } else if message.contains("trust") {
+        "trust"
+    } else if ["network", "dns", "connect", "timeout", "tls"]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        "network"
+    } else if ["cannot be used", "conflicts with", "only valid with"]
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        "option_conflict"
+    } else if message.contains("requires") {
+        "option_requirement"
+    } else if message.contains("error") {
+        "cli_error"
+    } else {
+        "unclassified"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -687,6 +906,92 @@ mod tests {
         let usage = parse_usage_line(&value).expect("parse");
         assert!(!usage.budget_unknown);
         assert_eq!(usage.tokens, 99);
+    }
+
+    #[test]
+    fn codex_usage_uses_latest_cumulative_snapshot() {
+        let input = r#"{"type":"turn.completed","usage":{"total_tokens":40}}
+{"type":"turn.completed","usage":{"total_tokens":101}}"#;
+        let usage = parse_stream_usage(input.as_bytes(), AdapterProtocol::CodexExecJsonl)
+            .expect("parse Codex usage");
+        assert_eq!(usage.tokens, 101);
+        assert!(!usage.budget_unknown);
+        assert!(usage.microusd_unknown);
+        assert_eq!(
+            usage.evidence,
+            Some(serde_json::json!({
+                "protocol": "codex_exec_jsonl",
+                "event_type": "turn.completed",
+                "usage": { "total_tokens": 101 },
+            }))
+        );
+    }
+
+    #[test]
+    fn codex_usage_falls_back_to_input_and_output_sum() {
+        let input = r#"{"type":"turn.completed","usage":{"input_tokens":80,"output_tokens":21}}"#;
+        let usage = parse_stream_usage(input.as_bytes(), AdapterProtocol::CodexExecJsonl)
+            .expect("parse Codex usage");
+        assert_eq!(usage.tokens, 101);
+    }
+
+    #[test]
+    fn final_cumulative_usage_snapshot_is_checked_against_budget() {
+        let input = r#"{"type":"turn.completed","usage":{"total_tokens":4097}}"#;
+        let usage = parse_stream_usage(input.as_bytes(), AdapterProtocol::CodexExecJsonl)
+            .expect("parse Codex usage");
+        assert!(budget_exceeded(&usage, Some(4096), None));
+    }
+
+    #[test]
+    fn final_usage_parse_ignores_non_json_output_lines() {
+        let input =
+            "adapter diagnostic\n{\"type\":\"turn.completed\",\"usage\":{\"total_tokens\":17}}\n";
+        let usage = parse_stream_usage(input.as_bytes(), AdapterProtocol::CodexExecJsonl)
+            .expect("parse Codex usage");
+        assert_eq!(usage.tokens, 17);
+    }
+
+    #[test]
+    fn codex_exec_disables_approval_prompts_with_workspace_sandbox() {
+        let args = codex_exec_args(
+            Some("model_reasoning_effort=\"low\""),
+            Some(Path::new("/tmp/musehub-agent/.git")),
+            true,
+        );
+        assert!(!args.iter().any(|arg| arg == "--approve-for-me"));
+        assert!(args.iter().any(|arg| arg == "approval_policy=\"never\""));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "sandbox_mode=\"workspace-write\""));
+        assert!(args.iter().any(|arg| arg == "--ignore-user-config"));
+        assert!(!args.iter().any(|arg| arg == "--sandbox"));
+        assert!(args.iter().any(|arg| arg == "--ephemeral"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "model_reasoning_effort=\"low\""));
+        let add_dir = args
+            .iter()
+            .position(|arg| arg == "--add-dir")
+            .expect("Git metadata grant");
+        assert_eq!(
+            args.get(add_dir + 1).map(String::as_str),
+            Some("/tmp/musehub-agent/.git")
+        );
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+    }
+
+    #[test]
+    fn codex_diagnostics_prioritize_sandbox_and_trust_signals() {
+        assert_eq!(
+            codex_stderr_category(b"workspace requires sandbox mode"),
+            "sandbox"
+        );
+        assert_eq!(codex_stderr_category(b"project requires trust"), "trust");
+        assert_eq!(
+            codex_stderr_category(b"this option requires another option"),
+            "option_requirement"
+        );
     }
 
     #[test]

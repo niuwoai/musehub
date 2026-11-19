@@ -20,7 +20,7 @@ use crate::mcp::contract_domain::{
 };
 use crate::mcp::envelope::ToolEnvelope;
 use crate::mcp::git_read::{
-    git_commit_compare, git_literal_search, git_read_file_at, git_tree_entries,
+    git_commit_compare, git_literal_search, git_log_commits, git_read_file_at, git_tree_entries,
 };
 use crate::mcp::idempotency::{
     begin_idempotent_write, complete_idempotent_write, fail_idempotent_write, IdempotencyAction,
@@ -33,6 +33,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RepositoryTreeInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -44,6 +45,7 @@ struct RepositoryTreeInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RepositoryReadFileInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -56,6 +58,7 @@ struct RepositoryReadFileInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RepositorySearchInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -68,6 +71,7 @@ struct RepositorySearchInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CommitCompareInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -80,6 +84,17 @@ struct CommitCompareInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RepositoryHistoryInput {
+    #[serde(flatten)]
+    repo: RepoInput,
+    commit_oid: String,
+    #[serde(default, flatten)]
+    page: PageInput,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ContractCriterionInput {
     description: String,
     #[serde(default = "default_verification")]
@@ -106,6 +121,7 @@ impl From<ContractCriterionInput> for contract_domain::CriterionInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct IssueCriteriaReplaceInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -122,6 +138,7 @@ struct DiscussionTarget {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DiscussionListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -131,6 +148,7 @@ struct DiscussionListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DiscussionCommentInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -142,6 +160,7 @@ struct DiscussionCommentInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DiscussionResolveInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -152,6 +171,7 @@ struct DiscussionResolveInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeliveryGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -161,6 +181,7 @@ struct DeliveryGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrUpdateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -174,6 +195,7 @@ struct PrUpdateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrDiffInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -186,6 +208,7 @@ struct PrDiffInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentRunMessagesInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -195,6 +218,7 @@ struct AgentRunMessagesInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentRunRespondInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -204,6 +228,7 @@ struct AgentRunRespondInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PipelineListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -216,6 +241,7 @@ struct PipelineListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PipelineGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -223,6 +249,7 @@ struct PipelineGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct JobLogsInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -235,6 +262,7 @@ struct JobLogsInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct JobRetryInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -243,6 +271,7 @@ struct JobRetryInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PipelineCancelInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -252,6 +281,7 @@ struct PipelineCancelInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ReleaseListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -260,6 +290,7 @@ struct ReleaseListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ReleaseCreateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -273,6 +304,7 @@ struct ReleaseCreateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ReleasePublishInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -283,6 +315,7 @@ struct ReleasePublishInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EnvironmentListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -291,6 +324,7 @@ struct EnvironmentListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentApproveInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -302,6 +336,7 @@ struct DeploymentApproveInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -459,6 +494,63 @@ impl ProductionMcpServer {
                 "truncated": truncated,
             }))),
             Err(e) => Ok(domain_err(e)),
+        }
+    }
+
+    #[tool(
+        name = "musehub_repository_history",
+        description = "List commit history reachable from a commit",
+        annotations(read_only_hint = true)
+    )]
+    async fn musehub_repository_history(
+        &self,
+        Parameters(input): Parameters<RepositoryHistoryInput>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pat = pat_context(&self.state).await?;
+        if let Err(error) = require_scope(&pat, READ_SCOPE) {
+            return Ok(domain_err(error));
+        }
+        let access = match repo_access(&self.state, &pat, &input.repo).await {
+            Ok(access) => access,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let bare = match git_repo_access(&self.state, &access).await {
+            Ok(path) => path,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let requested_limit = page_limit(input.page.limit);
+        let offset = match crate::mcp::pagination::decode_history_cursor(
+            input.page.cursor.as_deref(),
+            access.repo_id,
+            pat.principal_id,
+            &input.commit_oid,
+            requested_limit,
+        ) {
+            Ok(offset) => offset,
+            Err(error) => return Ok(domain_err(error)),
+        };
+        let remaining = crate::mcp::pagination::MAX_HISTORY_CURSOR_OFFSET.saturating_sub(offset);
+        let limit = requested_limit.min(remaining as i64);
+        match git_log_commits(&bare, &input.commit_oid, limit, offset) {
+            Ok((items, has_more)) => {
+                let next_offset = offset.saturating_add(items.len() as u64);
+                let can_continue =
+                    has_more && next_offset < crate::mcp::pagination::MAX_HISTORY_CURSOR_OFFSET;
+                let next_cursor = can_continue.then(|| {
+                    crate::mcp::pagination::encode_history_cursor(
+                        access.repo_id,
+                        pat.principal_id,
+                        &input.commit_oid,
+                        next_offset,
+                        limit,
+                    )
+                });
+                Ok(domain_ok_page(
+                    json!({ "items": items, "truncated": has_more && !can_continue }),
+                    page_meta(can_continue, next_cursor),
+                ))
+            }
+            Err(error) => Ok(domain_err(error)),
         }
     }
 

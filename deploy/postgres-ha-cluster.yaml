@@ -1,0 +1,45 @@
+# CloudNativePG single-region HA cluster reference.
+# Requires the CloudNativePG operator, three Kubernetes zones, a durable RWO
+# StorageClass, and a private LoadBalancer implementation.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: musehub
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: musehub-postgres
+  namespace: musehub
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.12-202611160820-system-bookworm@sha256:2b71f805acb6744c3d8d82c29256ee6e0580ea49e7a14e8e99b321a21c674439
+  enablePDB: true
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: required
+  storage:
+    storageClass: fast-rwo
+    size: 100Gi
+  bootstrap:
+    initdb:
+      database: musehub
+      owner: musehub
+      secret:
+        name: musehub-db-credentials
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      failoverQuorum: true
+      dataDurability: required
+  managed:
+    services:
+      additional:
+        - selectorType: rw
+          serviceTemplate:
+            metadata:
+              name: musehub-postgres-writer
+            spec:
+              type: LoadBalancer

@@ -1,9 +1,10 @@
-import { NavLink, Outlet, useParams } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom'
 import { appVersion, useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
 
 export function AppShell() {
-  const { t, i18n, session, onLogout, error } = useWorkspace()
+  const { t, i18n, session, onLogout, error, organizations, organizationsLoading } = useWorkspace()
+  const navigate = useNavigate()
   const { org = DEFAULT_ORG, slug } = useParams()
 
   const isChinese = i18n.language.startsWith('zh')
@@ -15,7 +16,21 @@ export function AppShell() {
         <div>
           <h1 className="app-title">{t('app.name')}</h1>
           <p className="app-tagline">{t('app.tagline', { version: appVersion })}</p>
-          <p className="app-tagline">{t('nav.orgLabel', { org })}</p>
+          <label className="app-tagline">
+            {t('nav.orgLabel', { org })}{' '}
+            <select
+              aria-label={t('organizations.switch')}
+              value={org}
+              disabled={organizationsLoading || organizations.length === 0}
+              onChange={(event) => navigate(paths.repos(event.target.value))}
+            >
+              {organizations.map((organization) => (
+                <option key={organization.id} value={organization.slug}>
+                  {organization.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="app-header-actions">
           <span>
@@ -39,6 +54,9 @@ export function AppShell() {
 
       <div className="app-body">
         <nav className="app-sidebar" aria-label="Main">
+          <NavLink to={paths.organizations()} className="repo-tab" data-testid="nav-organizations">
+            {t('organizations.title')}
+          </NavLink>
           <NavLink to={paths.repos(org)} className="repo-tab" data-testid="nav-repos">
             {t('nav.repos')}
           </NavLink>
@@ -57,6 +75,9 @@ export function AppShell() {
           </NavLink>
           <NavLink to={paths.runner(org)} className="repo-tab" data-testid="nav-runner">
             {t('nav.runner')}
+          </NavLink>
+          <NavLink to={paths.webhooks(org)} className="repo-tab" data-testid="nav-webhooks">
+            {t('nav.webhooks')}
           </NavLink>
           <p className="nav-group-label">{t('nav.accountSecurity')}</p>
           <NavLink

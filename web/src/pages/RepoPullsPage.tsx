@@ -1,10 +1,18 @@
-import { Link, useParams } from 'react-router-dom'
+import { FormEvent, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { createPullRequest } from '../api'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { DEFAULT_ORG, paths } from '../app/paths'
 
 export function RepoPullsPage() {
   const { org = DEFAULT_ORG } = useParams<{ org: string }>()
+  const navigate = useNavigate()
+  const [title, setTitle] = useState('')
+  const [sourceBranch, setSourceBranch] = useState('')
+  const [targetBranch, setTargetBranch] = useState('main')
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const {
     t,
     selectedRepo,
@@ -15,15 +23,71 @@ export function RepoPullsPage() {
     onInspectPrCi,
     onApproveAndMerge,
     onStartPrAgentFix,
+    loadIssues,
   } = useWorkspace()
 
   if (!selectedRepo) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
+  const repoSlug = selectedRepo
+
+  async function submitPullRequest(event: FormEvent) {
+    event.preventDefault()
+    setCreateBusy(true)
+    setCreateError(null)
+    try {
+      const created = await createPullRequest(org, repoSlug, title.trim(), sourceBranch.trim(), {
+        target_branch: targetBranch.trim(),
+      })
+      await loadIssues(repoSlug)
+      navigate(paths.repoPull(org, repoSlug, created.number))
+    } catch (reason) {
+      setCreateError(reason instanceof Error ? reason.message : t('app.createPullRequestFailed'))
+    } finally {
+      setCreateBusy(false)
+    }
+  }
 
   return (
     <Panel data-testid="repo-pulls-page">
       <h2>{t('nav.repoPulls')}</h2>
+      <details data-testid="create-pull-request">
+        <summary>{t('app.createPullRequest')}</summary>
+        <p>{t('app.pullRequestNeedsPushedBranch')}</p>
+        <form onSubmit={(event) => void submitPullRequest(event)}>
+          <label>
+            {t('app.pullRequestTitle')}
+            <input
+              data-testid="pull-create-title"
+              required
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+          <label>
+            {t('app.pullRequestSourceBranch')}
+            <input
+              data-testid="pull-create-source-branch"
+              required
+              value={sourceBranch}
+              onChange={(event) => setSourceBranch(event.target.value)}
+            />
+          </label>
+          <label>
+            {t('app.pullRequestTargetBranch')}
+            <input
+              data-testid="pull-create-target-branch"
+              required
+              value={targetBranch}
+              onChange={(event) => setTargetBranch(event.target.value)}
+            />
+          </label>
+          <button type="submit" disabled={createBusy} data-testid="pull-create-submit">
+            {createBusy ? t('common.loading') : t('app.createPullRequest')}
+          </button>
+        </form>
+        {createError ? <p role="alert">{createError}</p> : null}
+      </details>
       <ul data-testid="pull-request-list">
         {pulls.map((pr) => (
           <li key={pr.id} data-testid={`pull-row-${pr.number}`}>

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +11,56 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::lease::finalize_agent_run_state;
+
+async fn update_agent_progress(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    progress: &str,
+) {
+    if let Err(error) = sqlx::query(
+        "UPDATE agent_runs SET recent_progress = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3 AND state = 'running'",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(progress)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(run_id = %run_id, %error, "failed to update AgentRun progress");
+    }
+}
+
+const DEFAULT_AGENT_GIT_NAME: &str = "MuseHub Agent";
+const DEFAULT_AGENT_GIT_EMAIL: &str = "agent@musehub.local";
+
+fn ensure_agent_git_identity(work_dir: &Path) -> Result<(), String> {
+    for (key, default) in [
+        ("user.name", DEFAULT_AGENT_GIT_NAME),
+        ("user.email", DEFAULT_AGENT_GIT_EMAIL),
+    ] {
+        let configured = std::process::Command::new("git")
+            .args(["config", "--get", key])
+            .current_dir(work_dir)
+            .output()
+            .is_ok_and(|output| output.status.success() && !output.stdout.is_empty());
+        if configured {
+            continue;
+        }
+        let status = std::process::Command::new("git")
+            .args(["config", "--local", key, default])
+            .current_dir(work_dir)
+            .status()
+            .map_err(|error| format!("could not configure {key}: {error}"))?;
+        if !status.success() {
+            return Err(format!("could not configure {key}"));
+        }
+    }
+    Ok(())
+}
 
 pub fn new_supervisor() -> Arc<AgentSupervisor> {
     Arc::new(AgentSupervisor::default())
@@ -55,22 +105,20 @@ pub fn kill_process_group(pid: u32) {
 #[cfg(not(unix))]
 pub fn kill_process_group(_pid: u32) {}
 
-async fn still_holds_lease(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64) -> bool {
-    matches!(
-        sqlx::query_as::<_, (i64,)>(
-            "SELECT lease_epoch FROM agent_runs WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3",
-        )
-        .bind(run_id)
-        .bind(instance_id)
-        .bind(epoch)
-        .fetch_optional(pool)
-        .await,
-        Ok(Some(_))
-    )
+async fn fenced_fail(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64, code: &str) {
+    fenced_fail_with_usage(pool, run_id, instance_id, epoch, code, None, None).await;
 }
 
-async fn fenced_fail(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64, code: &str) {
-    let _ = finalize_agent_run_state(
+async fn fenced_fail_with_usage(
+    pool: &PgPool,
+    run_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    code: &str,
+    usage_tokens: Option<i64>,
+    usage_evidence: Option<&serde_json::Value>,
+) {
+    match finalize_agent_run_state(
         pool,
         run_id,
         instance_id,
@@ -78,9 +126,30 @@ async fn fenced_fail(pool: &PgPool, run_id: Uuid, instance_id: Uuid, epoch: i64,
         "failed",
         Some(code),
         None,
-        None,
+        usage_tokens,
+        usage_evidence,
     )
-    .await;
+    .await
+    {
+        Ok(false) => {
+            let _ = finalize_agent_run_state(
+                pool,
+                run_id,
+                instance_id,
+                epoch,
+                "canceled",
+                None,
+                None,
+                usage_tokens,
+                usage_evidence,
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::error!(run_id = %run_id, %error, "failed to finalize AgentRun failure")
+        }
+        Ok(true) => {}
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -130,6 +199,7 @@ pub async fn run_agent_job(
         }
     };
     let epoch = work_lease.epoch;
+    update_agent_progress(&pool, run_id, instance_id, epoch, "workspace_preparation").await;
     let _renew_guard =
         crate::lease::agent_lease_renew_guard(pool.clone(), run_id, instance_id, epoch);
 
@@ -206,6 +276,19 @@ pub async fn run_agent_job(
         }
     }
 
+    if let Err(error) = ensure_agent_git_identity(work_dir.path()) {
+        tracing::error!(run_id = %run_id, %error, "failed to configure AgentRun Git identity");
+        fenced_fail(
+            &pool,
+            run_id,
+            instance_id,
+            epoch,
+            "agent_git_identity_failed",
+        )
+        .await;
+        return;
+    }
+
     let message = if message.is_empty() {
         sqlx::query_as::<_, (String,)>("SELECT task_message FROM agent_runs WHERE id = $1")
             .bind(run_id)
@@ -216,6 +299,7 @@ pub async fn run_agent_job(
     } else {
         message
     };
+    update_agent_progress(&pool, run_id, instance_id, epoch, "adapter_running").await;
     let task = AgentTask {
         kind: "implementation".to_string(),
         message,
@@ -291,54 +375,60 @@ pub async fn run_agent_job(
     supervisor.inner.lock().await.remove(&run_id);
 
     match outcome {
-        RunOutcome::Succeeded { commit, usage } => {
-            if cancel_requested(&pool, run_id).await {
-                let _ = finalize_agent_run_state(
-                    &pool,
+        RunOutcome::Succeeded {
+            commit: Some(commit),
+            usage,
+        } => {
+            publish_agent_commit(
+                &pool,
+                AgentCommitPublication {
                     run_id,
+                    repo_id,
                     instance_id,
                     epoch,
-                    "canceled",
-                    None,
-                    None,
-                    Some(usage.tokens as i64),
-                )
-                .await;
-            } else if commit.is_some() {
-                if still_holds_lease(&pool, run_id, instance_id, epoch).await {
-                    let push_ok = std::process::Command::new("git")
-                        .current_dir(work_dir.path())
-                        .args(["push", "origin", &format!("HEAD:refs/heads/{branch}")])
-                        .status()
-                        .is_ok_and(|s| s.success());
-                    if !push_ok {
-                        fenced_fail(&pool, run_id, instance_id, epoch, "git_push_failed").await;
-                        return;
-                    }
+                    work_dir: work_dir.path(),
+                    branch: &branch,
+                    commit: &commit,
+                    usage,
+                },
+            )
+            .await;
+        }
+        RunOutcome::Succeeded {
+            commit: None,
+            usage,
+        } => {
+            match finalize_agent_run_state(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                "succeeded",
+                None,
+                None,
+                Some(usage.tokens as i64),
+                usage.evidence.as_ref(),
+            )
+            .await
+            {
+                Ok(false) => {
+                    let _ = finalize_agent_run_state(
+                        &pool,
+                        run_id,
+                        instance_id,
+                        epoch,
+                        "canceled",
+                        None,
+                        None,
+                        Some(usage.tokens as i64),
+                        usage.evidence.as_ref(),
+                    )
+                    .await;
                 }
-                let _ = finalize_agent_run_state(
-                    &pool,
-                    run_id,
-                    instance_id,
-                    epoch,
-                    "succeeded",
-                    None,
-                    commit.as_deref(),
-                    Some(usage.tokens as i64),
-                )
-                .await;
-            } else {
-                let _ = finalize_agent_run_state(
-                    &pool,
-                    run_id,
-                    instance_id,
-                    epoch,
-                    "succeeded",
-                    None,
-                    None,
-                    Some(usage.tokens as i64),
-                )
-                .await;
+                Err(error) => {
+                    tracing::error!(run_id = %run_id, %error, "failed to finalize AgentRun success")
+                }
+                Ok(true) => {}
             }
             let _ = repo_id;
         }
@@ -352,11 +442,194 @@ pub async fn run_agent_job(
                 None,
                 None,
                 Some(usage.tokens as i64),
+                usage.evidence.as_ref(),
             )
             .await;
         }
-        RunOutcome::Failed { code, .. } => {
-            fenced_fail(&pool, run_id, instance_id, epoch, &code).await;
+        RunOutcome::Failed {
+            code,
+            detail,
+            usage,
+        } => {
+            if matches!(
+                code.as_str(),
+                "agent_commit_missing"
+                    | "agent_head_unreadable"
+                    | "agent_changes_uncommitted"
+                    | "agent_worktree_status_unavailable"
+            ) {
+                tracing::warn!(
+                    run_id = %run_id,
+                    detail = %detail,
+                    "Codex completed without a publishable commit"
+                );
+            } else if code == "agent_adapter_failed" {
+                tracing::error!(
+                    run_id = %run_id,
+                    detail = %detail,
+                    "agent adapter process exited unsuccessfully"
+                );
+            }
+            let usage_tokens = usage.as_ref().map(|usage| usage.tokens as i64);
+            let usage_evidence = usage.as_ref().and_then(|usage| usage.evidence.as_ref());
+            fenced_fail_with_usage(
+                &pool,
+                run_id,
+                instance_id,
+                epoch,
+                &code,
+                usage_tokens,
+                usage_evidence,
+            )
+            .await;
+        }
+    }
+}
+
+struct AgentCommitPublication<'a> {
+    run_id: Uuid,
+    repo_id: Uuid,
+    instance_id: Uuid,
+    epoch: i64,
+    work_dir: &'a Path,
+    branch: &'a str,
+    commit: &'a str,
+    usage: UsageTotals,
+}
+
+async fn publish_agent_commit(pool: &PgPool, publication: AgentCommitPublication<'_>) {
+    let AgentCommitPublication {
+        run_id,
+        repo_id,
+        instance_id,
+        epoch,
+        work_dir,
+        branch,
+        commit,
+        usage,
+    } = publication;
+    update_agent_progress(pool, run_id, instance_id, epoch, "commit_publishing").await;
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            tracing::error!(run_id = %run_id, %error, "failed to begin AgentRun publish transaction");
+            return;
+        }
+    };
+    let state = match sqlx::query_as::<_, (String,)>(
+        "SELECT state FROM agent_runs
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
+         FOR UPDATE",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row.map(|(state,)| state),
+        Err(error) => {
+            tracing::error!(run_id = %run_id, %error, "failed to lock AgentRun before publish");
+            return;
+        }
+    };
+    let Some(state) = state else {
+        return;
+    };
+    if state == "cancel_requested" {
+        let update = sqlx::query(
+            "UPDATE agent_runs SET state = 'canceled', usage_tokens = $4,
+             usage_evidence = COALESCE($5, usage_evidence), updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
+               AND state = 'cancel_requested'",
+        )
+        .bind(run_id)
+        .bind(instance_id)
+        .bind(epoch)
+        .bind(usage.tokens as i64)
+        .bind(usage.evidence.as_ref())
+        .execute(&mut *tx)
+        .await;
+        match update {
+            Ok(result) if result.rows_affected() == 1 => {
+                if let Err(error) = tx.commit().await {
+                    tracing::error!(run_id = %run_id, %error, "failed to commit canceled AgentRun");
+                }
+            }
+            Ok(_) => {
+                let _ = tx.rollback().await;
+            }
+            Err(error) => {
+                tracing::error!(run_id = %run_id, %error, "failed to finalize canceled AgentRun");
+            }
+        }
+        return;
+    }
+    if state != "running" {
+        let _ = tx.rollback().await;
+        return;
+    }
+    if let Err(error) =
+        crate::repository_lock::lock_repository_in_transaction(&mut tx, repo_id).await
+    {
+        tracing::error!(run_id = %run_id, %error, "failed to acquire repository write lock for AgentRun publish");
+        let _ = tx.rollback().await;
+        return;
+    }
+
+    let work_dir = work_dir.to_path_buf();
+    let target_ref = format!("HEAD:refs/heads/{branch}");
+    let push = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("git")
+            .current_dir(work_dir)
+            .args(["push", "origin", &target_ref])
+            .status()
+    })
+    .await;
+    let push_ok = match push {
+        Ok(Ok(status)) => status.success(),
+        Ok(Err(error)) => {
+            tracing::error!(run_id = %run_id, %error, "AgentRun git push failed to start");
+            false
+        }
+        Err(error) => {
+            tracing::error!(run_id = %run_id, %error, "AgentRun git push task failed");
+            false
+        }
+    };
+    let (terminal_state, error_code, result_commit) = if push_ok {
+        ("succeeded", None, Some(commit))
+    } else {
+        ("failed", Some("git_push_failed"), None)
+    };
+    let update = sqlx::query(
+        "UPDATE agent_runs SET state = $4, error_code = $5,
+         result_commit_oid = COALESCE($6, result_commit_oid),
+         usage_tokens = COALESCE($7, usage_tokens), usage_evidence = COALESCE($8, usage_evidence),
+         updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3 AND state = 'running'",
+    )
+    .bind(run_id)
+    .bind(instance_id)
+    .bind(epoch)
+    .bind(terminal_state)
+    .bind(error_code)
+    .bind(result_commit)
+    .bind(usage.tokens as i64)
+    .bind(usage.evidence.as_ref())
+    .execute(&mut *tx)
+    .await;
+    match update {
+        Ok(result) if result.rows_affected() == 1 => {
+            if let Err(error) = tx.commit().await {
+                tracing::error!(run_id = %run_id, %error, "failed to commit AgentRun publish result");
+            }
+        }
+        Ok(_) => {
+            let _ = tx.rollback().await;
+        }
+        Err(error) => {
+            tracing::error!(run_id = %run_id, %error, "failed to finalize AgentRun publish result");
         }
     }
 }
@@ -377,25 +650,16 @@ async fn normalize_cancel_outcome(pool: &PgPool, run_id: Uuid, outcome: RunOutco
         RunOutcome::Failed { .. } | RunOutcome::Succeeded { .. } => {
             let usage = match &outcome {
                 RunOutcome::Succeeded { usage, .. } => usage.clone(),
-                RunOutcome::Failed { .. } => UsageTotals {
+                RunOutcome::Failed { usage, .. } => usage.clone().unwrap_or(UsageTotals {
                     tokens: 0,
                     microusd: 0,
                     budget_unknown: true,
                     microusd_unknown: true,
-                },
+                    evidence: None,
+                }),
                 RunOutcome::Canceled { usage } => usage.clone(),
             };
             RunOutcome::Canceled { usage }
         }
     }
-}
-
-async fn cancel_requested(pool: &PgPool, run_id: Uuid) -> bool {
-    matches!(
-        sqlx::query_as::<_, (String,)>("SELECT state FROM agent_runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_optional(pool)
-            .await,
-        Ok(Some((state,))) if state == "cancel_requested"
-    )
 }

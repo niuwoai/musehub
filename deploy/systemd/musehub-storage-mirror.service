@@ -1,0 +1,15 @@
+[Unit]
+Description=MuseHub asynchronous Git and artifact storage mirror
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=musehub
+Group=musehub-git
+SupplementaryGroups=musehub-git
+EnvironmentFile=/etc/musehub/storage-mirror.env
+StateDirectory=musehub-storage-mirror
+StateDirectoryMode=0750
+ExecStart=/usr/local/libexec/musehub/mirror-musehub-storage.sh continuous
+TimeoutStartSec=0

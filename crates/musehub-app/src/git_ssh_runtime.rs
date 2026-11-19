@@ -29,6 +29,11 @@ pub fn git_storage_group() -> String {
     std::env::var("MUSEHUB_GIT_STORAGE_GROUP").unwrap_or_else(|_| "musehub-git".into())
 }
 
+#[cfg(target_os = "macos")]
+fn git_storage_group_is_explicitly_configured() -> bool {
+    std::env::var("MUSEHUB_GIT_STORAGE_GROUP").is_ok_and(|group| !group.trim().is_empty())
+}
+
 /// Re-apply production ACL after writing keys/scripts into the run dir.
 #[cfg(unix)]
 pub fn finalize_git_ssh_run_dir(run_dir: &Path) -> Result<(), AppError> {
@@ -135,7 +140,7 @@ pub fn ensure_host_ed25519_key(host_key: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn reject_symlink_path(path: &Path) -> Result<(), AppError> {
+pub(crate) fn reject_symlink_path(path: &Path) -> Result<(), AppError> {
     if path.exists() {
         let meta = fs::symlink_metadata(path).map_err(|e| AppError::Other(e.to_string()))?;
         if meta.file_type().is_symlink() {
@@ -890,10 +895,47 @@ fn run_chmod_file(args: &[&str], path: &str) -> Result<(), AppError> {
     Err(AppError::Other(format!("chmod on {path} failed")))
 }
 
-/// Apply group ACL by physical walk (no `chgrp -R` / symlink follow). Not race-proof:
+#[cfg(target_os = "macos")]
+fn apply_private_bare_repo_acl_physical(bare: &Path) -> Result<(), AppError> {
+    let paths = collect_physical_tree_paths(bare)?;
+    let records: Vec<PathInode> = paths
+        .iter()
+        .map(|path| path_inode_record(path))
+        .collect::<Result<_, _>>()?;
+    for record in &records {
+        assert_path_inode_unchanged(record)?;
+        let path = record
+            .path
+            .to_str()
+            .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+        run_chmod_file(&["-N"], path)?;
+        run_chmod_file(&["go-rwx"], path)?;
+    }
+    let path = bare
+        .to_str()
+        .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+    let status = Command::new("git")
+        .args(["--git-dir", path, "config", "core.sharedRepository", "0600"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !status {
+        return Err(AppError::Other(
+            "git config core.sharedRepository 0600 failed".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Apply shared-group ACL by physical walk (no `chgrp -R` / symlink follow). Not race-proof:
 /// concurrent writers on a group-writable root can still swap paths; preflight is static.
 #[cfg(unix)]
 pub fn apply_bare_repo_group_acl_physical(bare: &Path) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    if !git_storage_group_is_explicitly_configured() {
+        // Local macOS repositories stay owner-only and use private Git object modes.
+        return apply_private_bare_repo_acl_physical(bare);
+    }
     let group = git_storage_group();
     let paths = collect_physical_tree_paths(bare)?;
     let records: Vec<PathInode> = paths
@@ -1038,6 +1080,18 @@ fn collect_bare_repos_under_root(git_root: &Path) -> Result<Vec<PathBuf>, AppErr
 pub fn ensure_shared_git_storage_root(git_root: &Path) -> Result<(), AppError> {
     use std::os::unix::fs::MetadataExt;
     if !git_root.exists() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if !git_storage_group_is_explicitly_configured() {
+        let bare_repos = collect_bare_repos_under_root(git_root)?;
+        let root = git_root
+            .to_str()
+            .ok_or_else(|| AppError::Other("utf8 path".into()))?;
+        run_chmod_file(&["go-rwx"], root)?;
+        for bare in bare_repos {
+            apply_private_bare_repo_acl_physical(&bare)?;
+        }
         return Ok(());
     }
     let group = git_storage_group();

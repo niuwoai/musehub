@@ -147,6 +147,15 @@ export function gitPushBranch(
   branch: string,
   files: Record<string, string>,
 ): void {
+  gitPushCommits(cloneUrl, pat, branch, [files])
+}
+
+export function gitPushCommits(
+  cloneUrl: string,
+  pat: string,
+  branch: string,
+  commits: Record<string, string>[],
+): void {
   const sandbox = createGitAuthSandbox(pat)
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-e2e-git-'))
   try {
@@ -157,21 +166,23 @@ export function gitPushBranch(
     } catch {
       runGit(dir, pat, sandbox.configPath, ['checkout', '-b', branch])
     }
-    for (const [file, body] of Object.entries(files)) {
-      const full = path.join(dir, file)
-      fs.mkdirSync(path.dirname(full), { recursive: true })
-      fs.writeFileSync(full, body)
+    for (const [index, files] of commits.entries()) {
+      for (const [file, body] of Object.entries(files)) {
+        const full = path.join(dir, file)
+        fs.mkdirSync(path.dirname(full), { recursive: true })
+        fs.writeFileSync(full, body)
+      }
+      runGit(dir, pat, sandbox.configPath, ['add', '.'])
+      runGit(dir, pat, sandbox.configPath, [
+        '-c',
+        'user.email=e2e@musehub.local',
+        '-c',
+        'user.name=musehub-e2e',
+        'commit',
+        '-m',
+        `e2e ${index + 1}`,
+      ])
     }
-    runGit(dir, pat, sandbox.configPath, ['add', '.'])
-    runGit(dir, pat, sandbox.configPath, [
-      '-c',
-      'user.email=e2e@musehub.local',
-      '-c',
-      'user.name=musehub-e2e',
-      'commit',
-      '-m',
-      'e2e',
-    ])
     runGit(dir, pat, sandbox.configPath, ['push', 'origin', `HEAD:${branch}`])
     runGit(dir, pat, sandbox.configPath, ['remote', 'set-url', 'origin', url])
     const configBody = fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8')

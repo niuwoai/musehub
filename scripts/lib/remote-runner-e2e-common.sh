@@ -10,6 +10,23 @@ e2e_uuid() {
   fi
 }
 
+e2e_api_request() {
+  local context="$1"
+  shift
+  local response http_status body
+  response=$(curl --silent --show-error --write-out $'\n%{http_code}' "$@") || {
+    printf 'API transport failed: %s\n' "$context" >&2
+    return 1
+  }
+  http_status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    printf 'API request failed: %s (HTTP %s): %s\n' "$context" "$http_status" "$body" >&2
+    return 1
+  fi
+  printf '%s' "$body"
+}
+
 remote_runner_e2e_init() {
   set -euo pipefail
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,6 +38,7 @@ remote_runner_e2e_init() {
     E2E_CREATED_GIT_ROOT=0
   else
     GIT_ROOT="$(mktemp -d)"
+    GIT_ROOT="$(cd "$GIT_ROOT" && pwd -P)"
     E2E_CREATED_GIT_ROOT=1
   fi
   ARTIFACT_ROOT="${MUSEHUB_ARTIFACT_ROOT:-$GIT_ROOT/artifacts}"
@@ -69,7 +87,7 @@ remote_runner_wait_ready() {
       API_PORT="$(tr -d '[:space:]' <"$MUSEHUB_LISTEN_PORT_FILE")"
       export API_PORT
       export MUSEHUB_API_BASE="http://127.0.0.1:${API_PORT}"
-      if curl -sf "http://127.0.0.1:${API_PORT}/readyz" | jq -e '.checks.product_api == "ok"' >/dev/null; then
+      if curl -fsS "http://127.0.0.1:${API_PORT}/readyz" | jq -e '.checks.product_api == "ok"' >/dev/null; then
         return 0
       fi
     fi
@@ -96,6 +114,9 @@ remote_runner_start_server() {
   if [[ -n "${MUSEHUB_AGENT_EXECUTOR:-}" ]]; then
     server_env+=(MUSEHUB_AGENT_EXECUTOR="$MUSEHUB_AGENT_EXECUTOR")
   fi
+  if [[ -n "${MUSEHUB_AGENT_CODEX_REASONING_EFFORT:-}" ]]; then
+    server_env+=(MUSEHUB_AGENT_CODEX_REASONING_EFFORT="$MUSEHUB_AGENT_CODEX_REASONING_EFFORT")
+  fi
   if [[ -n "${MUSEHUB_DEPLOY_EXECUTOR:-}" ]]; then
     server_env+=(MUSEHUB_DEPLOY_EXECUTOR="$MUSEHUB_DEPLOY_EXECUTOR")
   fi
@@ -104,6 +125,9 @@ remote_runner_start_server() {
   fi
   if [[ -n "${MUSEHUB_PIPELINE_EXECUTOR:-}" ]]; then
     server_env+=(MUSEHUB_PIPELINE_EXECUTOR="$MUSEHUB_PIPELINE_EXECUTOR")
+  fi
+  if [[ -n "${MUSEHUB_GIT_STORAGE_GROUP:-}" ]]; then
+    server_env+=(MUSEHUB_GIT_STORAGE_GROUP="$MUSEHUB_GIT_STORAGE_GROUP")
   fi
   env "${server_env[@]}" "$BIN_SERVER" &
   SERVER_PID=$!
@@ -121,7 +145,7 @@ remote_runner_login_cookie() {
   )
   for pass in "${candidates[@]}"; do
     [[ -z "$pass" ]] && continue
-    cookie=$(curl -sf -c - -X POST "http://127.0.0.1:${API_PORT}/api/v1/auth/login" \
+    cookie=$(curl -fsS -c - -X POST "http://127.0.0.1:${API_PORT}/api/v1/auth/login" \
       -H 'Content-Type: application/json' \
       -d "{\"handle\":\"admin\",\"password\":\"$pass\"}" | awk '/musehub_session/ {print $NF}') || true
     if [[ -n "$cookie" ]]; then
@@ -140,18 +164,20 @@ remote_runner_bootstrap_repo() {
   if [[ -z "${COOKIE:-}" ]]; then
     COOKIE=$(remote_runner_login_cookie)
   fi
-  curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/members" \
+  e2e_api_request "create runner member" -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/members" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d "{\"handle\":\"$member_handle\",\"password\":\"$member_pass\",\"role\":\"member\"}" >/dev/null || true
-  curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/repos" \
+  local repo_json
+  repo_json=$(e2e_api_request "create runner repository $slug" -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/repos" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
-    -d "{\"slug\":\"$slug\",\"description\":\"runner e2e\"}" >/dev/null
-  REPO_ID=$(psql "$DATABASE_URL" -Atc "SELECT id FROM repositories WHERE slug='$slug'")
-  STORAGE_KEY=$(psql "$DATABASE_URL" -Atc "SELECT storage_key FROM repositories WHERE slug='$slug'")
-  curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/repos/$slug/collaborators" \
+    -d "{\"slug\":\"$slug\",\"description\":\"runner e2e\"}")
+  REPO_ID=$(jq -er '.id' <<<"$repo_json")
+  STORAGE_KEY=$(psql "$DATABASE_URL" -Atc "SELECT storage_key FROM repositories WHERE id='$REPO_ID'")
+  [[ -n "$STORAGE_KEY" ]] || { echo "repository storage key missing for id=$REPO_ID" >&2; return 1; }
+  e2e_api_request "grant runner repository access $slug" -X POST "http://127.0.0.1:${API_PORT}/api/v1/orgs/demo/repos/$slug/collaborators" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d "{\"handle\":\"$member_handle\",\"role\":\"developer\"}" >/dev/null
-  PAT_JSON=$(curl -sf -X POST "http://127.0.0.1:${API_PORT}/api/v1/tokens" \
+  PAT_JSON=$(e2e_api_request "create runner token for $slug" -X POST "http://127.0.0.1:${API_PORT}/api/v1/tokens" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d "{\"name\":\"subproc\",\"org\":\"demo\",\"scopes\":[\"pipeline:execute\",\"repo:read\"],\"scope_mode\":\"selected\",\"repo_ids\":[\"$REPO_ID\"],\"runner_handle\":\"$member_handle\"}")
   RUNNER_PAT=$(echo "$PAT_JSON" | jq -r .token)

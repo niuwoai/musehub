@@ -1,0 +1,9 @@
+log:
+  level: debug
+  job_level: debug
+container:
+  network: ""
+  privileged: false
+  options: --add-host=musehub-roadmap-forgejo-20261119:172.18.0.2
+  docker_host: tcp://musehub-roadmap-dind-20261119:2375
+  force_pull: false

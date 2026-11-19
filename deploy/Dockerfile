@@ -13,14 +13,18 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
 COPY VERSION ./
-RUN cargo build --release -p musehub-server -p musehub-migrate -p musehub-runnerd -p musehub-git-ssh \
-  && cargo build --release -p musehub-agent-adapter \
-    --bin musehub-agent-reference \
-    --bin musehub-agent-codex-sim \
-    --bin musehub-pipeline-reference \
-    --bin musehub-pipeline-oci \
-    --bin musehub-compose-mock \
-    --bin musehub-compose-runner
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    export CARGO_HTTP_TIMEOUT=600 CARGO_HTTP_LOW_SPEED_LIMIT=1 CARGO_NET_RETRY=10 \
+    && cargo build --release -p musehub-server -p musehub-migrate -p musehub-runnerd -p musehub-git-ssh \
+    && cargo build --release -p musehub-agent-adapter \
+      --bin musehub-agent-reference \
+      --bin musehub-agent-codex-sim \
+      --bin musehub-pipeline-reference \
+      --bin musehub-pipeline-oci \
+      --bin musehub-pipeline-job \
+      --bin musehub-compose-mock \
+      --bin musehub-compose-runner
 
 FROM node:${NODE_VERSION} AS web-builder
 WORKDIR /web
@@ -89,17 +93,19 @@ RUN apt-get update \
   && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
   && rm -rf /var/lib/apt/lists/* \
   && useradd -r -u 10001 -d /var/lib/musehub musehub \
-  && mkdir -p /opt/musehub/bin /var/lib/musehub/git /var/lib/musehub/artifacts \
+  && mkdir -p /opt/musehub/bin /var/lib/musehub/git /var/lib/musehub/artifacts /var/lib/musehub/pipeline-workspaces \
   && chown -R musehub:musehub /var/lib/musehub \
   && git config --system --add safe.directory '*'
 COPY --from=rust-builder /build/target/release/musehub-runnerd /usr/local/bin/
 COPY --from=rust-builder /build/target/release/musehub-agent-reference /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-agent-codex-sim /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-pipeline-oci /opt/musehub/bin/
+COPY --from=rust-builder /build/target/release/musehub-pipeline-job /opt/musehub/bin/
 COPY --from=rust-builder /build/target/release/musehub-compose-runner /opt/musehub/bin/
 USER musehub
 ENV MUSEHUB_GIT_ROOT=/var/lib/musehub/git \
-    MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts
+    MUSEHUB_ARTIFACT_ROOT=/var/lib/musehub/artifacts \
+    MUSEHUB_JOB_WORKSPACE_ROOT=/var/lib/musehub/pipeline-workspaces
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/local/bin/musehub-runnerd"]
 

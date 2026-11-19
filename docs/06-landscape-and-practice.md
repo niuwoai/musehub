@@ -89,9 +89,11 @@ GitLab 官方支持案例记录：不受支持的自托管模型可能创建分�
 
 MuseHub 的对应决策：模型“完成”事件触发平台核验；实现任务必须验证真实提交、远端 ref、diff 与验收证据。模型与 Agent 的兼容测试要覆盖工具调用、提交、推送、反馈迭代和取消，不能只测一次聊天请求。
 
-## 6. 建议的一周体验计划（尚未执行）
+## 6. 建议的一周体验计划（2026-11-17 未完成；仅有安装尝试）
 
 使用新建的合成项目、独立 VM、临时凭据与明确模型费用上限。不要把真实生产私有仓库直接导入未知配置。安装前固定产品版本/镜像摘要，阅读该版本文档。
+
+**2026-11-17 安装与任务尝试记录：** Forgejo 镜像 `codeberg.org/forgejo/forgejo@sha256:fa2b71d2ec931bd90b1744720af33ec4455a9d2e789591584830d7a7615ef87b` 在临时容器中返回 HTTP 200；已创建合成 Issue、推送 `main` 与 `acceptance` 分支、建立 PR，并让 PR 获得 1 个文件差异。随后在 `acceptance` 分支配置 `.forgejo/workflows/acceptance.yml`，Forgejo Runner 11.0.0 固定镜像在内部 Docker 网络中注册并运行 Actions Run 4，状态 `success`；工作流只有引用检查和 echo，不代表不可信代码隔离或通用 CI 构建能力。此前提交状态 API 查询为 0 个状态；未运行 Agent 任务。OneDev 镜像 `1dev/server@sha256:8eda046b8e24c024b6a2ba8d129302bc5c35ea3f744f340a7681a105be38aec4` 按官方容器指南挂载专用数据卷后 HTTP 返回 200；创建项目 `musehub-acceptance`（ID 1，key `MHA`）、Issue `MHA-1`，推送 `main` 与 `acceptance/change` 并创建 PR `MHA-1`（2 个文件差异）。为该合成项目配置临时 Server Host Executor，手动运行 `Acceptance Check`，Build #1 成功；命令在 OneDev 服务容器内执行，不构成独立 Runner或不可信代码隔离证据，也未配置自动触发或运行 Agent。两者统一 Issue/Git/PR/CI/Agent 对照仍未完成，当前证据不足以总结完整产品差异。
 
 | 日程 | 工作 | 产出 |
 |---|---|---|
@@ -108,6 +110,37 @@ MuseHub 的对应决策：模型“完成”事件触发平台核验；实现任
 ### 统一任务集
 
 T1 修复分页边界并添加回归测试；T2 新增一个小 API 和对应前端文案；T3 在已有 PR 上响应一条明确审查意见；T4 修复测试失败；T5 取消耗时任务；T6 新提交使旧批准失效；T7 发布固定制品并部署；T8 部署健康失败后回滚；T9 撤销发起人权限；T10 重放同一触发事件。
+
+#### T1 跨产品可复现基准
+
+以下是 Forgejo、OneDev 与 MuseHub 的共同首轮基准。2026-11-18 隔离 fixture 验证基准断言：固定的 1-based 错误实现使三项测试全部失败，按 `(page - 1) * pageSize` 修正后全通过；这只验证 oracle，不构成产品成绩。历史 OID `ea0cf80798c1c895e0c0d54e541275893f4ad13b` 无法从当前仓库或 GitHub 独立解析；确定性 fixture 的 source baseline 为 `e3949bea547a70a9346f36bfee1f9ce3d0d63edb`，独立修复 commit 为 `5447cb08bc42a2b5dc80715a35e8e65eb7dd4d88`。2026-11-19 MuseHub opt-in 产品 Runner T1 已通过：以该 source baseline 为共同起点，创建 Issue、错误基线和修复 PR；baseline run `9601b231-faff-4569-b156-136a9c96cff3` 为 failed，分页 job 预期 3 项失败；PR run `c539c3b3-afe0-4855-bedb-3b4576f6411d` 在 head `c2430bd4b0214f14b897ab414220b39d7e71a1b5` 上 3 pass、0 fail，`product-ci` 成功。该脚本使用 digest-pinned Node 镜像，并完成 Runner→DinD mTLS、artifact SHA-256 与缓存命中断言。早期 Forgejo 与 OneDev 记录使用无法核验的旧 base；2026-11-19 随后重建的专用实例均使用本段 source baseline，并在下文记录了真实 PR CI 结果。随后 MuseHub 隔离重跑通过：baseline run `2071bdf4-aaa8-4e5d-b280-0c10d3f9b13c` 三项失败，修复 PR run `93882a1a-ee69-4c40-ad41-b34779ae9f41` 在 head `021e7f0d47768946986572f6e4a3be0248de9b6c` 三项通过，`product-ci` 成功；共同 fixture base 仍为 `e3949bea547a70a9346f36bfee1f9ce3d0d63edb`。同轮 Runner mTLS、artifact SHA-256、缓存命中与全新数据库 migrations 0001–0046 完整 up/down/up 均通过。Forgejo `t1admin/musehub-t1-pagination` 与 OneDev `musehub-t1-rerun` 现均已核实 `main=e3949bea547a70a9346f36bfee1f9ce3d0d63edb`、`t1/pagination-fix=5447cb08bc42a2b5dc80715a35e8e65eb7dd4d88`；Forgejo 已创建 Issue #1、open PR #2，PR 指向上述共同提交；OneDev 已创建 Issue #4、open PR #1，来源/目标分支为 `t1/pagination-fix`→`main`。修复分支在本机 fixture 执行 `npm test` 为 3 pass、0 fail。随后 OneDev 17.2.0 build spec 更新为 version 53 / `!PosixInterpreter`，补齐必填字段并配置 PullRequestUpdateTrigger。2026-11-19 OneDev Build #5 对源分支 commit `ec5c305f571e323bcbb15028e069746e71879cd3` 成功，Build #6 对 PR merge preview `f4fa70ec281c6461b99cba7043ce578d4a9711fc` 成功；两次均实际运行 `npm test`，3 pass、0 fail。Forgejo PR workflow 初始失败与后续重跑先后暴露 Runner 外部 DNS、job 容器 Forgejo 主机名解析及 checkout action 缓存对象不完整问题。只修改专用 Runner 的外部 DNS/主机映射，并隔离保留损坏的专用缓存后，2026-11-19 Forgejo `t1-gitpat/t1-pagination` PR #1 的 Actions task #6 成功完成 checkout，实际运行 `npm test`，3 pass、0 fail；远程 `actions/checkout@v4` 标签及提交 `11d5960a326750d5838078e36cf38b85af677262` 可达。Forgejo 共同 base 为 `e3949bea547a70a9346f36bfee1f9ce3d0d63edb`，修复 head 为 `ec5c305f571e323bcbb15028e069746e71879cd3`。OneDev Build #5/#6 对源分支和 PR merge preview 均真实执行测试并通过（各 3 pass、0 fail）。因此 Forgejo 与 OneDev 的同起点 T1 PR CI 均已通过；双产品更广泛对照、Agent 任务、安装/人工操作耗时仍未完成。
+
+- **Issue 标题：** `Fix 1-based pagination boundary and add regression tests`
+- **Issue 正文：** `paginate(items, page, pageSize) currently skips the first page because page is 1-based but the slice offset is 0-based. Make page=1 return the first page, preserve the final partial page, and add regression tests for page 1, page 2, and the final partial page. Do not change unrelated files.`
+- **固定起始实现：** JavaScript `paginate(items, page, pageSize)` 使用 `items.slice(page * pageSize, (page + 1) * pageSize)`；仓库仅含该函数、Node.js 内置 `node:test` 回归测试和 `npm test` 脚本，避免引入第三方依赖。
+- **通过条件：** page 1 返回首段，page 2 返回第二段，最后一页保留不足 `pageSize` 的剩余项；所有测试通过；同一个任务分支上有新 commit；PR 指向该 commit；CI 对该 PR/head 成功。记录每项人工操作、是否自动触发 CI、从 Issue 到 CI 的耗时。Agent 是否可用、费用和返工单独记为产品能力，不作为共同基准的隐含前提。
+- **对照规则：** 给每个系统导入完全相同的 Git 起始 commit 和 Issue 正文，使用相同镜像/产品版本记录；不要复用前一轮不同内容的 issue、分支、diff 或手动 Build 作为 T1 成绩。若环境或授权不支持某环节，记为 `blocked` / `not tested`。
+
+**既有试用记录与本轮结果的边界：** 2026-11-17 的 Forgejo 与 OneDev 都完成了基本 Issue/Git/PR/CI 操作，但没有共同的需求 hash 或共同起始 commit；Forgejo PR 有 1 个文件差异并由 Runner 自动执行合成 workflow，OneDev PR 有 2 个文件差异且通过服务容器内 Host Executor 手动 Build。它们不能横向比较耗时、操作数、CI 隔离或 Agent 完成率。本轮 2026-11-18 在专用实例和 fixture 上执行了 T1：MuseHub 建立了任务 Issue、PR 与 validation run，但该 run 未执行仓库测试；Forgejo 专用实例 `t1admin/musehub-t1-20261118-r3` 建立 T1 Issue #2、PR #2，并由专用 Forgejo Runner 对 PR head `500444677148e30aba299af4da5650992fcf8e62` 自动运行 `npm test`，3 pass、0 fail；OneDev 在专用项目 `musehub-t1-20261118-r4` 建立 Issue #2 与 PR #1，Build #1 因 build spec 未检出代码而失败，随后同一任务分支加入 OneDev checkout step 并提交 `4bd42cfc35ca4dceff014f80189baf5b8b17a1e3`；Build #2 成功并实际运行 `npm test`（3 pass、0 fail），PR updates API 记录了该 head。Forgejo/OneDev 专用实例均返回 HTTP 200；OneDev 临时管理员密码由运行时随机生成且未输出，Build 脚本在退出时尝试删除临时 API token。Forgejo Runner 及其状态卷为专用测试资源；Forgejo 专用实例中现有 13 条本轮生成的临时 token 元数据，API 撤销未完成，未输出 token 值，也未重置管理员密码。未记录可核验的 Issue 到 CI 总耗时；MuseHub validation 与 OneDev Build 均由显式 API 调用发起，Forgejo CI 由 PR 事件自动触发。上述 2026-11-18 结果不是统一任务的同一 Git 起点，不能作为三方对照结论。2026-11-19 同起点 T1 PR CI 后续已在「T1 跨产品可复现基准」记录：Forgejo 与 OneDev 均真实运行 `npm test` 并各 3 pass、0 fail；完整三方任务操作记录、Agent 任务与耗时仍未完成。此前 13 条临时 token 元数据已从专用测试账户撤销。
+
+### PILOT-01：固定 20 项 AI 质量评估
+
+本评估独立于上面的 T1–T10 产品对照任务。`scripts/pilot_report.py` 提供离线清单冻结与报告生成，不调用模型、API 或数据库，也不生成试点成绩；对应的 11 项契约单测已纳入 portable CI，并在本机全数通过。
+
+先准备一个 catalog JSON：`schema_version` 为 `1`、`task_set_id` 唯一，`tasks` 恰好 20 项；每项包含唯一 `task_id`、类别 `bugfix` / `feature` / `test`、试点仓库别名 `pilot_repo` 和任务输入 UTF-8 原文的 SHA-256 `prompt_sha256`。清单必须覆盖三种类别和恰好两个仓库别名。冻结后把 `catalog_sha256` 单独记录并用于所有结果文件；两仓的真实名称与别名映射留在受控环境，不放进脱敏报告。
+
+```bash
+python3 scripts/pilot_report.py freeze pilot-catalog.json pilot-catalog.lock.json
+python3 scripts/pilot_report.py template pilot-catalog.lock.json pilot-results.json
+# 在真实执行后填写 pilot-results.json，再生成报告
+python3 scripts/pilot_report.py report pilot-catalog.lock.json pilot-results.json --json pilot-report.json --markdown pilot-report.md
+```
+
+结果 JSON 必须引用冻结清单 hash，含 MuseHub 版本、Agent/model 标签、代码 commit、环境标签、带时区的起止时间，以及恰好 20 条唯一任务记录。每条记录含状态（`completed` / `failed` / `blocked` / `not_tested`）、PR 数字 ID、commit OID、CI 状态、人工接受标记、返工分钟数、USD 费用字符串和费用估算标记；缺失的 PR/commit、返工或费用用 `null`，不得补造。结果还必须包含 `defects` 数组（可为空），每项关联清单中的任务并记录唯一缺陷 ID、严重级别、摘要和证据引用；以及 `release_decision` 对象，记录人工决定（`continue` / `pause` / `stop`）、审核标签、带时区的决定时间和非空理由。决定时间不得早于试点结束时间。
+
+报告将完成率和有效 PR 比例均以 20 项为分母。有效 PR 定义为状态 `completed`、人工接受、具有 PR ID 与 commit OID、且 CI `passed`；返工报告已记录项总分钟数/平均分钟数及覆盖数，费用报告已知总额、估算总额和覆盖数，并按任务类别与两仓别名拆分完成数和有效 PR 数。报告同时列出人工缺陷清单和发布判断，不设成功率门槛，也不自动推断发布结论。输入校验失败时返回非零错误；冻结清单与报告输出均拒绝覆盖现有文件。
+
+真实 20 项任务的内容冻结、两个试点仓库的执行、人工返工/费用记录、缺陷清单及发布判断仍待完成；本地验证数据不得作为真实试点成绩。
 
 ### 记录模板
 

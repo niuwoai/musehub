@@ -166,12 +166,17 @@ async fn mcp_release_publish_sets_published_state() {
             .fetch_one(&pool)
             .await
             .unwrap();
+    let storage_key: (Uuid,) = sqlx::query_as("SELECT storage_key FROM repositories WHERE id = $1")
+        .bind(repo_id.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let oid = push_branch(git_root.path(), storage_key.0, "release-build");
     let admin_id: (Uuid,) =
         sqlx::query_as("SELECT id FROM principals WHERE handle_normalized = 'admin'")
             .fetch_one(&pool)
             .await
             .unwrap();
-    let oid = "f".repeat(40);
     let pipe_id = Uuid::new_v4();
     let bytes = b"b";
     let sha_hex: String = Sha256::digest(bytes)

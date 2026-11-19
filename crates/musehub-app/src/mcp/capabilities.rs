@@ -14,6 +14,7 @@ pub const IMPLEMENTED_TOOLS: &[&str] = &[
     "musehub_repository_read_file",
     "musehub_repository_search",
     "musehub_commit_compare",
+    "musehub_repository_history",
     "musehub_issue_list",
     "musehub_issue_get",
     "musehub_issue_create",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Panel } from '../components/Panel'
@@ -40,6 +40,11 @@ export function IssueDetailPage() {
   const [commentError, setCommentError] = useState<string | null>(null)
   const [criteriaText, setCriteriaText] = useState('')
   const [criteriaError, setCriteriaError] = useState<string | null>(null)
+  const [planText, setPlanText] = useState('')
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planError, setPlanError] = useState<string | null>(null)
+  const startAgentButton = useRef<HTMLButtonElement>(null)
+  const focusRunAfterPlanAcceptance = useRef(false)
   const [trace, setTrace] = useState<IssueDeliveryTrace | null>(null)
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null)
   const [agentBusy, setAgentBusy] = useState(false)
@@ -48,6 +53,7 @@ export function IssueDetailPage() {
   const [closeReason, setCloseReason] = useState('completed')
   const [lifecycleError, setLifecycleError] = useState<string | null>(null)
   const [assigneeOptions, setAssigneeOptions] = useState<string[]>([])
+  const metadataEditVersion = useRef(0)
 
   useEffect(() => {
     if (!slug) return
@@ -58,17 +64,31 @@ export function IssueDetailPage() {
 
   const reload = useCallback(async () => {
     if (!slug || !issueNumber) return
+    const metadataVersionAtStart = metadataEditVersion.current
     const [detail, thread, delivery] = await Promise.all([
       getIssue(org, slug, issueNumber),
       listIssueComments(org, slug, issueNumber),
       getIssueDeliveryTrace(org, slug, issueNumber).catch(() => null),
     ])
     setIssue(detail)
-    setLabels((detail.labels ?? []).join(', '))
-    setAssignee(detail.assignee_handle ?? '')
+    if (metadataVersionAtStart === metadataEditVersion.current) {
+      setLabels((detail.labels ?? []).join(', '))
+      setAssignee(detail.assignee_handle ?? '')
+    }
     setComments(thread)
     setTrace(delivery)
   }, [org, slug, issueNumber])
+
+  useEffect(() => {
+    setPlanText(issue?.plan?.body ?? t('issueDetail.planDefaultBody'))
+  }, [issue?.current_revision_id, issue?.plan?.id, t])
+
+  useEffect(() => {
+    if (!focusRunAfterPlanAcceptance.current) return
+    if (issue?.plan?.state !== 'accepted' || planText.trim() !== issue.plan.body.trim()) return
+    focusRunAfterPlanAcceptance.current = false
+    startAgentButton.current?.focus()
+  }, [issue, planText])
 
   useEffect(() => {
     if (!issue || criteriaText.trim() !== '') return
@@ -266,7 +286,7 @@ export function IssueDetailPage() {
         </form>
       </section>
 
-      <section data-testid="issue-plan-agent">
+      <section id="issue-plan-agent" data-testid="issue-plan-agent">
         <h3>{t('issueDetail.planTitle')}</h3>
         {issue.plan ? (
           <p data-testid="issue-plan-state">
@@ -275,25 +295,51 @@ export function IssueDetailPage() {
         ) : (
           <p role="status">{t('issueDetail.planMissing')}</p>
         )}
+        <label>
+          {t('issueDetail.planEdit')}
+          <textarea
+            data-testid="issue-plan-input"
+            value={planText}
+            onChange={(e) => setPlanText(e.target.value)}
+            rows={5}
+          />
+        </label>
+        {planError ? <p role="alert">{planError}</p> : null}
         <button
           type="button"
           data-testid="issue-accept-plan"
+          disabled={planBusy || !planText.trim() ||
+            (issue.plan?.state === 'accepted' && planText.trim() === issue.plan.body.trim())}
           onClick={() => {
-            setAgentError(null)
-            void createPlan(org, slug, issueNumber, t('issueDetail.planDefaultBody'))
-              .then(() => acceptPlan(org, slug, issueNumber))
+            setPlanError(null)
+            if (!planText.trim()) {
+              setPlanError(t('issueDetail.planRequired'))
+              return
+            }
+            setPlanBusy(true)
+            void createPlan(org, slug, issueNumber, planText.trim())
+              .then(() => {
+                focusRunAfterPlanAcceptance.current = true
+                return acceptPlan(org, slug, issueNumber)
+              })
               .then(() => reload())
-              .catch((err) =>
-                setAgentError(err instanceof Error ? err.message : t('issueDetail.planFailed')),
-              )
+              .catch((err) => {
+                focusRunAfterPlanAcceptance.current = false
+                setPlanError(err instanceof Error ? err.message : t('issueDetail.planFailed'))
+              })
+              .finally(() => setPlanBusy(false))
           }}
         >
           {t('app.acceptPlan')}
         </button>
+        {!(issue.plan?.state === 'accepted' && planText.trim() === issue.plan.body.trim()) ? (
+          <p role="status">{t('issueDetail.agentRequiresAcceptedPlan')}</p>
+        ) : null}
         <button
           type="button"
+          ref={startAgentButton}
           data-testid="issue-run-agent"
-          disabled={agentBusy}
+          disabled={agentBusy || !(issue.plan?.state === 'accepted' && planText.trim() === issue.plan.body.trim())}
           onClick={() => {
             setAgentError(null)
             setAgentBusy(true)
@@ -311,10 +357,31 @@ export function IssueDetailPage() {
           {t('app.runReferenceAgent')}
         </button>
         {agentRun ? (
-          <div data-testid="issue-agent-run">
+          <div id="issue-agent-run" data-testid="issue-agent-run">
             <p>
-              {agentRun.id.slice(0, 8)}… {agentRun.state}
+              {agentRun.id.slice(0, 8)}… {agentRun.state} · {agentRun.adapter_kind}
             </p>
+            <dl data-testid="issue-agent-diagnostics">
+              <dt>{t('issueDetail.agentProgress')}</dt><dd>{agentRun.recent_progress
+                ? t(`issueDetail.agentProgressStages.${agentRun.recent_progress}`, { defaultValue: t('issueDetail.agentProgressUnknown') })
+                : t('issueDetail.agentProgressUnknown')}</dd>
+              <dt>{t('issueDetail.agentFrozenInput')}</dt><dd>
+                {agentRun.issue_revision != null ? `r${agentRun.issue_revision}` : t('issueDetail.agentRevisionUnknown')}
+                {agentRun.accepted_plan_version != null ? ` · plan v${agentRun.accepted_plan_version}` : ''}
+              </dd>
+              <dt>{t('issueDetail.agentBase')}</dt><dd><code>{agentRun.base_oid ?? t('issueDetail.agentBaseUnknown')}</code></dd>
+              <dt>{t('issueDetail.agentBudget')}</dt><dd>
+                {agentRun.budget_tokens_limit != null
+                  ? t('issueDetail.agentBudgetValue', { used: agentRun.usage_tokens, limit: agentRun.budget_tokens_limit })
+                  : t('issueDetail.agentBudgetUnset', { used: agentRun.usage_tokens })}
+                {agentRun.budget_unknown ? ` · ${t('issueDetail.agentBudgetUnknown')}` : ''}
+              </dd>
+            </dl>
+            {agentRun.error_code ? (
+              <p role="alert" data-testid="issue-agent-error">
+                {t(`issueDetail.agentErrors.${agentRun.error_code}`, { defaultValue: t('issueDetail.agentErrorGeneric', { code: agentRun.error_code }) })}
+              </p>
+            ) : null}
             {agentRun.state === 'waiting_input' ? (
               <form
                 onSubmit={(e) => {
@@ -351,6 +418,23 @@ export function IssueDetailPage() {
       {trace ? (
         <section data-testid="issue-delivery-trace">
           <h3>{t('issueDetail.deliveryTraceTitle')}</h3>
+          <p>{t('issueDetail.deliveryPlans', { count: trace.plans.length })}</p>
+          <ul data-testid="issue-trace-plans">
+            {trace.plans.map((plan) => (
+              <li key={plan.id}>
+                <a href="#issue-plan-agent">{t('issueDetail.deliveryPlanVersion', { version: plan.version })}</a> · {plan.state}
+              </li>
+            ))}
+          </ul>
+          <p>{t('issueDetail.deliveryAgentRuns', { count: trace.agent_runs.length })}</p>
+          <ul data-testid="issue-trace-agent-runs">
+            {trace.agent_runs.map((run) => (
+              <li key={run.id}>
+                <a href="#issue-agent-run">{run.id.slice(0, 8)}…</a> · {run.state}
+                {run.error_code ? ` · ${run.error_code}` : ''}
+              </li>
+            ))}
+          </ul>
           <p>
             {t('issueDetail.deliveryPrs', { count: trace.pull_requests.length })}
             <Link to={paths.repoDelivery(org, slug!)} style={{ marginLeft: '0.75rem' }}>
@@ -386,6 +470,16 @@ export function IssueDetailPage() {
                 </li>
               ))
             )}
+          </ul>
+          <p>{t('issueDetail.deliveryReleases', { count: trace.releases.length })}</p>
+          <ul data-testid="issue-trace-releases">
+            {trace.releases.map((release) => (
+              <li key={release.id}>
+                <Link to={`${paths.repoDelivery(org, slug!)}?release=${encodeURIComponent(release.id)}`}>
+                  {release.version} · {release.tag_name}
+                </Link>{' '}· {release.state}
+              </li>
+            ))}
           </ul>
           <p>{t('issueDetail.deliveryDeployments', { count: trace.deployments.length })}</p>
           <ul data-testid="issue-trace-deployments">
@@ -430,14 +524,24 @@ export function IssueDetailPage() {
       >
         <label>
           {t('issueDetail.labels')}
-          <input data-testid="issue-labels" value={labels} onChange={(e) => setLabels(e.target.value)} />
+          <input
+            data-testid="issue-labels"
+            value={labels}
+            onChange={(e) => {
+              metadataEditVersion.current += 1
+              setLabels(e.target.value)
+            }}
+          />
         </label>
         <label>
           {t('issueDetail.assignee')}
           <select
             data-testid="issue-assignee"
             value={assignee}
-            onChange={(e) => setAssignee(e.target.value)}
+            onChange={(e) => {
+              metadataEditVersion.current += 1
+              setAssignee(e.target.value)
+            }}
           >
             <option value="">{t('issueDetail.assigneeNone')}</option>
             {assignee && !assigneeOptions.includes(assignee) ? (

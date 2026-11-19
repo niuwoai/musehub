@@ -1,0 +1,22 @@
+# Merge patch for the existing writable primary Cluster. Apply with:
+# kubectl patch cluster musehub-postgres-primary -n musehub \
+#   --type=merge --patch-file=deploy/postgres-dr-primary.patch.yaml
+spec:
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: musehub-region-b-store
+  externalClusters:
+    - name: musehub-postgres-primary
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: musehub-region-b-store
+          serverName: musehub-postgres-primary
+    - name: musehub-postgres-dr
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: musehub-region-b-store
+          serverName: musehub-postgres-dr

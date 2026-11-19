@@ -10,6 +10,133 @@ use musehub_app::bare_repo_path;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[test]
+fn mirror_import_can_replace_seed_once_and_internal_refs_stay_hidden() {
+    let target = std::env::current_dir()
+        .unwrap()
+        .join("../../target")
+        .canonicalize()
+        .expect("workspace target directory");
+    let git_root = tempfile::Builder::new()
+        .prefix("musehub-git-policy-")
+        .tempdir_in(target)
+        .expect("git root");
+    let storage_key = Uuid::new_v4();
+    musehub_app::init_bare_repository(git_root.path(), &storage_key).expect("initialize bare repo");
+    let bare = bare_repo_path(git_root.path(), &storage_key);
+    let source = tempfile::tempdir().expect("source");
+    assert!(Command::new("git")
+        .args(["init", "-b", "main", source.path().to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(source.path().join("imported.txt"), b"imported history").unwrap();
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args(["add", "imported.txt"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args([
+            "-c",
+            "user.email=t@musehub.local",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-m",
+            "import",
+            "--no-gpg-sign",
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args(["remote", "add", "musehub", bare.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args(["push", "--mirror", "musehub"])
+        .status()
+        .unwrap()
+        .success());
+
+    let imported_oid = Command::new("git")
+        .current_dir(source.path())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let imported_oid = String::from_utf8_lossy(&imported_oid.stdout)
+        .trim()
+        .to_string();
+    assert!(Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare)
+        .args([
+            "update-ref",
+            "refs/musehub/merge-staging/probe",
+            &imported_oid,
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let advertised = Command::new("git")
+        .args(["ls-remote", bare.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(advertised.status.success());
+    assert!(!String::from_utf8_lossy(&advertised.stdout).contains("refs/musehub/"));
+
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args([
+            "update-ref",
+            "refs/musehub/merge-staging/attacker",
+            &imported_oid,
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let internal_push = Command::new("git")
+        .current_dir(source.path())
+        .args(["push", "--mirror", "musehub"])
+        .status()
+        .unwrap();
+    assert!(!internal_push.success());
+    std::fs::write(source.path().join("later.txt"), b"later update").unwrap();
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args(["add", "later.txt"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .current_dir(source.path())
+        .args([
+            "-c",
+            "user.email=t@musehub.local",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-m",
+            "later",
+            "--no-gpg-sign",
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(!Command::new("git")
+        .current_dir(source.path())
+        .args(["push", "musehub", "HEAD:main"])
+        .status()
+        .unwrap()
+        .success());
+}
+
 #[tokio::test]
 async fn direct_main_push_denied_agent_branch_allowed() {
     let pool = common::migrated_pool().await;

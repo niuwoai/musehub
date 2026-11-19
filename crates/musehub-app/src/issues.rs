@@ -6,6 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -13,6 +14,74 @@ use crate::list_cursor::{decode_issue_cursor, encode_issue_cursor};
 use crate::mcp::contract_domain::{self, CriterionInput};
 use crate::mcp::RepoAccess;
 use crate::AppState;
+
+/// Build the immutable task input while locking the issue and its accepted plan.
+/// Callers must insert the AgentRun in the same transaction.
+pub async fn frozen_agent_task_message(
+    tx: &mut Transaction<'_, Postgres>,
+    repo_id: Uuid,
+    issue_id: Uuid,
+    user_request: &str,
+) -> Result<String, AppError> {
+    let revision = sqlx::query_as::<_, (Uuid, i32, String, String)>(
+        "SELECT r.id, r.revision, r.title, r.body
+         FROM issues i
+         JOIN issue_revisions r ON r.id = i.current_revision_id
+         WHERE i.id = $1 AND i.repo_id = $2
+         FOR UPDATE OF i",
+    )
+    .bind(issue_id)
+    .bind(repo_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let plan = sqlx::query_as::<_, (Uuid, i32, String, serde_json::Value)>(
+        "SELECT id, version, body, steps FROM implementation_plans
+         WHERE issue_revision_id = $1 AND state = 'accepted'
+         ORDER BY version DESC LIMIT 1 FOR SHARE",
+    )
+    .bind(revision.0)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| {
+        AppError::Validation(
+            "agent run requires an accepted plan bound to the issue's current revision".to_string(),
+        )
+    })?;
+
+    let criteria = sqlx::query_as::<_, (i32, String, String, bool)>(
+        "SELECT ordinal, description, verification_method, required
+         FROM issue_acceptance_criteria
+         WHERE issue_revision_id = $1 ORDER BY ordinal FOR SHARE",
+    )
+    .bind(revision.0)
+    .fetch_all(&mut **tx)
+    .await?
+    .into_iter()
+    .map(|(ordinal, description, verification_method, required)| {
+        serde_json::json!({
+            "ordinal": ordinal,
+            "description": description,
+            "verification_method": verification_method,
+            "required": required,
+        })
+    })
+    .collect::<Vec<_>>();
+
+    let snapshot = serde_json::json!({
+        "issue_id": issue_id,
+        "issue_revision_id": revision.0,
+        "issue_revision": revision.1,
+        "issue": { "title": revision.2, "body": revision.3 },
+        "acceptance_criteria": criteria,
+        "accepted_plan": { "id": plan.0, "version": plan.1, "body": plan.2, "steps": plan.3 },
+    });
+    Ok(format!(
+        "Implement the user's request using the frozen issue context below. Treat required acceptance criteria as completion conditions.\n\nFrozen issue context (JSON):\n{}\n\nAdditional user request:\n{}",
+        snapshot, user_request
+    ))
+}
 
 #[derive(Serialize)]
 pub struct IssueListItem {
@@ -56,18 +125,44 @@ const MAX_LABEL_LEN: usize = 50;
 const MAX_CLOSE_REASON_LEN: usize = 200;
 
 pub(crate) fn validate_issue_list_state(state: &str) -> Result<(), AppError> {
-    if matches!(state, "open" | "closed" | "in_progress") {
+    if matches!(
+        state,
+        "open" | "in_progress" | "in_review" | "resolved" | "closed"
+    ) {
         Ok(())
     } else {
         Err(AppError::Validation("invalid state filter".into()))
     }
 }
 
-pub(crate) fn validate_close_reason(reason: &str) -> Result<(), AppError> {
+pub(crate) fn normalize_close_reason(reason: &str) -> Result<String, AppError> {
+    let reason = reason.trim();
     if reason.is_empty() || reason.len() > MAX_CLOSE_REASON_LEN {
         return Err(AppError::Validation("invalid close_reason".into()));
     }
-    Ok(())
+    Ok(reason.to_string())
+}
+
+pub(crate) fn validate_issue_resolution_reason(
+    state: &str,
+    reason: Option<&str>,
+    require_reason: bool,
+) -> Result<(), AppError> {
+    if matches!(state, "resolved" | "closed") {
+        match reason {
+            Some(reason) => normalize_close_reason(reason).map(|_| ()),
+            None if require_reason => Err(AppError::Validation(
+                "close_reason required when resolving or closing".into(),
+            )),
+            None => Ok(()),
+        }
+    } else if reason.is_some() {
+        Err(AppError::Validation(
+            "close_reason requires issue state resolved or closed".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn validate_label_filter(label: &str) -> Result<(), AppError> {
@@ -128,10 +223,32 @@ async fn repo_assignee_id(
     let Some((id,)) = row else {
         return Err(AppError::Validation("assignee not eligible".into()));
     };
+    repo_assignee_id_for_id(pool, org_id, repo_id, id).await
+}
+
+/// Validate a principal ID using the same active membership and repository access rule as REST.
+pub(crate) async fn repo_assignee_id_for_id(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    repo_id: Uuid,
+    principal_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let active = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT p.id FROM principals p
+         JOIN memberships m ON m.principal_id = p.id AND m.org_id = $2
+         WHERE p.id = $1 AND p.status = 'active' AND m.status = 'active'",
+    )
+    .bind(principal_id)
+    .bind(org_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((id,)) = active else {
+        return Err(AppError::Validation("assignee not eligible".into()));
+    };
     match crate::grants::ensure_principal_repo_access(pool, org_id, repo_id, id).await {
         Ok(()) => Ok(id),
         Err(AppError::Forbidden) => Err(AppError::Validation("assignee not eligible".into())),
-        Err(e) => Err(e),
+        Err(error) => Err(error),
     }
 }
 
@@ -515,6 +632,11 @@ pub async fn patch_issue(
         return Err(AppError::NotFound);
     };
 
+    let close_reason = body
+        .close_reason
+        .as_deref()
+        .map(normalize_close_reason)
+        .transpose()?;
     let mut assignee_id: Option<Uuid> = None;
     if let Some(labels) = &body.labels {
         validate_labels(labels)?;
@@ -528,27 +650,19 @@ pub async fn patch_issue(
     }
 
     if let Some(state_val) = &body.state {
-        if !matches!(state_val.as_str(), "open" | "closed" | "in_progress") {
+        if !matches!(
+            state_val.as_str(),
+            "open" | "in_progress" | "in_review" | "resolved" | "closed"
+        ) {
             return Err(AppError::Validation("invalid state".into()));
         }
-        if state_val == "closed" {
-            let reason = body
-                .close_reason
-                .as_deref()
-                .ok_or_else(|| AppError::Validation("close_reason required when closing".into()))?;
-            validate_close_reason(reason)?;
-        }
-    } else if let Some(reason) = &body.close_reason {
-        validate_close_reason(reason)?;
+        validate_issue_resolution_reason(state_val, close_reason.as_deref(), true)?;
+    } else if let Some(reason) = close_reason.as_deref() {
         let (current_state,): (String,) = sqlx::query_as("SELECT state FROM issues WHERE id = $1")
             .bind(issue_id)
             .fetch_one(&state.pool)
             .await?;
-        if current_state != "closed" {
-            return Err(AppError::Validation(
-                "close_reason requires issue state closed".into(),
-            ));
-        }
+        validate_issue_resolution_reason(&current_state, Some(reason), false)?;
     }
 
     let title = body.title.as_deref();
@@ -566,8 +680,8 @@ pub async fn patch_issue(
                 state = COALESCE($5, state),
                 labels = COALESCE($6, labels),
                 close_reason = CASE
-                    WHEN $5 IN ('open', 'in_progress') THEN NULL
-                    WHEN $5 = 'closed' THEN COALESCE($7, close_reason)
+                    WHEN $5 IN ('open', 'in_progress', 'in_review') THEN NULL
+                    WHEN $5 IN ('resolved', 'closed') THEN COALESCE($7, close_reason)
                     WHEN $7 IS NOT NULL THEN $7
                     ELSE close_reason
                 END,
@@ -580,7 +694,7 @@ pub async fn patch_issue(
         .bind(issue_body)
         .bind(body.state.as_deref())
         .bind(body.labels.as_ref())
-        .bind(body.close_reason.as_deref())
+        .bind(close_reason.as_deref())
         .execute(&state.pool)
         .await?;
     }
@@ -653,15 +767,22 @@ mod tests {
 
     #[test]
     fn close_reason_validation() {
-        assert!(validate_close_reason("completed").is_ok());
-        assert!(validate_close_reason("").is_err());
-        assert!(validate_close_reason(&"x".repeat(201)).is_err());
+        assert_eq!(normalize_close_reason(" completed ").unwrap(), "completed");
+        assert!(normalize_close_reason("").is_err());
+        assert!(normalize_close_reason("   ").is_err());
+        assert!(normalize_close_reason(&"x".repeat(201)).is_err());
+        assert!(validate_issue_resolution_reason("resolved", Some("done"), true).is_ok());
+        assert!(validate_issue_resolution_reason("closed", None, true).is_err());
+        assert!(validate_issue_resolution_reason("in_review", Some("done"), false).is_err());
+        assert!(validate_issue_resolution_reason("open", None, false).is_ok());
     }
 
     #[test]
     fn issue_list_state_filter_validation() {
         assert!(validate_issue_list_state("open").is_ok());
         assert!(validate_issue_list_state("in_progress").is_ok());
+        assert!(validate_issue_list_state("in_review").is_ok());
+        assert!(validate_issue_list_state("resolved").is_ok());
         assert!(validate_issue_list_state("closed").is_ok());
         assert!(validate_issue_list_state("bogus").is_err());
     }

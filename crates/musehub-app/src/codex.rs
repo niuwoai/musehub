@@ -167,7 +167,9 @@ pub async fn codex_task_handler(
         musehub_agent_adapter::RunOutcome::Succeeded { usage, .. } => {
             ("succeeded", Some(usage.tokens))
         }
-        musehub_agent_adapter::RunOutcome::Failed { .. } => ("failed", None),
+        musehub_agent_adapter::RunOutcome::Failed { usage, .. } => {
+            ("failed", usage.map(|usage| usage.tokens))
+        }
         musehub_agent_adapter::RunOutcome::Canceled { usage, .. } => {
             ("canceled", Some(usage.tokens))
         }

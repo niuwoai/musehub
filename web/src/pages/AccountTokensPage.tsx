@@ -37,10 +37,14 @@ export function AccountTokensPage() {
         <p>{t('pat.mintedHint')}</p>
       )}
       <ul data-testid="pat-masked-list">
+        {myTokens.length === 0 ? <li>{t('pat.noTokens')}</li> : null}
         {myTokens.map((tok) => (
           <li key={tok.id}>
-            {tok.name}: <code>{tok.token_prefix}…</code> ({tok.scope_mode}, exp{' '}
-            {tok.expires_at.slice(0, 10)})
+            {tok.name}: <code>{tok.token_prefix}…</code> (
+            {tok.scope_mode === 'selected'
+              ? t('pat.selectedRepo')
+              : t('pat.allAccessible')}
+            , {t('pat.expires', { date: tok.expires_at.slice(0, 10) })})
             <button
               type="button"
               data-testid={`revoke-pat-${tok.id}`}
@@ -57,7 +61,7 @@ export function AccountTokensPage() {
                     bumpIamPanelsGeneration()
                     await refreshIamPanels()
                   } catch (err) {
-                    ws.setError(err instanceof Error ? err.message : 'PAT revoke failed')
+                    ws.setError(err instanceof Error ? err.message : t('pat.revokeFailed'))
                   }
                 })()
               }}
@@ -67,12 +71,15 @@ export function AccountTokensPage() {
           </li>
         ))}
       </ul>
-      <input
-        data-testid="pat-name"
-        placeholder="token name"
-        value={patName}
-        onChange={(e) => setPatName(e.target.value)}
-      />
+      <label>
+        {t('pat.name')}{' '}
+        <input
+          data-testid="pat-name"
+          placeholder={t('pat.namePlaceholder')}
+          value={patName}
+          onChange={(e) => setPatName(e.target.value)}
+        />
+      </label>
       <label>
         {t('pat.scopeMode')}{' '}
         <select
@@ -82,19 +89,19 @@ export function AccountTokensPage() {
             setPatScopeMode(e.target.value as 'all_accessible' | 'selected')
           }
         >
-          <option value="all_accessible">all_accessible</option>
-          <option value="selected">selected (one repo)</option>
+          <option value="all_accessible">{t('pat.allAccessible')}</option>
+          <option value="selected">{t('pat.selectedRepo')}</option>
         </select>
       </label>
       {patScopeMode === 'selected' ? (
         <label>
-          Repo{' '}
+          {t('pat.repository')}{' '}
           <select
             data-testid="pat-repo-id"
             value={patRepoId}
             onChange={(e) => setPatRepoId(e.target.value)}
           >
-            <option value="">— select —</option>
+            <option value="">{t('pat.selectRepo')}</option>
             {repos.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.slug}
@@ -117,7 +124,7 @@ export function AccountTokensPage() {
               if (patScopeMode === 'selected') {
                 if (!patRepoId) {
                   if (sessionEpochActive(opEpoch)) {
-                    ws.setError('select a repo for selected-scope PAT')
+                    ws.setError(t('pat.selectRepoError'))
                   }
                   return
                 }
@@ -137,7 +144,7 @@ export function AccountTokensPage() {
               await refreshIamPanels()
             } catch (err) {
               if (sessionEpochActive(opEpoch)) {
-                ws.setError(err instanceof Error ? err.message : 'PAT create failed')
+                ws.setError(err instanceof Error ? err.message : t('pat.createFailed'))
               }
             } finally {
               endIamOperation(opEpoch)

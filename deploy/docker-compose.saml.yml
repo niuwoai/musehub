@@ -1,0 +1,21 @@
+services:
+  musehub-server:
+    environment:
+      MUSEHUB_SAML_IDP_ENTITY_ID: ${MUSEHUB_SAML_IDP_ENTITY_ID:?set IdP entity ID}
+      MUSEHUB_SAML_IDP_METADATA_PATH: /run/musehub/saml/idp-metadata.xml
+      MUSEHUB_SAML_METADATA_SIGNING_CERT_PATH: /run/musehub/saml/metadata-signing-cert.pem
+      MUSEHUB_SAML_SP_ENTITY_ID: ${MUSEHUB_SAML_SP_ENTITY_ID:?set SP entity ID}
+      MUSEHUB_SAML_ACS_URL: ${MUSEHUB_SAML_ACS_URL:?set public HTTPS ACS URL}
+    volumes:
+      - type: bind
+        source: ${MUSEHUB_SAML_IDP_METADATA_HOST_PATH:?set IdP metadata XML path}
+        target: /run/musehub/saml/idp-metadata.xml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MUSEHUB_SAML_METADATA_SIGNING_CERT_HOST_PATH:?set pinned metadata signing certificate path}
+        target: /run/musehub/saml/metadata-signing-cert.pem
+        read_only: true
+        bind:
+          create_host_path: false

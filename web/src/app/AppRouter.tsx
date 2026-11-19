@@ -14,6 +14,7 @@ import { OrgSettingsPage } from '../pages/OrgSettingsPage'
 import { OrgMembersPage } from '../pages/OrgMembersPage'
 import { AuditPage } from '../pages/AuditPage'
 import { RunnerPage } from '../pages/RunnerPage'
+import { OrgWebhooksPage } from '../pages/OrgWebhooksPage'
 import { AccountSecurityPage } from '../pages/AccountSecurityPage'
 import { AccountTokensPage } from '../pages/AccountTokensPage'
 import { RepoIssuesPage } from '../pages/RepoIssuesPage'
@@ -24,6 +25,7 @@ import { RepoCodePage } from '../pages/RepoCodePage'
 import { RepoDeliveryPage } from '../pages/RepoDeliveryPage'
 import { RepoSettingsPage } from '../pages/RepoSettingsPage'
 import { SessionBootScreen } from '../pages/SessionBootScreen'
+import { OrganizationsPage } from '../pages/OrganizationsPage'
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { sessionAuth, session } = useWorkspace()
@@ -102,6 +104,7 @@ export function AppRouter() {
           </ProtectedRoute>
         }
       >
+        <Route path="/organizations" element={<OrganizationsPage />} />
         <Route
           path="/org/:org/repos"
           element={
@@ -139,6 +142,14 @@ export function AppRouter() {
           element={
             <OrgScopeGuard>
               <RunnerPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/webhooks"
+          element={
+            <OrgScopeGuard>
+              <OrgWebhooksPage />
             </OrgScopeGuard>
           }
         />

@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
 import { paths } from '../app/paths'
-import { getPipelineJobLogs, listReleases, type PipelineJob, type ReleaseSummary } from '../api'
+import {
+  createRelease,
+  getPipelineJobLogs,
+  listPipelineRuns,
+  listPipelineJobs,
+  listReleases,
+  publishRelease,
+  type PipelineJob,
+  type PipelineRunHistoryItem,
+  type ReleaseSummary,
+} from '../api'
+
+const PIPELINE_HISTORY_PAGE_SIZE = 30
 
 export function RepoDeliveryPage() {
   const ws = useWorkspace()
@@ -15,6 +27,20 @@ export function RepoDeliveryPage() {
   const [releases, setReleases] = useState<ReleaseSummary[]>([])
   const [releasesLoading, setReleasesLoading] = useState(false)
   const [releasesError, setReleasesError] = useState<string | null>(null)
+  const [pipelineHistory, setPipelineHistory] = useState<PipelineRunHistoryItem[]>([])
+  const [pipelineHistoryLoading, setPipelineHistoryLoading] = useState(false)
+  const [pipelineHistoryError, setPipelineHistoryError] = useState<string | null>(null)
+  const [pipelineHistoryCursor, setPipelineHistoryCursor] = useState<string | null>(null)
+  const [pipelineHistoryHasMore, setPipelineHistoryHasMore] = useState(false)
+  const [releaseVersion, setReleaseVersion] = useState('')
+  const [releaseTag, setReleaseTag] = useState('')
+  const [releaseRunId, setReleaseRunId] = useState('')
+  const [releaseNotes, setReleaseNotes] = useState('')
+  const [releaseAssets, setReleaseAssets] = useState<NonNullable<PipelineJob['artifacts']>[number][]>([])
+  const [releaseAssetIds, setReleaseAssetIds] = useState<string[]>([])
+  const [releaseBusy, setReleaseBusy] = useState(false)
+  const [releaseActionError, setReleaseActionError] = useState<string | null>(null)
+  const [releaseActionStatus, setReleaseActionStatus] = useState<string | null>(null)
   const {
     t,
     activeOrg,
@@ -60,9 +86,69 @@ export function RepoDeliveryPage() {
       .finally(() => setReleasesLoading(false))
   }, [activeOrg, activeRepoSlug, repoContextTransitioning, t])
 
+  const refreshPipelineHistory = useCallback(async () => {
+    if (!activeRepoSlug || repoContextTransitioning) return
+    setPipelineHistoryLoading(true)
+    setPipelineHistoryError(null)
+    try {
+      const page = await listPipelineRuns(activeOrg, activeRepoSlug, { limit: PIPELINE_HISTORY_PAGE_SIZE })
+      setPipelineHistory(page.items)
+      setPipelineHistoryCursor(page.next_cursor)
+      setPipelineHistoryHasMore(page.has_more)
+    } catch (reason) {
+      setPipelineHistory([])
+      setPipelineHistoryCursor(null)
+      setPipelineHistoryHasMore(false)
+      setPipelineHistoryError(reason instanceof Error ? reason.message : t('app.pipelineHistoryLoadFailed'))
+    } finally {
+      setPipelineHistoryLoading(false)
+    }
+  }, [activeOrg, activeRepoSlug, repoContextTransitioning, t])
+
+  async function loadMorePipelineHistory() {
+    if (!activeRepoSlug || repoContextTransitioning || pipelineHistoryLoading) return
+    setPipelineHistoryLoading(true)
+    setPipelineHistoryError(null)
+    try {
+      const page = await listPipelineRuns(activeOrg, activeRepoSlug, {
+        beforeId: pipelineHistoryCursor,
+        limit: PIPELINE_HISTORY_PAGE_SIZE,
+      })
+      setPipelineHistory((current) => [...current, ...page.items])
+      setPipelineHistoryCursor(page.next_cursor)
+      setPipelineHistoryHasMore(page.has_more)
+    } catch (reason) {
+      setPipelineHistoryError(reason instanceof Error ? reason.message : t('app.pipelineHistoryLoadFailed'))
+    } finally {
+      setPipelineHistoryLoading(false)
+    }
+  }
+
   useEffect(() => {
     void refreshReleases()
   }, [refreshReleases, publishedReleaseId, pipelineRun?.id])
+
+  useEffect(() => {
+    void refreshPipelineHistory()
+  }, [refreshPipelineHistory, pipelineRun?.id])
+
+  useEffect(() => {
+    if (!activeRepoSlug || repoContextTransitioning || !releaseRunId) {
+      setReleaseAssets([])
+      setReleaseAssetIds([])
+      return
+    }
+    void listPipelineJobs(activeOrg, activeRepoSlug, releaseRunId)
+      .then((jobs) => {
+        const available = jobs.flatMap((job) => job.artifacts ?? [])
+        setReleaseAssets(available)
+        setReleaseAssetIds(available.map((artifact) => artifact.id))
+      })
+      .catch(() => {
+        setReleaseAssets([])
+        setReleaseAssetIds([])
+      })
+  }, [activeOrg, activeRepoSlug, repoContextTransitioning, releaseRunId])
 
   useEffect(() => {
     if (!activeRepoSlug || repoContextTransitioning) return
@@ -107,6 +193,55 @@ export function RepoDeliveryPage() {
   if (!activeRepoSlug) {
     return <p role="status">{t('repo.selectFirst')}</p>
   }
+  const repoSlug = activeRepoSlug
+
+  async function submitManualRelease(event: FormEvent) {
+    event.preventDefault()
+    const run = pipelineHistory.find((item) => item.id === releaseRunId && item.state === 'succeeded')
+    if (!run) {
+      setReleaseActionError(t('app.releasePipelineRequired'))
+      return
+    }
+    setReleaseBusy(true)
+    setReleaseActionError(null)
+    setReleaseActionStatus(null)
+    try {
+      await createRelease(activeOrg, repoSlug, {
+        version: releaseVersion.trim(),
+        tag_name: releaseTag.trim(),
+        commit_oid: run.source_oid,
+        pipeline_run_id: run.id,
+        release_notes: releaseNotes.trim(),
+        artifact_ids: releaseAssetIds,
+      })
+      setReleaseActionStatus(t('app.releaseCreated'))
+      setReleaseVersion('')
+      setReleaseTag('')
+      setReleaseRunId('')
+      setReleaseNotes('')
+      setReleaseAssetIds([])
+      await refreshReleases()
+    } catch (reason) {
+      setReleaseActionError(reason instanceof Error ? reason.message : t('app.releaseCreateFailed'))
+    } finally {
+      setReleaseBusy(false)
+    }
+  }
+
+  async function publishDraftRelease(releaseId: string) {
+    setReleaseBusy(true)
+    setReleaseActionError(null)
+    setReleaseActionStatus(null)
+    try {
+      await publishRelease(activeOrg, repoSlug, releaseId)
+      setReleaseActionStatus(t('app.releasePublished'))
+      await refreshReleases()
+    } catch (reason) {
+      setReleaseActionError(reason instanceof Error ? reason.message : t('app.releasePublishFailed'))
+    } finally {
+      setReleaseBusy(false)
+    }
+  }
 
   const deliveryActionsDisabled =
     repoContextTransitioning || publishReleaseBusy
@@ -130,6 +265,53 @@ export function RepoDeliveryPage() {
       </p>
       <section data-testid="delivery-releases">
         <h4>{t('app.releasesTitle')}</h4>
+        <form data-testid="release-create-form" onSubmit={(event) => void submitManualRelease(event)}>
+          <label>
+            {t('app.releaseVersion')}
+            <input required value={releaseVersion} onChange={(event) => setReleaseVersion(event.target.value)} />
+          </label>
+          <label>
+            {t('app.releaseTag')}
+            <input required value={releaseTag} onChange={(event) => setReleaseTag(event.target.value)} />
+          </label>
+          <label>
+            {t('app.releaseNotes')}
+            <textarea value={releaseNotes} onChange={(event) => setReleaseNotes(event.target.value)} rows={4} />
+          </label>
+          <label>
+            {t('app.releasePipeline')}
+            <select required value={releaseRunId} onChange={(event) => setReleaseRunId(event.target.value)}>
+              <option value="">{t('app.releaseChoosePipeline')}</option>
+              {pipelineHistory.filter((run) => run.state === 'succeeded').map((run) => (
+                <option key={run.id} value={run.id}>
+                  {run.workflow_name} · {run.source_oid.slice(0, 7)} · {run.created_at}
+                </option>
+              ))}
+            </select>
+          </label>
+          <fieldset>
+            <legend>{t('app.releaseAssets')}</legend>
+            <p>{t('app.releaseAssetsHint')}</p>
+            {releaseAssets.length === 0 ? <p role="status">{t('app.releaseNoAssets')}</p> : null}
+            {releaseAssets.map((artifact) => (
+              <label key={artifact.id}>
+                <input
+                  type="checkbox"
+                  checked={releaseAssetIds.includes(artifact.id)}
+                  onChange={(event) => setReleaseAssetIds((ids) => event.target.checked
+                    ? [...ids, artifact.id]
+                    : ids.filter((id) => id !== artifact.id))}
+                />
+                {artifact.name} · {artifact.kind} · {artifact.sha256.slice(0, 12)}
+              </label>
+            ))}
+          </fieldset>
+          <button type="submit" disabled={releaseBusy || !pipelineHistory.some((run) => run.id === releaseRunId && run.state === 'succeeded')}>
+            {releaseBusy ? t('common.loading') : t('app.createRelease')}
+          </button>
+        </form>
+        {releaseActionError ? <p role="alert">{releaseActionError}</p> : null}
+        {releaseActionStatus ? <p role="status">{releaseActionStatus}</p> : null}
         {releasesLoading ? (
           <p role="status" data-testid="delivery-releases-loading">
             {t('common.loading')}
@@ -149,10 +331,67 @@ export function RepoDeliveryPage() {
           <ul data-testid="delivery-release-list">
             {releases.map((rel) => (
               <li key={rel.id} data-testid={`release-row-${rel.tag_name}`}>
-                <code>{rel.tag_name}</code> @{rel.commit_oid.slice(0, 7)} — {rel.state}
+                <details open={searchParams.get('release') === rel.id}>
+                  <summary><code>{rel.version}</code> · {rel.tag_name} · {rel.state}</summary>
+                  {rel.release_notes ? <p style={{ whiteSpace: 'pre-wrap' }}>{rel.release_notes}</p> : null}
+                  <h5>{t('app.releaseAssets')}</h5>
+                  {rel.assets.length === 0 ? <p>{t('app.releaseNoAssets')}</p> : (
+                    <ul>
+                      {rel.assets.map((asset) => (
+                        <li key={asset.id}>
+                          <a
+                            href={`/api/v1/orgs/${activeOrg}/repos/${repoSlug}/pipeline-runs/${rel.pipeline_run_id}/artifacts/${asset.id}`}
+                            download={asset.name}
+                          >
+                            {asset.name}
+                          </a>{' '}· {asset.sha256} · {asset.byte_length} bytes
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p>{t('app.releaseCommit')}: {rel.commit_oid}</p>
+                  <p>{t('app.releasePipeline')}: {rel.pipeline_run_id}</p>
+                  {rel.manifest_sha256 ? <p>{t('app.releaseManifest')}: {rel.manifest_sha256}</p> : null}
+                  {rel.oci_image_ref ? <p>{t('app.releaseOciRef')}: {rel.oci_image_ref}</p> : null}
+                  {rel.state === 'draft' ? (
+                    <button type="button" disabled={releaseBusy} onClick={() => void publishDraftRelease(rel.id)}>
+                      {t('app.publishRelease')}
+                    </button>
+                  ) : null}
+                </details>
               </li>
             ))}
           </ul>
+        ) : null}
+      </section>
+      <section data-testid="pipeline-history">
+        <h4>{t('app.pipelineHistoryTitle')}</h4>
+        {pipelineHistoryLoading && pipelineHistory.length === 0 ? (
+          <p role="status">{t('common.loading')}</p>
+        ) : null}
+        {pipelineHistoryError ? <p role="alert">{pipelineHistoryError}</p> : null}
+        {!pipelineHistoryLoading && !pipelineHistoryError && pipelineHistory.length === 0 ? (
+          <p>{t('app.pipelineHistoryEmpty')}</p>
+        ) : null}
+        <ul>
+          {pipelineHistory.map((run) => (
+            <li key={run.id} data-testid={`pipeline-history-${run.id}`}>
+              <button type="button" onClick={() => void onFocusPipelineRun(run.id)}>
+                {run.workflow_name} · {run.state} · {run.source_oid.slice(0, 7)} · {run.created_at}
+              </button>
+              {run.error_code ? ` · ${run.error_code}` : ''}
+            </li>
+          ))}
+        </ul>
+        {pipelineHistoryHasMore ? (
+          <button
+            type="button"
+            data-testid="pipeline-history-load-more"
+            disabled={pipelineHistoryLoading}
+            onClick={() => void loadMorePipelineHistory()}
+          >
+            {pipelineHistoryLoading ? t('common.loading') : t('app.pipelineHistoryLoadMore')}
+          </button>
         ) : null}
       </section>
       {mergedPr?.head_oid ? (
@@ -236,6 +475,32 @@ export function RepoDeliveryPage() {
                 </ul>
               ) : null}
             </div>
+          ) : null}
+          {pipelineJobs.some((job) => job.result?.junit || (job.artifacts?.length ?? 0) > 0) ? (
+            <section data-testid="pipeline-job-results">
+              <h4>{t('app.pipelineArtifactsTitle')}</h4>
+              <ul>
+                {pipelineJobs.map((job) => (
+                  <li key={job.id}>
+                    {job.result?.junit ? (
+                      <p data-testid={`pipeline-junit-summary-${job.job_key}`}>
+                        {t('app.pipelineTestSummary', job.result.junit)}
+                      </p>
+                    ) : null}
+                    {job.artifacts?.map((artifact) => (
+                      <a
+                        key={artifact.id}
+                        href={artifact.download_url}
+                        data-testid={`pipeline-artifact-${job.job_key}-${artifact.id}`}
+                        download={artifact.name}
+                      >
+                        {t('app.pipelineDownloadArtifact', { name: artifact.name })}
+                      </a>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
           {jobLogKey ? (
             <div data-testid="pipeline-job-log-panel">
@@ -345,6 +610,17 @@ export function RepoDeliveryPage() {
                 </span>
                 {d.plan_hash ? ` · ${d.plan_hash.slice(0, 8)}…` : ''}
               </button>
+              <div data-testid={`deployment-version-observation-${d.id}`}>
+                <p>
+                  {t('app.deploymentDesired')}: {d.desired_version} · {d.desired_commit_oid.slice(0, 12)}
+                  {d.desired_oci_image_ref ? ` · ${d.desired_oci_image_ref}` : ''}
+                </p>
+                <p>
+                  {t('app.deploymentObserved')}:{' '}
+                  {d.observed_oci_digest ?? d.observed_source_oid ?? t('app.deploymentNoObservation')}
+                </p>
+                {d.observed_at ? <time dateTime={d.observed_at}>{t('app.deploymentObservedAt')}: {d.observed_at}</time> : null}
+              </div>
               {d.state === 'succeeded' ? (
                 <button
                   type="button"

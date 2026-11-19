@@ -2,11 +2,13 @@ export const DEFAULT_ORG = 'demo'
 
 export const paths = {
   login: () => '/login',
+  organizations: () => '/organizations',
   repos: (org: string) => `/org/${org}/repos`,
   orgSettings: (org: string) => `/org/${org}/settings`,
   members: (org: string) => `/org/${org}/members`,
   audit: (org: string) => `/org/${org}/audit`,
   runner: (org: string) => `/org/${org}/runner`,
+  webhooks: (org: string) => `/org/${org}/webhooks`,
   accountSecurity: () => '/account/security',
   accountTokens: () => '/account/tokens',
   repoIssues: (org: string, slug: string) => `/org/${org}/repos/${slug}/issues`,

@@ -1,0 +1,25 @@
+# Use an operator-managed PostgreSQL HA endpoint (proxy/VIP/DNS) instead of Compose PostgreSQL.
+# Compose 2.24.4+ is required for !override.
+services:
+  postgres:
+    profiles: [embedded-postgres]
+
+  musehub-server:
+    environment:
+      DATABASE_URL: ${MUSEHUB_DATABASE_URL:?set the PostgreSQL HA writer endpoint}
+    depends_on: !override []
+
+  musehub-git-ssh:
+    environment:
+      DATABASE_URL: ${MUSEHUB_DATABASE_URL:?set the PostgreSQL HA writer endpoint}
+    depends_on: !override
+      - musehub-server:
+          condition: service_healthy
+
+  musehub-runner:
+    environment:
+      DATABASE_URL: ${MUSEHUB_DATABASE_URL:?set the PostgreSQL HA writer endpoint}
+      MUSEHUB_DATABASE_URL: ${MUSEHUB_DATABASE_URL:?set the PostgreSQL HA writer endpoint}
+    depends_on: !override
+      - musehub-server:
+          condition: service_healthy

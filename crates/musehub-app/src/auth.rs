@@ -193,21 +193,22 @@ pub async fn principal_from_session(pool: &PgPool, token: &str) -> Result<Uuid, 
     Ok(principal_id)
 }
 
-pub fn session_cookie(token: &str) -> Cookie<'static> {
+pub fn session_cookie_with_secure(token: &str, secure: bool) -> Cookie<'static> {
     Cookie::build((SESSION_COOKIE, token.to_string()))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
-        .secure(false)
+        .secure(secure)
         .max_age(time::Duration::days(SESSION_TTL_DAYS))
         .build()
 }
 
-pub fn clear_session_cookie() -> Cookie<'static> {
+pub fn clear_session_cookie_with_secure(secure: bool) -> Cookie<'static> {
     Cookie::build((SESSION_COOKIE, ""))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .max_age(time::Duration::seconds(0))
         .build()
 }

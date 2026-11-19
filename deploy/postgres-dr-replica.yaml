@@ -1,0 +1,61 @@
+# Region-B standby cluster. Apply only in the DR Kubernetes cluster after
+# installing the compatible CloudNativePG operator and Barman Cloud Plugin.
+# The object-store Secret must be provisioned out of band in this namespace.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: musehub-postgres-dr
+  namespace: musehub
+spec:
+  instances: 3
+  # Keep the PostgreSQL image digest aligned with the active region's cluster.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.12-202611160820-system-bookworm@sha256:2b71f805acb6744c3d8d82c29256ee6e0580ea49e7a14e8e99b321a21c674439
+  enablePDB: true
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: required
+  storage:
+    storageClass: fast-rwo
+    size: 100Gi
+  bootstrap:
+    recovery:
+      source: musehub-postgres-primary
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: musehub-region-b-store
+  externalClusters:
+    - name: musehub-postgres-primary
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: musehub-region-b-store
+          serverName: musehub-postgres-primary
+    - name: musehub-postgres-dr
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: musehub-region-b-store
+          serverName: musehub-postgres-dr
+  # Distributed topology uses primary/source and the controlled promotion token.
+  # `replica.enabled` is for standalone replica clusters and is omitted here.
+  replica:
+    primary: musehub-postgres-primary
+    source: musehub-postgres-primary
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      failoverQuorum: true
+      dataDurability: required
+  managed:
+    services:
+      additional:
+        - selectorType: rw
+          serviceTemplate:
+            metadata:
+              name: musehub-postgres-writer
+            spec:
+              type: LoadBalancer

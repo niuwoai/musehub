@@ -20,6 +20,8 @@ pub struct CommitListQuery {
     pub r#ref: String,
     #[serde(default = "default_limit")]
     pub limit: i64,
+    #[serde(default)]
+    pub offset: u64,
 }
 
 fn default_limit() -> i64 {
@@ -83,7 +85,7 @@ pub async fn list_commits(
     } else {
         crate::pr::git_rev_parse_public(&bare, &format!("refs/heads/{}", q.r#ref))?
     };
-    let (items, has_more) = git_log_commits(&bare, &oid, q.limit.clamp(1, 100))?;
+    let (items, has_more) = git_log_commits(&bare, &oid, q.limit.clamp(1, 100), q.offset)?;
     Ok(Json(serde_json::json!({
         "ref": q.r#ref,
         "commit_oid": oid,

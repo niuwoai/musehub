@@ -32,7 +32,9 @@ import {
   getRunnerCapabilities,
   type AuditEvent,
   type OrgMember,
+  type Organization,
   type PatMasked,
+  listOrganizations,
   type RunnerCapabilities,
   getAgentRun,
   getPrCiFailure,
@@ -89,6 +91,9 @@ export type WorkspaceValue = {
   sessionAuth: SessionAuthState
   session: string | null
   activeOrg: string
+  organizations: Organization[]
+  organizationsLoading: boolean
+  refreshOrganizations: () => Promise<void>
   /** @deprecated use activeOrg — kept for pages not yet migrated */
   DEFAULT_ORG: string
   repos: Repository[]
@@ -222,6 +227,8 @@ function useWorkspaceState(): WorkspaceValue {
 
   const [sessionAuth, setSessionAuth] = useState<SessionAuthState>('pending')
   const [session, setSession] = useState<string | null>(null)
+  const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [organizationsLoading, setOrganizationsLoading] = useState(true)
   const [repos, setRepos] = useState<Repository[]>([])
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
   const [hydratingRepoSlug, setHydratingRepoSlug] = useState<string | null>(null)
@@ -286,6 +293,25 @@ function useWorkspaceState(): WorkspaceValue {
   const agentRunIdRef = useRef<string | null>(null)
   const agentStartOpRef = useRef<AgentOpContext | null>(null)
   const pipelineRunIdRef = useRef<string | null>(null)
+  const activeOrgRef = useRef(activeOrg)
+
+  useEffect(() => {
+    if (activeOrgRef.current === activeOrg) return
+    activeOrgRef.current = activeOrg
+    setError(null)
+    setRepos([])
+    setIssues([])
+    setPulls([])
+    setPrCiFailure(null)
+    setSelectedPrNumber(null)
+    selectedRepoRef.current = null
+    setSelectedRepo(null)
+    setSettings(null)
+    setOrgDisplayName('')
+    setGrants([])
+    invalidateAgentRunWork()
+    invalidateDeploymentWork()
+  }, [activeOrg])
 
   type DeploymentOpContext = {
     sessionEpoch: number
@@ -321,12 +347,8 @@ function useWorkspaceState(): WorkspaceValue {
   }, [deploymentListMode])
 
   const repoContextTransitioning = Boolean(
-    (repoSlugFromUrl &&
-      selectedRepo &&
-      repoSlugFromUrl !== selectedRepo) ||
-      (repoSlugFromUrl &&
-        hydratingRepoSlug === repoSlugFromUrl &&
-        selectedRepo !== repoSlugFromUrl),
+    repoSlugFromUrl &&
+      (selectedRepo !== repoSlugFromUrl || hydratingRepoSlug === repoSlugFromUrl),
   )
   const activeRepoSlug = repoSlugFromUrl ?? selectedRepo
 
@@ -545,6 +567,8 @@ function useWorkspaceState(): WorkspaceValue {
 
   function clearWorkspaceState() {
     setError(null)
+    setOrganizations([])
+    setOrganizationsLoading(true)
     setRepos([])
     setIssues([])
     setPulls([])
@@ -584,6 +608,7 @@ function useWorkspaceState(): WorkspaceValue {
         if (cancelled) {
           return
         }
+        setOrganizationsLoading(true)
         setSession(principal.handle)
         setSessionAuth('authenticated')
       })
@@ -688,7 +713,30 @@ function useWorkspaceState(): WorkspaceValue {
     return () => {
       bumpIamPanelsGeneration()
     }
-  }, [session, sessionAuth])
+  }, [session, sessionAuth, activeOrg])
+
+  useEffect(() => {
+    if (!session) {
+      setOrganizations([])
+      setOrganizationsLoading(false)
+      return
+    }
+    let cancelled = false
+    setOrganizationsLoading(true)
+    void listOrganizations()
+      .then((data) => {
+        if (!cancelled) setOrganizations(data)
+      })
+      .catch(() => {
+        if (!cancelled) setOrganizations([])
+      })
+      .finally(() => {
+        if (!cancelled) setOrganizationsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [session])
 
   useEffect(() => {
     if (sessionAuth !== 'anonymous') {
@@ -697,6 +745,15 @@ function useWorkspaceState(): WorkspaceValue {
     sessionHandleRef.current = null
     clearWorkspaceState()
   }, [sessionAuth])
+
+  async function refreshOrganizations() {
+    setOrganizationsLoading(true)
+    try {
+      setOrganizations(await listOrganizations())
+    } finally {
+      setOrganizationsLoading(false)
+    }
+  }
 
   async function refreshIamPanels() {
     const epoch = sessionEpochRef.current
@@ -1493,7 +1550,7 @@ function useWorkspaceState(): WorkspaceValue {
       setDeploymentId(dep.id)
       setActiveDeployment(dep)
       if (dep.state !== 'awaiting_approval') {
-        const tv = await getDeploymentTrace(activeOrg, selectedRepo, dep.id)
+        const tv = await getDeploymentTrace(activeOrg, repo, dep.id)
         if (!deploymentOpActive(op)) {
           return
         }
@@ -1678,6 +1735,9 @@ function useWorkspaceState(): WorkspaceValue {
     sessionAuth,
     session,
     activeOrg,
+    organizations,
+    organizationsLoading,
+    refreshOrganizations,
     repos,
     selectedRepo,
     issues,

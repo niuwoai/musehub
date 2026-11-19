@@ -2,13 +2,13 @@ import { useEffect } from 'react'
 import { useWorkspace } from '../app/WorkspaceProvider'
 
 export function RepoListPage() {
-  const { t, repos, refreshRepos, onCreateRepo, selectRepo } = useWorkspace()
+  const { t, activeOrg, repos, refreshRepos, onCreateRepo, selectRepo } = useWorkspace()
 
   useEffect(() => {
     void refreshRepos()
-    // load list when entering repos route
+    // load list when entering or switching organization routes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [activeOrg])
 
   return (
     <section>

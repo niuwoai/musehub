@@ -1,0 +1,39 @@
+# Standalone Runner host. The host must mount the control plane's shared git/artifact storage
+# and reach PostgreSQL plus the MuseHub API over a private network.
+name: musehub-runner-host
+
+services:
+  musehub-runner:
+    profiles: [experimental-shared-storage]
+    image: musehub-runner:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: runner-runtime
+    env_file:
+      - runner-host.env
+    environment:
+      MUSEHUB_GIT_ROOT: /var/lib/musehub/git
+      MUSEHUB_ARTIFACT_ROOT: /var/lib/musehub/artifacts
+      MUSEHUB_PIPELINE_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-oci
+      MUSEHUB_PIPELINE_JOB_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-job
+      MUSEHUB_RUNNER_INSTANCE_ID: ${MUSEHUB_RUNNER_INSTANCE_ID:?set a stable Runner instance UUID}
+      MUSEHUB_JOB_DOCKER_BIN: /usr/local/bin/docker
+      MUSEHUB_JOB_WORKSPACE_ROOT: /var/lib/musehub/pipeline-workspaces
+      MUSEHUB_JOB_WORKSPACE_HOST_ROOT: ${MUSEHUB_PIPELINE_WORKSPACE_ROOT_HOST:?mount a dedicated job workspace directory}
+      MUSEHUB_JOB_ALLOWED_IMAGES: ${MUSEHUB_JOB_ALLOWED_IMAGES:?allowlist digest-pinned CI images}
+      MUSEHUB_REFERENCE_ADAPTER_BIN: /opt/musehub/bin/musehub-agent-reference
+      MUSEHUB_AGENT_CODEX_SIM_BIN: /opt/musehub/bin/musehub-agent-codex-sim
+      MUSEHUB_RUNNER_POLL_SECS: ${MUSEHUB_RUNNER_POLL_SECS:-2}
+      MUSEHUB_RUNNER_WORK_KINDS: ${MUSEHUB_RUNNER_WORK_KINDS:-all}
+      MUSEHUB_COMPOSE_ADAPTER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_COMPOSE_RUNNER_BIN: /opt/musehub/bin/musehub-compose-runner
+      MUSEHUB_COMPOSE_ADAPTER_MODE: runner
+      MUSEHUB_REQUIRE_PIPELINE_OCI: ${MUSEHUB_REQUIRE_PIPELINE_OCI:-1}
+      MUSEHUB_OCI_REGISTRY: ${MUSEHUB_OCI_REGISTRY:?set MUSEHUB_OCI_REGISTRY}
+    volumes:
+      - ${MUSEHUB_GIT_ROOT_HOST:?mount the control plane git store on this host}:/var/lib/musehub/git:rw
+      - ${MUSEHUB_ARTIFACT_ROOT_HOST:?mount the control plane artifact store on this host}:/var/lib/musehub/artifacts:rw
+      - ${MUSEHUB_PIPELINE_WORKSPACE_ROOT_HOST:?mount a dedicated job workspace directory}:/var/lib/musehub/pipeline-workspaces:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

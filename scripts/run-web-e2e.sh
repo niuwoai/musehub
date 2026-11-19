@@ -7,27 +7,68 @@ if [[ -z "${MUSEHUB_E2E_ALLOW_PLAYWRIGHT_ARGS:-}" ]]; then
   unset PLAYWRIGHT_ARGS
 fi
 
-if [[ -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && command -v sg >/dev/null && command -v docker >/dev/null; then
+DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-}"
+: "${DATABASE_URL:?set MUSEHUB_TEST_DATABASE_URL to a dedicated browser E2E database}"
+if [[ "${MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET:-}" != "1" ]]; then
+  echo "set MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET=1 to authorize the browser E2E migration down/up reset" >&2
+  exit 1
+fi
+: "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD}"
+
+SERVER_PORT="${MUSEHUB_E2E_SERVER_PORT:-8080}"
+WEB_PORT="${MUSEHUB_E2E_WEB_PORT:-5173}"
+if [[ ! "$SERVER_PORT" =~ ^[1-9][0-9]{0,4}$ || ! "$WEB_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || (( SERVER_PORT > 65535 || WEB_PORT > 65535 )) || [[ "$SERVER_PORT" == "$WEB_PORT" ]]; then
+  echo "web_e2e_error=invalid_ports server=$SERVER_PORT web=$WEB_PORT" >&2
+  exit 2
+fi
+SERVER_BASE_URL="http://127.0.0.1:${SERVER_PORT}"
+WEB_BASE_URL="http://127.0.0.1:${WEB_PORT}"
+export MUSEHUB_BIND="127.0.0.1:${SERVER_PORT}"
+
+port_in_use() {
+  local port=$1
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" 2>/dev/null | grep -q .
+  else
+    echo "web_e2e_error=port_check_unavailable port=$port need lsof or ss" >&2
+    return 2
+  fi
+}
+
+for port in "$SERVER_PORT" "$WEB_PORT"; do
+  if port_in_use "$port"; then
+    echo "web_e2e_error=port_in_use port=$port; refusing to migrate or stop an existing service" >&2
+    exit 1
+  else
+    status=$?
+    if [[ "$status" -ne 1 ]]; then
+      echo "web_e2e_error=port_check_failed port=$port status=$status" >&2
+      exit 1
+    fi
+  fi
+done
+
+if [[ "${MUSEHUB_E2E_ENABLE_DOCKER:-1}" == "1" && -z "${MUSEHUB_E2E_DOCKER_GROUP:-}" ]] && command -v sg >/dev/null && command -v docker >/dev/null; then
   if ! docker info >/dev/null 2>&1; then
     export MUSEHUB_E2E_DOCKER_GROUP=1
-    exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1 MUSEHUB_TEST_DATABASE_URL='${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-}}' MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD='${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:-}'; cd '$PWD' && ./scripts/run-web-e2e.sh"
+    exec sg docker -c "export MUSEHUB_E2E_DOCKER_GROUP=1 MUSEHUB_TEST_DATABASE_URL='${MUSEHUB_TEST_DATABASE_URL}' MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET='${MUSEHUB_ACCEPTANCE_ALLOW_DATABASE_RESET}' MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD='${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD}'; cd '$PWD' && ./scripts/run-web-e2e.sh"
   fi
 fi
 
-DATABASE_URL="${MUSEHUB_TEST_DATABASE_URL:-${DATABASE_URL:-}}"
-: "${DATABASE_URL:?DATABASE_URL or MUSEHUB_TEST_DATABASE_URL required}"
-: "${MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD:?set MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD}"
-
 export MUSEHUB_GIT_ROOT="${MUSEHUB_GIT_ROOT:-/tmp/musehub-e2e-git}"
-export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
-export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  export MUSEHUB_GIT_STORAGE_GROUP="${MUSEHUB_GIT_STORAGE_GROUP:-musehub-git}"
+  export MUSEHUB_GIT_STORAGE_SUDO_FALLBACK="${MUSEHUB_GIT_STORAGE_SUDO_FALLBACK:-1}"
+fi
 export MUSEHUB_SESSION_SECRET="${MUSEHUB_SESSION_SECRET:-e2e-session-secret-32chars-min}"
 mkdir -p "$MUSEHUB_GIT_ROOT"
-if command -v sudo >/dev/null; then
-  getent group "$MUSEHUB_GIT_STORAGE_GROUP" >/dev/null 2>&1 || sudo groupadd -r "$MUSEHUB_GIT_STORAGE_GROUP" 2>/dev/null || true
-  sudo usermod -aG "$MUSEHUB_GIT_STORAGE_GROUP" "$(whoami)" 2>/dev/null || true
-  if sudo chgrp "$MUSEHUB_GIT_STORAGE_GROUP" "$MUSEHUB_GIT_ROOT" 2>/dev/null; then
-    sudo chmod 2775 "$MUSEHUB_GIT_ROOT" 2>/dev/null || true
+if command -v sudo >/dev/null && command -v getent >/dev/null && command -v groupadd >/dev/null && command -v usermod >/dev/null && sudo -n true >/dev/null 2>&1; then
+  getent group "$MUSEHUB_GIT_STORAGE_GROUP" >/dev/null 2>&1 || sudo -n groupadd -r "$MUSEHUB_GIT_STORAGE_GROUP" 2>/dev/null || true
+  sudo -n usermod -aG "$MUSEHUB_GIT_STORAGE_GROUP" "$(whoami)" 2>/dev/null || true
+  if sudo -n chgrp "$MUSEHUB_GIT_STORAGE_GROUP" "$MUSEHUB_GIT_ROOT" 2>/dev/null; then
+    sudo -n chmod 2775 "$MUSEHUB_GIT_ROOT" 2>/dev/null || true
   fi
 fi
 
@@ -61,7 +102,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-cargo run -p musehub-migrate -- down migrations "$DATABASE_URL" || true
+cargo run -p musehub-migrate -- down migrations "$DATABASE_URL"
 cargo run -p musehub-migrate -- up migrations "$DATABASE_URL"
 cargo build -p musehub-agent-adapter --bin musehub-agent-reference -q
 cargo build -p musehub-agent-adapter --bin musehub-pipeline-reference -q
@@ -81,7 +122,7 @@ docker_ok() {
   sg docker -c 'docker info' >/dev/null 2>&1
 }
 
-if docker_ok; then
+if [[ "${MUSEHUB_E2E_ENABLE_DOCKER:-1}" == "1" ]] && docker_ok; then
   chmod +x ./scripts/start-ci-registry.sh
   registry_start_ok=0
   if docker info >/dev/null 2>&1; then
@@ -119,6 +160,10 @@ stop_owned "$SERVER_PIDFILE"
     MUSEHUB_ARTIFACT_ROOT="$MUSEHUB_ARTIFACT_ROOT" \
     MUSEHUB_SESSION_SECRET="$MUSEHUB_SESSION_SECRET" \
     MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD="$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD" \
+    MUSEHUB_OIDC_ISSUER_URL="${MUSEHUB_OIDC_ISSUER_URL:-}" \
+    MUSEHUB_OIDC_CLIENT_ID="${MUSEHUB_OIDC_CLIENT_ID:-}" \
+    MUSEHUB_OIDC_CLIENT_SECRET="${MUSEHUB_OIDC_CLIENT_SECRET:-}" \
+    MUSEHUB_OIDC_REDIRECT_URI="${MUSEHUB_OIDC_REDIRECT_URI:-}" \
     MUSEHUB_REFERENCE_ADAPTER_BIN="$MUSEHUB_REFERENCE_ADAPTER_BIN" \
     MUSEHUB_PIPELINE_ADAPTER_BIN="${MUSEHUB_PIPELINE_ADAPTER_BIN:-$PWD/target/debug/musehub-pipeline-reference}" \
     MUSEHUB_COMPOSE_ADAPTER_BIN="$MUSEHUB_COMPOSE_ADAPTER_BIN" \
@@ -136,12 +181,12 @@ stop_owned "$SERVER_PIDFILE"
 echo $! >"$SERVER_PIDFILE"
 
 for _ in $(seq 1 90); do
-  if curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+  if curl -sf ${SERVER_BASE_URL}/healthz >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-if ! curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+if ! curl -sf ${SERVER_BASE_URL}/healthz >/dev/null 2>&1; then
   echo "musehub-server failed to start" >&2
   tail -40 "$SERVER_LOG" | sed 's/password.*/password=REDACTED/g' >&2 || true
   exit 1
@@ -150,23 +195,23 @@ fi
 if [[ "$PRODUCT_OCI" == "1" ]]; then
   command -v jq psql >/dev/null || { echo "jq and psql required for OCI web e2e runner" >&2; exit 1; }
   cargo build -q -p musehub-runnerd
-  COOKIE=$(curl -sf -c - -X POST "http://127.0.0.1:8080/api/v1/auth/login" \
+  COOKIE=$(curl -sf -c - -X POST "${SERVER_BASE_URL}/api/v1/auth/login" \
     -H 'Content-Type: application/json' \
     -d "{\"handle\":\"admin\",\"password\":\"$MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD\"}" | awk '/musehub_session/ {print $NF}')
-  curl -sf -X POST "http://127.0.0.1:8080/api/v1/orgs/demo/members" \
+  curl -sf -X POST "${SERVER_BASE_URL}/api/v1/orgs/demo/members" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d '{"handle":"e2e-oci-runner","password":"E2e-Oci-Runner-12!","role":"member"}' >/dev/null || true
-  curl -sf -X POST "http://127.0.0.1:8080/api/v1/orgs/demo/repos" \
+  curl -sf -X POST "${SERVER_BASE_URL}/api/v1/orgs/demo/repos" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d '{"slug":"e2e-pat-anchor","description":"pat scope anchor"}' >/dev/null || true
   ANCHOR_REPO=$(psql "$DATABASE_URL" -Atc "SELECT id FROM repositories WHERE slug='e2e-pat-anchor'" 2>/dev/null || true)
-  PAT_JSON=$(curl -sf -X POST "http://127.0.0.1:8080/api/v1/tokens" \
+  PAT_JSON=$(curl -sf -X POST "${SERVER_BASE_URL}/api/v1/tokens" \
     -H "Content-Type: application/json" -H "Cookie: musehub_session=$COOKIE" \
     -d "{\"name\":\"web-e2e-runner\",\"org\":\"demo\",\"scopes\":[\"pipeline:execute\",\"agent:execute\",\"deploy:execute\",\"checks:write\",\"repo:read\"],\"scope_mode\":\"all_accessible\",\"runner_handle\":\"e2e-oci-runner\"}")
   RUNNER_PAT=$(echo "$PAT_JSON" | jq -r .token)
   stop_owned "$RUNNER_PIDFILE"
   RUNNER_ENV=(
-    MUSEHUB_API_BASE=http://127.0.0.1:8080
+    MUSEHUB_API_BASE=${SERVER_BASE_URL}
     MUSEHUB_DATABASE_URL="$DATABASE_URL"
     MUSEHUB_GIT_ROOT="$MUSEHUB_GIT_ROOT"
     MUSEHUB_ARTIFACT_ROOT="$MUSEHUB_ARTIFACT_ROOT"
@@ -191,24 +236,38 @@ if [[ "$PRODUCT_OCI" == "1" ]]; then
   fi
   echo $! >"$RUNNER_PIDFILE"
   sleep 2
-  curl -sf "http://127.0.0.1:8080/api/v1/runner/capabilities" | jq -e '.pipeline_executor == "remote"' >/dev/null
+  curl -sf "${SERVER_BASE_URL}/api/v1/runner/capabilities" | jq -e '.pipeline_executor == "remote"' >/dev/null
   echo "web_e2e remote_pipeline_runner=ok anchor_repo=${ANCHOR_REPO:-none}"
 fi
 
-yarn --cwd web install
-export MUSEHUB_E2E_BASE_URL=http://127.0.0.1:5173
-export MUSEHUB_E2E_SERVER=http://127.0.0.1:8080
+if [[ "${MUSEHUB_E2E_SKIP_INSTALL:-0}" == "1" ]]; then
+  for binary in web/node_modules/.bin/vite web/node_modules/.bin/playwright; do
+    if [[ ! -x "$binary" ]]; then
+      echo "web_e2e_error=missing_local_dependency path=$binary" >&2
+      exit 1
+    fi
+  done
+else
+  yarn --cwd web install
+fi
+export MUSEHUB_E2E_WEB_PORT="$WEB_PORT"
+export MUSEHUB_E2E_BASE_URL=${WEB_BASE_URL}
+export MUSEHUB_E2E_SERVER=${SERVER_BASE_URL}
 export MUSEHUB_E2E_API="${MUSEHUB_E2E_BASE_URL}"
-yarn --cwd web playwright install chromium
+if [[ "${MUSEHUB_E2E_BROWSER_CHANNEL:-}" == "chrome" ]]; then
+  echo "web_e2e browser_channel=chrome install=skipped"
+else
+  yarn --cwd web playwright install chromium
+fi
 
 export VITE_E2E_ISSUE_PAGE_LIMIT="${VITE_E2E_ISSUE_PAGE_LIMIT:-2}"
 (
   env VITE_E2E_ISSUE_PAGE_LIMIT="$VITE_E2E_ISSUE_PAGE_LIMIT" \
-    yarn --cwd web dev --host 127.0.0.1 --port 5173 >>"$SERVER_LOG" 2>&1
+    yarn --cwd web dev --host 127.0.0.1 --port "$WEB_PORT" >>"$SERVER_LOG" 2>&1
 ) &
 echo $! >"$VITE_PIDFILE"
 for _ in $(seq 1 60); do
-  if curl -sf http://127.0.0.1:5173/ >/dev/null 2>&1; then
+  if curl -sf ${WEB_BASE_URL}/ >/dev/null 2>&1; then
     break
   fi
   sleep 1

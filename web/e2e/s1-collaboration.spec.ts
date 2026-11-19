@@ -129,6 +129,36 @@ test.describe('S1 collaboration console', () => {
       await page.goto(`/org/demo/repos/${slug}/pulls/${pr.number}`)
       await expect(page.getByTestId('pull-detail-title')).toBeVisible()
       await expect(page.getByTestId('pull-row-version')).toBeVisible()
+      await expect(page.getByTestId('pull-checks')).toBeVisible()
+      await expect(page.getByTestId('pull-checks')).toContainText('product-ci')
+      await expect(page.getByTestId('pull-merge-preconditions')).toHaveAttribute(
+        'data-passed',
+        'false',
+      )
+      await expect(page.getByTestId('pull-review-approve')).toHaveCount(0)
+      await expect(page.getByTestId('pull-self-approve-blocked')).toBeVisible()
+      await page.getByTestId('pull-review-body').fill('Please revise the edge case.')
+      const reviewRequest = page.waitForRequest((request) =>
+        request.url().includes(`/pull-requests/${pr.number}/reviews`) && request.method() === 'POST',
+      )
+      await page.getByTestId('pull-review-request-changes').click()
+      const submittedReview = await reviewRequest
+      expect(JSON.parse(submittedReview.postData() ?? '{}')).toMatchObject({
+        decision: 'request_changes',
+        body: 'Please revise the edge case.',
+      })
+      await expect(page.getByTestId('pull-review-status')).toContainText('Changes requested review submitted.')
+      await page.getByTestId('pull-review-body').fill('A non-blocking observation.')
+      const commentReviewRequest = page.waitForRequest((request) =>
+        request.url().includes(`/pull-requests/${pr.number}/reviews`) && request.method() === 'POST',
+      )
+      await page.getByTestId('pull-review-comment').click()
+      const submittedCommentReview = await commentReviewRequest
+      expect(JSON.parse(submittedCommentReview.postData() ?? '{}')).toMatchObject({
+        decision: 'comment',
+        body: 'A non-blocking observation.',
+      })
+      await expect(page.getByTestId('pull-review-status')).toContainText('Comment review submitted.')
       await page.getByTestId('pull-diff-files').getByRole('button').first().click()
       await page.getByTestId('pull-diff-line-pick').first().click()
       await page.getByTestId('pull-comment-input').fill('anchored')

@@ -12,7 +12,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::audit;
@@ -269,6 +269,10 @@ pub fn format_authorized_keys_line(
 /// Bare repo path and git pack service after DB authorization (no I/O to git yet).
 #[derive(Debug, Clone)]
 pub struct SshPackPlan {
+    pub org_id: Uuid,
+    pub repo_id: Uuid,
+    pub storage_key: Uuid,
+    pub principal_id: Uuid,
     pub bare: PathBuf,
     pub service: String,
 }
@@ -286,7 +290,14 @@ pub async fn plan_ssh_pack_gateway(
     let (_, repo_id, storage_key) =
         super::repo_storage_for_member(pool, &parsed.org, &parsed.repo, principal_id).await?;
     let org_id = super::org_id_for_member(pool, &parsed.org, principal_id).await?;
-    grants::ensure_principal_repo_access(pool, org_id, repo_id, principal_id).await?;
+    match parsed.service {
+        GitSshService::UploadPack => {
+            grants::ensure_principal_repo_access(pool, org_id, repo_id, principal_id).await?;
+        }
+        GitSshService::ReceivePack => {
+            grants::ensure_principal_repo_write_access(pool, org_id, repo_id, principal_id).await?;
+        }
+    }
     let bare = bare_repo_path(git_root, &storage_key);
     if !bare.is_dir() {
         return Err(AppError::NotFound);
@@ -316,9 +327,81 @@ pub async fn plan_ssh_pack_gateway(
     )
     .await;
     Ok(SshPackPlan {
+        org_id,
+        repo_id,
+        storage_key,
+        principal_id,
         bare,
         service: service_name.to_string(),
     })
+}
+
+pub async fn snapshot_git_refs(
+    bare: &Path,
+) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    let output = tokio::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["show-ref", "--heads", "--tags"])
+        .output()
+        .await
+        .map_err(|error| AppError::Other(format!("snapshot Git refs: {error}")))?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(AppError::Other(format!(
+            "snapshot Git refs failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let mut refs = std::collections::BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((oid, name)) = line.split_once(' ') else {
+            continue;
+        };
+        if name.starts_with("refs/tags/") {
+            let peeled = tokio::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(bare)
+                .args(["rev-parse", "--verify"])
+                .arg(format!("{name}^{{commit}}"))
+                .output()
+                .await
+                .map_err(|error| AppError::Other(format!("resolve Git tag: {error}")))?;
+            if peeled.status.success() {
+                refs.insert(
+                    name.to_string(),
+                    String::from_utf8_lossy(&peeled.stdout).trim().to_string(),
+                );
+            }
+        } else {
+            refs.insert(name.to_string(), oid.to_string());
+        }
+    }
+    Ok(refs)
+}
+
+pub async fn enqueue_git_ref_updates(
+    transaction: &mut Transaction<'_, Postgres>,
+    plan: &SshPackPlan,
+    updates: &[(String, String)],
+) -> Result<(), AppError> {
+    for (git_ref, source_oid) in updates {
+        sqlx::query(
+            "INSERT INTO git_ref_trigger_outbox
+             (id, org_id, repo_id, storage_key, principal_id, git_ref, source_oid)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (repo_id, git_ref, source_oid) DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(plan.org_id)
+        .bind(plan.repo_id)
+        .bind(plan.storage_key)
+        .bind(plan.principal_id)
+        .bind(git_ref)
+        .bind(source_oid)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn run_ssh_gateway(
@@ -328,11 +411,20 @@ pub async fn run_ssh_gateway(
     original_command: &str,
 ) -> Result<i32, AppError> {
     let plan = plan_ssh_pack_gateway(pool, git_root, key_id, original_command).await?;
-    execute_ssh_pack(&plan)
+    if plan.service == "receive-pack" {
+        let lock =
+            crate::repository_lock::acquire_repository_write_lock(pool, plan.repo_id).await?;
+        let result = execute_ssh_pack(&plan);
+        lock.commit().await?;
+        result
+    } else {
+        execute_ssh_pack(&plan)
+    }
 }
 
 /// Runs `upload-pack` / `receive-pack` after the DB pool is released (may block for pack I/O).
 pub fn execute_ssh_pack(plan: &SshPackPlan) -> Result<i32, AppError> {
+    crate::hooks::ensure_bare_repo_policy(&plan.bare)?;
     run_git_pack_inherit(&plan.bare, &plan.service).map_err(|e| {
         git_ssh_server_log::log_pack_exec_failure(&e.to_string(), &plan.service);
         AppError::Other("pack operation failed".into())

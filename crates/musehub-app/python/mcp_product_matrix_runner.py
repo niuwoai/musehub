@@ -42,9 +42,10 @@ async def _exercise(client: Any, org_id: str) -> dict[str, Any]:
     checks.append("repository_list")
     try:
         await client.call_tool("musehub_no_such_tool", {})
-        raise RuntimeError("unknown tool should fail")
     except Exception:
         checks.append("unknown_tool_rejected")
+    else:
+        raise RuntimeError("unknown tool should fail")
     return {
         "client_name": CLIENT_NAME,
         "python_mcp_sdk_version": PYTHON_MCP_SDK_VERSION,

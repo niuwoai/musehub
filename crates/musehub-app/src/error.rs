@@ -21,6 +21,8 @@ pub enum AppError {
     Validation(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("database endpoint is not writable primary")]
+    DatabaseNotPrimary,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("{0}")]
@@ -35,6 +37,7 @@ impl AppError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Validation(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::DatabaseNotPrimary => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_) | Self::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -46,6 +49,7 @@ impl AppError {
             Self::NotFound => "not_found",
             Self::Validation(_) => "validation_error",
             Self::Conflict(_) => "conflict",
+            Self::DatabaseNotPrimary => "database_not_primary",
             Self::Database(_) => "database_error",
             Self::Other(_) => "internal_error",
         }

@@ -50,6 +50,12 @@ pub struct DeploymentSummary {
     pub plan_hash: Option<String>,
     pub approval_required: bool,
     pub updated_at: String,
+    pub desired_version: String,
+    pub desired_commit_oid: String,
+    pub desired_oci_image_ref: Option<String>,
+    pub observed_oci_digest: Option<String>,
+    pub observed_source_oid: Option<String>,
+    pub observed_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -178,9 +184,14 @@ pub async fn list_deployments(
     }
     let fetch = limit + 1;
     let mut sql = String::from(
-        "SELECT d.id, e.slug, d.release_id, d.state, d.plan_hash::text, d.updated_at
+        "SELECT d.id, e.slug, d.release_id, d.state, d.plan_hash::text, d.updated_at,
+                r.version, r.commit_oid, r.oci_image_ref,
+                d.health_summary->>'applied_oci_digest',
+                d.health_summary->>'verified_source_oid',
+                d.health_summary->>'observed_at'
          FROM deployments d
          JOIN environments e ON e.id = d.environment_id
+         JOIN releases r ON r.id = d.release_id
          WHERE d.repo_id = $1",
     );
     let mut bind_idx = 2i32;
@@ -217,6 +228,12 @@ pub async fn list_deployments(
             String,
             Option<String>,
             time::OffsetDateTime,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
         ),
     >(&sql)
     .bind(repo_id);
@@ -233,7 +250,20 @@ pub async fn list_deployments(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, env_slug, release_id, dep_state, plan_hash, updated_at)| DeploymentSummary {
+            |(
+                id,
+                env_slug,
+                release_id,
+                dep_state,
+                plan_hash,
+                updated_at,
+                desired_version,
+                desired_commit_oid,
+                desired_oci_image_ref,
+                observed_oci_digest,
+                observed_source_oid,
+                observed_at,
+            )| DeploymentSummary {
                 id,
                 environment_slug: env_slug,
                 release_id,
@@ -243,6 +273,12 @@ pub async fn list_deployments(
                 updated_at: updated_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_else(|_| updated_at.to_string()),
+                desired_version,
+                desired_commit_oid,
+                desired_oci_image_ref,
+                observed_oci_digest,
+                observed_source_oid,
+                observed_at,
             },
         )
         .collect();
@@ -841,6 +877,7 @@ async fn run_local_compose_deploy(
                 .and_then(|d| d.as_str())
                 .map(String::from)
         });
+    let observation_received = applied_digest.is_some() || verified_source_oid.is_some();
     let digest_ok = if adapter_kind == "compose-runner" {
         match (oci_image_ref.as_ref(), applied_digest.as_ref()) {
             (Some(req), Some(app)) => req.split('@').nth(1) == Some(app.as_str()),
@@ -894,6 +931,15 @@ async fn run_local_compose_deploy(
             "compose_project": project,
         })
     };
+    if observation_received {
+        if let Some(obj) = summary.as_object_mut() {
+            if let Ok(observed_at) = time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+            {
+                obj.insert("observed_at".into(), serde_json::json!(observed_at));
+            }
+        }
+    }
     if let Some(obj) = summary.as_object_mut() {
         if let Some(target_id) = launch.rollback_of_id {
             obj.insert("rollback".into(), serde_json::json!(true));
@@ -1387,6 +1433,7 @@ pub async fn execute_deployment_job(
                 .and_then(|d| d.as_str())
                 .map(String::from)
         });
+    let observation_received = applied_digest.is_some() || verified_source_oid.is_some();
     let digest_ok = if adapter_kind == "compose-runner" {
         match (payload.oci_image_ref.as_ref(), applied_digest.as_ref()) {
             (Some(req), Some(app)) => req.split('@').nth(1) == Some(app.as_str()),
@@ -1429,6 +1476,15 @@ pub async fn execute_deployment_job(
             "compose_project": payload.project,
         })
     };
+    if observation_received {
+        if let Some(obj) = summary.as_object_mut() {
+            if let Ok(observed_at) = time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+            {
+                obj.insert("observed_at".into(), serde_json::json!(observed_at));
+            }
+        }
+    }
     if let Some(obj) = summary.as_object_mut() {
         if let Some(target_id) = payload.rollback_of_id {
             obj.insert("rollback".into(), serde_json::json!(true));

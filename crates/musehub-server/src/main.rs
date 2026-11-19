@@ -50,6 +50,9 @@ async fn main() -> ExitCode {
                 root.clone(),
                 bind_display,
                 config.bootstrap_admin_password(),
+                config.oidc(),
+                config.github_oauth(),
+                config.cookie_secure(),
             )
             .await
             {
@@ -62,6 +65,15 @@ async fn main() -> ExitCode {
         }
         _ => None,
     };
+
+    if let Some(product_state) = product.as_ref() {
+        tokio::spawn(musehub_app::run_git_ref_trigger_dispatcher(Arc::clone(
+            product_state,
+        )));
+        tokio::spawn(musehub_app::run_webhook_delivery_worker(Arc::clone(
+            product_state,
+        )));
+    }
 
     let state = Arc::new(AppState {
         database,

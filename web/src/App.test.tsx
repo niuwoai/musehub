@@ -5,6 +5,7 @@ import { appVersion } from './app/WorkspaceProvider'
 import './i18n'
 
 vi.mock('./api', () => ({
+  getAuthProviders: vi.fn().mockResolvedValue({ oidc: false, github: false, saml: false }),
   me: vi.fn().mockRejectedValue(new Error('no session')),
   login: vi.fn(),
   logout: vi.fn(),

@@ -15,6 +15,12 @@ describe('e2eBrowserApiOrigin', () => {
     expect(e2eBrowserApiOrigin()).toBe('http://127.0.0.1:5173')
   })
 
+  it('supports a custom Vite dev origin when the base URL is unset', () => {
+    delete process.env.MUSEHUB_E2E_BASE_URL
+    process.env.MUSEHUB_E2E_API = 'http://127.0.0.1:35173/'
+    expect(e2eBrowserApiOrigin()).toBe('http://127.0.0.1:35173')
+  })
+
   it('defaults to Vite dev origin', () => {
     delete process.env.MUSEHUB_E2E_BASE_URL
     delete process.env.MUSEHUB_E2E_API

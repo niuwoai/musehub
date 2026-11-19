@@ -35,6 +35,13 @@ This documents **observed behavior** in `MUSEHUB_PIPELINE_EXECUTOR=remote` mode.
 | Reconcile `orphaned_after_restart` | **No** auto-requeue; operator must start a **new** pipeline run |
 | Failed adapter | **No** auto-retry in product API |
 
+## Git ref trigger outbox reconciliation
+
+- The control-plane dispatcher scans ready repositories every 60 seconds and inserts current branch/tag OIDs into `git_ref_trigger_outbox` with the same `(repo_id, git_ref, source_oid)` idempotency key as receive-pack.
+- This repairs the receive-pack-success / outbox-commit crash window: a later scan discovers the current ref and the dispatcher delivers it.
+- On the first scan after enabling the reconciler, any existing ref with no matching historical outbox row is treated as a recoverable push and may trigger one workflow run. Subsequent scans are idempotent. Deleted refs produce no workflow event.
+- This recovery path is implemented but still requires SSH/Runner E2E acceptance and an applied 0041 migration.
+
 ## Dependencies (honest)
 
 - Runner process: `MUSEHUB_DATABASE_URL`, shared `MUSEHUB_GIT_ROOT` / `MUSEHUB_ARTIFACT_ROOT` with API (same-host subprocess tests in `verify-remote-runner-e2e.sh` **do not** prove cross-host isolation).

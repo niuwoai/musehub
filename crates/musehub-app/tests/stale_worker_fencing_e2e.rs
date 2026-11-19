@@ -73,6 +73,7 @@ async fn stale_epoch_cannot_finalize_succeeded() {
         None,
         Some("c".repeat(40).as_str()),
         Some(1),
+        None,
     )
     .await
     .unwrap();

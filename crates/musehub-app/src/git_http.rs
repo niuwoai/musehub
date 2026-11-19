@@ -15,6 +15,7 @@ pub fn bare_repo_path(git_root: &Path, storage_key: &uuid::Uuid) -> PathBuf {
 pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result<(), AppError> {
     let path = bare_repo_path(git_root, storage_key);
     if path.exists() {
+        crate::hooks::ensure_bare_repo_policy(&path)?;
         return Ok(());
     }
     std::fs::create_dir_all(git_root).map_err(|error| AppError::Other(error.to_string()))?;
@@ -31,7 +32,18 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
         };
         return Err(AppError::Other(msg));
     }
-    seed_empty_main_branch(&path)?;
+    let seed_oid = seed_empty_main_branch(&path)?;
+    let config = Command::new("git")
+        .arg("--git-dir")
+        .arg(&path)
+        .args(["config", "--local", "musehub.emptyRepoSeedOid", &seed_oid])
+        .status()
+        .map_err(|error| AppError::Other(format!("store empty-repository seed OID: {error}")))?;
+    if !config.success() {
+        return Err(AppError::Other(
+            "store empty-repository seed OID failed".into(),
+        ));
+    }
     let sym = Command::new("git")
         .args([
             "--git-dir",
@@ -45,7 +57,7 @@ pub fn init_bare_repository(git_root: &Path, storage_key: &uuid::Uuid) -> Result
     if !sym.success() {
         return Err(AppError::Other("set bare HEAD symref failed".to_string()));
     }
-    crate::hooks::install_pre_receive_hook(&path, "main")?;
+    crate::hooks::ensure_bare_repo_policy(&path)?;
     #[cfg(unix)]
     apply_bare_repo_group_acl(&path)?;
     Ok(())
@@ -57,7 +69,7 @@ pub fn apply_bare_repo_group_acl(bare: &Path) -> Result<(), AppError> {
     crate::git_ssh_runtime::apply_bare_repo_group_acl_physical(bare)
 }
 
-fn seed_empty_main_branch(bare: &Path) -> Result<(), AppError> {
+fn seed_empty_main_branch(bare: &Path) -> Result<String, AppError> {
     let temp = tempfile::tempdir().map_err(|error| AppError::Other(error.to_string()))?;
     let work = temp.path();
     let init = Command::new("git")
@@ -93,7 +105,16 @@ fn seed_empty_main_branch(bare: &Path) -> Result<(), AppError> {
     if !push.success() {
         return Err(AppError::Other("push initial main failed".to_string()));
     }
-    Ok(())
+    let oid = Command::new("git")
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["rev-parse", "--verify", "refs/heads/main"])
+        .output()
+        .map_err(|error| AppError::Other(format!("read initial main OID: {error}")))?;
+    if !oid.status.success() {
+        return Err(AppError::Other("read initial main OID failed".into()));
+    }
+    Ok(String::from_utf8_lossy(&oid.stdout).trim().to_string())
 }
 
 fn storage_group_http_backend_command(
@@ -106,6 +127,7 @@ fn storage_group_http_backend_command(
     remote_user: &str,
 ) -> Command {
     let content_length = content_length.to_string();
+    #[cfg(target_os = "linux")]
     let mut cmd = if let Some(group) = std::env::var("MUSEHUB_GIT_STORAGE_GROUP")
         .ok()
         .filter(|g| !g.is_empty())
@@ -114,6 +136,12 @@ fn storage_group_http_backend_command(
         wrapped.arg(group).arg("-c").arg("git http-backend");
         wrapped
     } else {
+        let mut direct = Command::new("git");
+        direct.arg("http-backend");
+        direct
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut cmd = {
         let mut direct = Command::new("git");
         direct.arg("http-backend");
         direct
@@ -140,6 +168,8 @@ fn run_git_http_backend_blocking(
     git_root: &Path,
     remote_user: &str,
 ) -> Result<Response, AppError> {
+    let bare = bare_repo_path(git_root, storage_key);
+    crate::hooks::ensure_bare_repo_policy(&bare)?;
     let path_info = format!("/{}.git{}", storage_key, git_suffix);
     let git_root_s = git_root
         .to_str()

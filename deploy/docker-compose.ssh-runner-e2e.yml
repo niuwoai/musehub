@@ -1,0 +1,134 @@
+# Isolated SSH -> outbox -> workflow -> remote Runner acceptance overlay.
+# The nested job daemon is disposable and never mounts the host Docker socket.
+services:
+  postgres:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+
+  musehub-server:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    build:
+      labels:
+        musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    image: ${MUSEHUB_E2E_SERVER_IMAGE:?set a unique acceptance image tag}
+    ports: !override
+      - "127.0.0.1::8080"
+
+  musehub-git-ssh:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    build:
+      labels:
+        musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    image: ${MUSEHUB_E2E_GIT_SSH_IMAGE:?set a unique acceptance image tag}
+    environment:
+      MUSEHUB_GIT_SSH_SSHD_LOG: DEBUG
+    ports: !override
+      - "127.0.0.1::2222"
+
+  gateway:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+
+  musehub-runner:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    build:
+      labels:
+        musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    image: ${MUSEHUB_E2E_RUNNER_IMAGE:?set a unique acceptance image tag}
+    depends_on:
+      docker-job-daemon:
+        condition: service_healthy
+    environment:
+      DOCKER_HOST: tcp://docker-job-daemon:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+      MUSEHUB_JOB_DOCKER_BIN: /usr/local/bin/docker
+      MUSEHUB_PIPELINE_JOB_ADAPTER_BIN: /opt/musehub/bin/musehub-pipeline-job
+      MUSEHUB_JOB_WORKSPACE_ROOT: /var/lib/musehub/pipeline-workspaces
+      MUSEHUB_JOB_WORKSPACE_HOST_ROOT: /var/lib/musehub/pipeline-workspaces
+      MUSEHUB_JOB_ALLOWED_IMAGES: ${MUSEHUB_JOB_ALLOWED_IMAGES:?set digest-pinned workflow image}
+    volumes: !override
+      - gitdata:/var/lib/musehub/git:ro
+      - artifacts:/var/lib/musehub/artifacts:rw
+      - pipeline-workspaces:/var/lib/musehub/pipeline-workspaces:rw
+      - docker-job-client-certs:/certs/client:ro
+
+  e2e-registry:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    ports:
+      - "127.0.0.1::5000"
+
+  docker-job-daemon:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+    image: docker:27.3.1-dind
+    privileged: true
+    cgroup: host
+    entrypoint: ["sh", "-ec"]
+    command:
+      - >-
+        mkdir -p /certs/ca /certs/server /certs/client;
+        openssl genrsa -out /certs/ca/key.pem 2048;
+        openssl req -new -x509 -days 365 -key /certs/ca/key.pem -sha256 -subj /CN=musehub-e2e-docker-ca -out /certs/ca/ca.pem;
+        openssl genrsa -out /certs/server/key.pem 2048;
+        openssl req -new -key /certs/server/key.pem -subj /CN=docker-job-daemon -addext subjectAltName=DNS:docker-job-daemon -addext extendedKeyUsage=serverAuth -out /certs/server/server.csr;
+        openssl x509 -req -in /certs/server/server.csr -CA /certs/ca/ca.pem -CAkey /certs/ca/key.pem -CAcreateserial -out /certs/server/cert.pem -days 365 -sha256 -copy_extensions copy;
+        openssl genrsa -out /certs/client/key.pem 2048;
+        openssl req -new -key /certs/client/key.pem -subj /CN=musehub-e2e-docker-client -addext extendedKeyUsage=clientAuth -out /certs/client/client.csr;
+        openssl x509 -req -in /certs/client/client.csr -CA /certs/ca/ca.pem -CAkey /certs/ca/key.pem -CAcreateserial -out /certs/client/cert.pem -days 365 -sha256 -copy_extensions copy;
+        cp /certs/ca/ca.pem /certs/client/ca.pem;
+        mkdir -p /client-certs;
+        cp /certs/client/ca.pem /client-certs/ca.pem;
+        cp /certs/client/cert.pem /client-certs/cert.pem;
+        cp /certs/client/key.pem /client-certs/key.pem;
+        chmod 644 /client-certs/key.pem;
+        exec dockerd --host=tcp://0.0.0.0:2376 --host=unix:///var/run/docker.sock --exec-opt=native.cgroupdriver=cgroupfs --tlsverify --tlscacert=/certs/ca/ca.pem --tlscert=/certs/server/cert.pem --tlskey=/certs/server/key.pem --insecure-registry=e2e-registry:5000
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+    volumes:
+      - pipeline-workspaces:/var/lib/musehub/pipeline-workspaces:rw
+      - docker-job-data:/var/lib/docker
+      - docker-job-certs:/certs
+      - docker-job-client-certs:/client-certs
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  gitdata:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  gitsshdata:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  artifacts:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  pipeline-workspaces:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  docker-job-data:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  docker-job-certs:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+  docker-job-client-certs:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
+
+networks:
+  default:
+    labels:
+      musehub.e2e.owner: ${MUSEHUB_E2E_OWNER:?set a unique acceptance owner token}
