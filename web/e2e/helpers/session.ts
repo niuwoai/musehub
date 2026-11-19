@@ -40,6 +40,8 @@ export async function loginAsAdmin(
   await page.goto('/login', { waitUntil: 'domcontentloaded' })
   await waitForSessionAuthSettled(page)
   const loginInput = page.getByTestId('login-handle-input')
+  const sessionHandle = page.getByTestId('session-handle')
+  await expect(loginInput.or(sessionHandle)).toBeVisible({ timeout: 15_000 })
   if (!(await loginInput.isVisible())) {
     await expectLoggedInAs(page, handle)
     return

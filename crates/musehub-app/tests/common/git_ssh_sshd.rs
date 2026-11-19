@@ -86,6 +86,7 @@ impl TestGitSshd {
         let passwd_guard = GitPasswdHomeGuard::install_for_port(port);
         let login_home = passwd_guard.fixture_home.clone();
         let run_dir = prepare_root_sshd_run_dir(port);
+        let server_log = run_dir.join("musehub-git-ssh.log");
         let bin_path = install_root_owned_git_ssh_bin(gateway_bin);
         let mut sudo = Command::new("sudo");
         sudo.arg("env").arg("-i");
@@ -105,6 +106,10 @@ impl TestGitSshd {
         sudo.arg("MUSEHUB_GIT_SSH_RUNTIME_GROUP=git");
         sudo.arg("MUSEHUB_GIT_SSH_SUDO_SSHD=1");
         sudo.arg("MUSEHUB_GIT_STORAGE_SUDO_FALLBACK=1");
+        sudo.arg(format!(
+            "MUSEHUB_GIT_SSH_SERVER_LOG={}",
+            server_log.display()
+        ));
         sudo.arg(if std::env::var("MUSEHUB_GIT_SSH_TEST_SSHD_LOG").is_ok() {
             "MUSEHUB_GIT_SSH_SSHD_LOG=VERBOSE"
         } else {
@@ -250,7 +255,13 @@ pub fn activate_git_storage_group_membership() {
         return;
     }
     groups.push(gid);
-    let _ = unsafe { libc::setgroups(groups.len(), groups.as_ptr()) };
+    #[cfg(target_os = "linux")]
+    let group_count = groups.len();
+    #[cfg(not(target_os = "linux"))]
+    let Ok(group_count) = libc::c_int::try_from(groups.len()) else {
+        return;
+    };
+    let _ = unsafe { libc::setgroups(group_count, groups.as_ptr()) };
 }
 
 #[cfg(not(unix))]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getOrgSettings, patchOrgSettings } from '../api'
 import { useWorkspace } from '../app/WorkspaceProvider'
@@ -9,18 +9,60 @@ export function OrgSettingsPage() {
   const { t } = useTranslation()
   const { settings, orgDisplayName, setOrgDisplayName, setSettings, activeOrg } = useWorkspace()
   const [defaultCollabRole, setDefaultCollabRole] = useState('reader')
+  const [loadedOrg, setLoadedOrg] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const activeOrgRef = useRef(activeOrg)
+  activeOrgRef.current = activeOrg
 
   useEffect(() => {
-    void getOrgSettings(activeOrg).then((s) => {
-      setSettings(s)
-      setOrgDisplayName(s.display_name)
-      setDefaultCollabRole(s.preferences?.default_collaborator_role || 'reader')
-    })
-  }, [activeOrg, setOrgDisplayName, setSettings])
+    let cancelled = false
+    setLoadedOrg(null)
+    setSettingsError(null)
+    setSaved(false)
+    setSaving(false)
+    void getOrgSettings(activeOrg)
+      .then((orgSettings) => {
+        if (cancelled) return
+        setSettings(orgSettings)
+        setOrgDisplayName(orgSettings.display_name)
+        setDefaultCollabRole(orgSettings.preferences?.default_collaborator_role || 'reader')
+        setLoadedOrg(activeOrg)
+      })
+      .catch(() => {
+        if (!cancelled) setSettingsError(t('orgSettings.loadFailed'))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeOrg, setOrgDisplayName, setSettings, t])
 
-  if (!settings) {
+  if (loadedOrg !== activeOrg || !settings) {
+    if (settingsError) return <p role="alert">{settingsError}</p>
     return <p role="status">{t('common.loading')}</p>
+  }
+
+  async function saveSettings() {
+    const org = activeOrg
+    setSettingsError(null)
+    setSaved(false)
+    setSaving(true)
+    try {
+      const next = await patchOrgSettings(org, {
+        display_name: orgDisplayName,
+        preferences: { default_collaborator_role: defaultCollabRole },
+      })
+      if (activeOrgRef.current !== org) return
+      setSettings(next)
+      setOrgDisplayName(next.display_name)
+      setDefaultCollabRole(next.preferences?.default_collaborator_role || defaultCollabRole)
+      setSaved(true)
+    } catch {
+      if (activeOrgRef.current === org) setSettingsError(t('orgSettings.saveFailed'))
+    } finally {
+      if (activeOrgRef.current === org) setSaving(false)
+    }
   }
 
   return (
@@ -32,7 +74,10 @@ export function OrgSettingsPage() {
           <input
             data-testid="org-display-name"
             value={orgDisplayName}
-            onChange={(e) => setOrgDisplayName(e.target.value)}
+            onChange={(e) => {
+              setOrgDisplayName(e.target.value)
+              setSaved(false)
+            }}
           />
         </label>
         <label>
@@ -40,7 +85,10 @@ export function OrgSettingsPage() {
           <select
             data-testid="org-default-collab-role"
             value={defaultCollabRole}
-            onChange={(e) => setDefaultCollabRole(e.target.value)}
+            onChange={(e) => {
+              setDefaultCollabRole(e.target.value)
+              setSaved(false)
+            }}
           >
             {COLLAB_ROLES.map((role) => (
               <option key={role} value={role}>
@@ -52,31 +100,24 @@ export function OrgSettingsPage() {
         <button
           type="button"
           data-testid="save-org-settings"
-          onClick={() => {
-            setSettingsError(null)
-            void patchOrgSettings(activeOrg, {
-              display_name: orgDisplayName,
-              preferences: { default_collaborator_role: defaultCollabRole },
-            })
-              .then((next) => {
-                setSettings(next)
-                setDefaultCollabRole(
-                  next.preferences?.default_collaborator_role || defaultCollabRole,
-                )
-              })
-              .catch((e) =>
-                setSettingsError(
-                  e instanceof Error ? e.message : t('orgSettings.saveFailed'),
-                ),
-              )
-          }}
+          disabled={saving}
+          onClick={() => void saveSettings()}
         >
-          {t('orgSettings.save')}
+          {saving ? t('orgSettings.saving') : t('orgSettings.save')}
         </button>
         {settingsError ? <p role="alert">{settingsError}</p> : null}
+        {saved ? (
+          <p role="status" data-testid="org-settings-saved">
+            {t('orgSettings.saved')}
+          </p>
+        ) : null}
         <p data-testid="org-settings-executors">
-          pipeline: {settings.pipeline_executor} · agent: {settings.agent_executor} · compose:{' '}
-          {settings.compose_adapter_mode} ({settings.product_profile})
+          {t('orgSettings.runtime', {
+            pipeline: settings.pipeline_executor,
+            agent: settings.agent_executor,
+            compose: settings.compose_adapter_mode,
+            profile: settings.product_profile,
+          })}
         </p>
       </div>
     </section>

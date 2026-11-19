@@ -111,24 +111,43 @@ pub async fn seed_repo_required_checks(pool: &sqlx::PgPool, repo_id: Uuid) -> Re
     Ok(())
 }
 
-async fn insert_pr_checks(
+pub(crate) async fn insert_pr_checks_for_pipeline(
     pool: &sqlx::PgPool,
     org_id: Uuid,
     repo_id: Uuid,
     pr_id: Uuid,
     head_oid: &str,
 ) -> Result<(), AppError> {
+    let base_oid: Option<String> =
+        sqlx::query_scalar("SELECT base_oid FROM pull_requests WHERE id = $1 AND repo_id = $2")
+            .bind(pr_id)
+            .bind(repo_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    let Some(base_oid) = base_oid else {
+        return Err(AppError::Validation(
+            "pull request base is unavailable while seeding checks".to_string(),
+        ));
+    };
     let checks = sqlx::query_as::<_, (String,)>(
-        "SELECT check_name FROM repo_required_checks WHERE repo_id = $1",
+        "SELECT check_name FROM repo_required_checks WHERE repo_id = $1
+         UNION
+         SELECT check_name FROM pr_check_runs WHERE pr_id = $2 AND head_oid = $3",
     )
     .bind(repo_id)
+    .bind(pr_id)
+    .bind(head_oid)
     .fetch_all(pool)
     .await?;
     for (check_name,) in checks {
         sqlx::query(
-            "INSERT INTO pr_check_runs (id, org_id, repo_id, pr_id, check_name, head_oid, state)
-             VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-             ON CONFLICT (pr_id, check_name, head_oid) DO NOTHING",
+            "INSERT INTO pr_check_runs
+             (id, org_id, repo_id, pr_id, check_name, head_oid, base_oid, state)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+             ON CONFLICT (pr_id, check_name, head_oid) DO UPDATE
+             SET base_oid = EXCLUDED.base_oid, state = 'pending', reported_by = NULL,
+                 attempt_id = NULL, expires_at = NULL, updated_at = CURRENT_TIMESTAMP",
         )
         .bind(Uuid::new_v4())
         .bind(org_id)
@@ -136,6 +155,7 @@ async fn insert_pr_checks(
         .bind(pr_id)
         .bind(check_name)
         .bind(head_oid)
+        .bind(&base_oid)
         .execute(pool)
         .await?;
     }
@@ -260,12 +280,13 @@ pub async fn create_pull_request(
             return Err(AppError::NotFound);
         }
     }
+    let mut tx = state.pool.begin().await?;
     let number: (i64,) = sqlx::query_as(
         "UPDATE repositories SET next_pr_number = next_pr_number + 1
          WHERE id = $1 RETURNING next_pr_number - 1",
     )
     .bind(repo_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
     let pr_id = Uuid::new_v4();
     sqlx::query(
@@ -286,9 +307,38 @@ pub async fn create_pull_request(
     .bind(body.agent_run_id)
     .bind(&head_oid)
     .bind(&base_oid)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
-    insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    crate::audit::record_in_tx(
+        &mut tx,
+        Some(org_id),
+        Some(repo_id),
+        principal_id,
+        None,
+        "pull_request.created",
+        "pull_request",
+        pr_id,
+        crate::audit::request_id_from_headers(&headers),
+        "allow",
+        serde_json::json!({ "number": number.0, "title": body.title.trim() }),
+    )
+    .await?;
+    tx.commit().await?;
+    insert_pr_checks_for_pipeline(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    if let Err(error) = crate::pipeline::trigger_pr_validation(
+        &state,
+        org_id,
+        repo_id,
+        storage_key,
+        principal_id,
+        pr_id,
+        &body.source_branch,
+        &head_oid,
+    )
+    .await
+    {
+        tracing::warn!(pr_id = %pr_id, %error, "automatic PR workflow trigger did not start");
+    }
     let issue_number = issue_number_for(&state.pool, repo_id, issue_id).await?;
     Ok((
         StatusCode::CREATED,
@@ -395,7 +445,21 @@ pub async fn create_pull_request_in_repo(
     .bind(&base_oid)
     .execute(&state.pool)
     .await?;
-    insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    insert_pr_checks_for_pipeline(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+    if let Err(error) = crate::pipeline::trigger_pr_validation(
+        state,
+        org_id,
+        repo_id,
+        storage_key,
+        principal_id,
+        pr_id,
+        &params.source_branch,
+        &head_oid,
+    )
+    .await
+    {
+        tracing::warn!(pr_id = %pr_id, %error, "automatic PR workflow trigger did not start");
+    }
     Ok(json!({
         "id": pr_id.to_string(),
         "number": number.0,
@@ -466,6 +530,8 @@ pub async fn merge_pull_request_by_id(
             "expected_base_oid does not match pull request record".to_string(),
         ));
     }
+    let repository_write_lock =
+        crate::repository_lock::acquire_repository_write_lock(&state.pool, repo_id).await?;
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let live_head = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     if live_head != expected_head_oid {
@@ -491,6 +557,7 @@ pub async fn merge_pull_request_by_id(
     .bind(principal_id)
     .execute(&state.pool)
     .await?;
+    repository_write_lock.commit().await?;
     let number: (i64,) = sqlx::query_as("SELECT number FROM pull_requests WHERE id = $1")
         .bind(id)
         .fetch_one(&state.pool)
@@ -649,7 +716,21 @@ pub async fn sync_pull_request(
         };
         crate::discussion::mark_pr_comments_outdated(&mut *tx, pr_id, bumped).await?;
         tx.commit().await?;
-        insert_pr_checks(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+        insert_pr_checks_for_pipeline(&state.pool, org_id, repo_id, pr_id, &head_oid).await?;
+        if let Err(error) = crate::pipeline::trigger_pr_validation(
+            &state,
+            org_id,
+            repo_id,
+            storage_key,
+            principal_id,
+            pr_id,
+            &source_branch,
+            &head_oid,
+        )
+        .await
+        {
+            tracing::warn!(pr_id = %pr_id, %error, "automatic PR revision workflow trigger did not start");
+        }
         bumped
     };
     let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
@@ -758,15 +839,21 @@ pub async fn set_pull_request_check(
             "attempt_id required for success or failure".to_string(),
         ));
     }
-    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
-        "SELECT id, author_id, source_branch, state FROM pull_requests WHERE repo_id = $1 AND number = $2",
+    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>)>(
+        "SELECT id, author_id, source_branch, state, base_oid
+         FROM pull_requests WHERE repo_id = $1 AND number = $2",
     )
     .bind(repo_id)
     .bind(number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, author_id, source_branch, pr_state)) = pr else {
+    let Some((pr_id, author_id, source_branch, pr_state, base_oid)) = pr else {
         return Err(AppError::NotFound);
+    };
+    let Some(base_oid) = base_oid else {
+        return Err(AppError::Validation(
+            "pull request base is unavailable".to_string(),
+        ));
     };
     if pr_state != "open" {
         return Err(AppError::Validation("pull request is not open".to_string()));
@@ -778,7 +865,7 @@ pub async fn set_pull_request_check(
     let updated = sqlx::query(
         "UPDATE pr_check_runs SET state = $4, reported_by = $5, attempt_id = $6,
          expires_at = CURRENT_TIMESTAMP + INTERVAL '7 days', updated_at = CURRENT_TIMESTAMP
-         WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3",
+         WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3 AND base_oid = $7",
     )
     .bind(pr_id)
     .bind(&check_name)
@@ -786,6 +873,7 @@ pub async fn set_pull_request_check(
     .bind(&state_name)
     .bind(principal_id)
     .bind(attempt_id)
+    .bind(&base_oid)
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
@@ -855,15 +943,28 @@ pub async fn runner_report_check(
     let Some((repo_id, storage_key)) = row else {
         return Err(AppError::NotFound);
     };
-    let pipe = sqlx::query_as::<_, (String, Uuid, String, Uuid, String)>(
-        "SELECT state, run_attempt_id, source_oid, org_id, run_kind FROM pipeline_runs
-         WHERE id = $1 AND repo_id = $2",
+    let pipe = sqlx::query_as::<
+        _,
+        (
+            String,
+            Uuid,
+            String,
+            Uuid,
+            String,
+            Option<Uuid>,
+            Option<String>,
+        ),
+    >(
+        "SELECT state, run_attempt_id, source_oid, org_id, run_kind, pr_id, pr_base_oid
+         FROM pipeline_runs WHERE id = $1 AND repo_id = $2",
     )
     .bind(body.pipeline_run_id)
     .bind(repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pipe_state, run_attempt, pipe_source, pipe_org, run_kind)) = pipe else {
+    let Some((pipe_state, run_attempt, pipe_source, pipe_org, run_kind, pipe_pr_id, pipe_base_oid)) =
+        pipe
+    else {
         return Err(AppError::NotFound);
     };
     if run_kind != "pr_validation" {
@@ -894,18 +995,39 @@ pub async fn runner_report_check(
     if !matches!(state_name.as_str(), "success" | "failure") {
         return Err(AppError::Validation("invalid check state".to_string()));
     }
-    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
-        "SELECT id, author_id, source_branch, state FROM pull_requests WHERE repo_id = $1 AND number = $2",
+    let pr = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>)>(
+        "SELECT id, author_id, source_branch, state, base_oid
+         FROM pull_requests WHERE repo_id = $1 AND number = $2",
     )
     .bind(repo_id)
     .bind(body.pr_number)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((pr_id, author_id, source_branch, pr_state)) = pr else {
+    let Some((pr_id, author_id, source_branch, pr_state, base_oid)) = pr else {
         return Err(AppError::NotFound);
+    };
+    let Some(base_oid) = base_oid else {
+        return Err(AppError::Validation(
+            "pull request base is unavailable".to_string(),
+        ));
     };
     if pr_state != "open" {
         return Err(AppError::Validation("pull request is not open".to_string()));
+    }
+    if pipe_pr_id != Some(pr_id) {
+        return Err(AppError::Validation(
+            "pipeline run does not belong to this pull request".to_string(),
+        ));
+    }
+    let Some(pr_base_oid) = pipe_base_oid else {
+        return Err(AppError::Validation(
+            "pull request base is unavailable".to_string(),
+        ));
+    };
+    if base_oid != pr_base_oid {
+        return Err(AppError::Validation(
+            "pipeline run was created for a stale pull request base".to_string(),
+        ));
     }
     if pat_ctx.principal_id == author_id {
         return Err(AppError::Forbidden);
@@ -955,7 +1077,7 @@ pub async fn runner_report_check(
     let updated = sqlx::query(
         "UPDATE pr_check_runs SET state = $4, reported_by = $5, attempt_id = $6,
          expires_at = CURRENT_TIMESTAMP + INTERVAL '7 days', updated_at = CURRENT_TIMESTAMP
-         WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3",
+         WHERE pr_id = $1 AND check_name = $2 AND head_oid = $3 AND base_oid = $7",
     )
     .bind(pr_id)
     .bind(&body.check_name)
@@ -963,6 +1085,7 @@ pub async fn runner_report_check(
     .bind(&state_name)
     .bind(pat_ctx.principal_id)
     .bind(body.attempt_id)
+    .bind(&pr_base_oid)
     .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
@@ -1009,7 +1132,7 @@ async fn merge_preconditions(
             "SELECT COUNT(*) FROM repo_required_checks r
              JOIN pull_requests p ON p.id = $1
              JOIN pr_check_runs c ON c.pr_id = p.id AND c.check_name = r.check_name
-             WHERE c.head_oid = $2 AND c.state = 'success'
+             WHERE c.head_oid = $2 AND c.base_oid = p.base_oid AND c.state = 'success'
                AND c.reported_by IS NOT NULL AND c.reported_by <> p.author_id
                AND (c.expires_at IS NULL OR c.expires_at > CURRENT_TIMESTAMP)",
         )
@@ -1023,8 +1146,10 @@ async fn merge_preconditions(
             ));
         }
         let failing: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM pr_check_runs
-             WHERE pr_id = $1 AND head_oid = $2 AND state = 'failure'",
+            "SELECT COUNT(*) FROM pr_check_runs c
+             JOIN pull_requests p ON p.id = c.pr_id
+             WHERE c.pr_id = $1 AND c.head_oid = $2 AND c.base_oid = p.base_oid
+               AND c.state = 'failure'",
         )
         .bind(pr_id)
         .bind(head_oid)
@@ -1074,6 +1199,8 @@ pub async fn merge_pull_request(
     if pr_state != "open" {
         return Err(AppError::Validation("pull request is not open".to_string()));
     }
+    let repository_write_lock =
+        crate::repository_lock::acquire_repository_write_lock(&state.pool, repo_id).await?;
     let bare = bare_repo_path(&state.git_root, &storage_key);
     let live_head = git_rev_parse(&bare, &format!("refs/heads/{source_branch}"))?;
     let stored_head =
@@ -1102,6 +1229,7 @@ pub async fn merge_pull_request(
     .bind(principal_id)
     .execute(&state.pool)
     .await?;
+    repository_write_lock.commit().await?;
     let meta = sqlx::query_as::<_, (String, Option<Uuid>)>(
         "SELECT title, issue_id FROM pull_requests WHERE id = $1",
     )
@@ -1265,6 +1393,14 @@ fn merge_with_cas(
 }
 
 #[derive(Serialize)]
+pub struct PullRequestCheckStatus {
+    pub check_name: String,
+    pub state: Option<String>,
+    pub required: bool,
+    pub valid: bool,
+}
+
+#[derive(Serialize)]
 pub struct PullRequestDetail {
     #[serde(flatten)]
     pub view: PullRequestView,
@@ -1272,6 +1408,10 @@ pub struct PullRequestDetail {
     pub author_handle: String,
     pub base_oid: String,
     pub head_oid: String,
+    pub checks: Vec<PullRequestCheckStatus>,
+    pub has_current_approval: bool,
+    pub checks_gate_passed: bool,
+    pub merge_preconditions_passed: bool,
 }
 
 pub async fn get_pull_request(
@@ -1332,6 +1472,68 @@ pub async fn get_pull_request(
         .await?;
     let head = head_oid.unwrap_or_default();
     let base = base_oid.unwrap_or_default();
+    let check_rows = sqlx::query_as::<_, (String, bool, Option<String>, bool)>(
+        "WITH check_names AS (
+             SELECT check_name FROM repo_required_checks WHERE repo_id = $1
+             UNION
+             SELECT check_name FROM pr_check_runs WHERE pr_id = $2 AND head_oid = $3
+         )
+         SELECT names.check_name, (required.check_name IS NOT NULL), run.state,
+                COALESCE(
+                    run.state = 'success'
+                    AND run.reported_by IS NOT NULL
+                    AND run.reported_by <> $4
+                    AND run.base_oid = $5
+                    AND (run.expires_at IS NULL OR run.expires_at > CURRENT_TIMESTAMP),
+                    FALSE
+                )
+         FROM check_names names
+         LEFT JOIN repo_required_checks required
+           ON required.repo_id = $1 AND required.check_name = names.check_name
+         LEFT JOIN pr_check_runs run
+           ON run.pr_id = $2 AND run.head_oid = $3 AND run.check_name = names.check_name
+         ORDER BY names.check_name",
+    )
+    .bind(repo_id)
+    .bind(id)
+    .bind(&head)
+    .bind(author_id)
+    .bind(&base)
+    .fetch_all(&state.pool)
+    .await?;
+    let checks: Vec<PullRequestCheckStatus> = check_rows
+        .into_iter()
+        .map(
+            |(check_name, required, state, valid)| PullRequestCheckStatus {
+                check_name,
+                state,
+                required,
+                valid,
+            },
+        )
+        .collect();
+    let has_current_approval: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pr_reviews
+         WHERE pr_id = $1 AND decision = 'approve' AND reviewer_id <> $2
+           AND approved_head_oid = $3",
+    )
+    .bind(id)
+    .bind(author_id)
+    .bind(&head)
+    .fetch_one(&state.pool)
+    .await?;
+    let has_required_checks = checks.iter().any(|check| check.required);
+    let required_checks_passed = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.valid);
+    let no_failing_checks = !has_required_checks
+        || !checks
+            .iter()
+            .any(|check| check.state.as_deref() == Some("failure"));
+    let checks_gate_passed = required_checks_passed && no_failing_checks;
+    let has_current_approval = has_current_approval.0 > 0;
+    let merge_preconditions_passed = has_current_approval && checks_gate_passed;
     Ok(Json(PullRequestDetail {
         view: PullRequestView {
             id,
@@ -1350,6 +1552,10 @@ pub async fn get_pull_request(
         author_handle: author.0,
         base_oid: base,
         head_oid: head,
+        checks,
+        has_current_approval,
+        checks_gate_passed,
+        merge_preconditions_passed,
     }))
 }
 

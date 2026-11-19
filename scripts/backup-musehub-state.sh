@@ -32,9 +32,11 @@ else
 fi
 
 echo "=== archiving git + artifacts ==="
-tar -C "$(dirname "$MUSEHUB_GIT_ROOT")" -czf "$BACKUP_DIR/git-${TS}.tar.gz" "$(basename "$MUSEHUB_GIT_ROOT")"
+COPYFILE_DISABLE=1 tar -C "$(dirname "$MUSEHUB_GIT_ROOT")" -czf "$BACKUP_DIR/git-${TS}.tar.gz" "$(basename "$MUSEHUB_GIT_ROOT")"
 if [[ -d "$MUSEHUB_ARTIFACT_ROOT" ]]; then
-  tar -C "$(dirname "$MUSEHUB_ARTIFACT_ROOT")" -czf "$BACKUP_DIR/artifacts-${TS}.tar.gz" "$(basename "$MUSEHUB_ARTIFACT_ROOT")"
+  COPYFILE_DISABLE=1 tar --exclude="$(basename "$MUSEHUB_ARTIFACT_ROOT")/.workflow-cache" \
+    -C "$(dirname "$MUSEHUB_ARTIFACT_ROOT")" -czf "$BACKUP_DIR/artifacts-${TS}.tar.gz" \
+    "$(basename "$MUSEHUB_ARTIFACT_ROOT")"
 else
   echo "warn: artifact root missing ($MUSEHUB_ARTIFACT_ROOT), skipping" >&2
 fi

@@ -8,6 +8,7 @@ export const paths = {
   members: (org: string) => `/org/${org}/members`,
   audit: (org: string) => `/org/${org}/audit`,
   runner: (org: string) => `/org/${org}/runner`,
+  webhooks: (org: string) => `/org/${org}/webhooks`,
   accountSecurity: () => '/account/security',
   accountTokens: () => '/account/tokens',
   repoIssues: (org: string, slug: string) => `/org/${org}/repos/${slug}/issues`,

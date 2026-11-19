@@ -1,6 +1,6 @@
 [package]
 name = "musehub-runnerd"
-version = "0.2.0-rc1"
+version = "0.20.0-rc6"
 edition = "2021"
 
 [dependencies]

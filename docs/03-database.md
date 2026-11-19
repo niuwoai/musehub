@@ -1,6 +1,6 @@
 # MuseHub 数据库设计
 
-> 设计基线 0.1｜2026-10-30。逻辑模型与关键约束供实施使用。`migrations/0001_common` 与 `migrations/0002_identity` 已在隔离 PostgreSQL 17 上完成 up、down、up；第 4 节及之后的表仍是设计，不是已执行 schema。
+> 设计基线 0.1｜2026-10-30。本文描述逻辑模型与关键约束，具体已落地结构以 migrations 为准；迁移 `0046_issue_workflow_states` 扩展 Issue 状态约束至完整工作流，`0047_oidc_identity_link` 为一次性 OIDC 登录尝试增加自助绑定目标，`0048_release_integrity` 为 Release 创建请求保存 SHA-256 并唯一约束仓库内 tag 名。2026-11-19 已在本轮专用 PostgreSQL 17 数据库完成 `0001`–`0048` 全量 up/down/up，3 项 migration 验收通过。`0045_webhook_notifications` 新增审计驱动的 Webhook 订阅与持久投递表，并以复合外键约束订阅与仓库的组织归属。
 
 ## 1. 通用约定
 
@@ -52,11 +52,18 @@ erDiagram
 | principals | kind `human/service/agent`；handle TEXT；display_name TEXT；status `active/disabled`；row_version BIGINT | 全局 handle 规范化唯一；索引 status |
 | user_credentials | principal_id FK；password_hash TEXT；password_changed_at TIMESTAMPTZ | principal_id 唯一；仅 human 可用，由服务验证；无明文密码 |
 | sessions | principal_id FK；token_hash BYTEA；expires_at TIMESTAMPTZ；revoked_at?；last_seen_at? | token_hash 唯一；索引 principal_id、expires_at |
+| external_identities | principal_id FK；issuer TEXT；subject TEXT | `(issuer, subject)` 唯一；索引 principal_id；OIDC/SAML 登录主体映射 |
+| oidc_login_attempts | state_hash BYTEA PK；binding_hash BYTEA；nonce；pkce_verifier；return_path；link_principal_id? FK；link_session_token_hash? BYTEA；expires_at | 一次性 state/browser binding；自助绑定同时校验并锁定原登录 session；按 expires_at 清理；migration `0031`、`0047` |
+| github_login_attempts | state_hash BYTEA PK；binding_hash BYTEA；return_path TEXT；expires_at TIMESTAMPTZ | 一次性 state + 浏览器绑定校验后删除；按 expires_at 清理；migration `0037_github_oauth_login` |
 | organizations | slug TEXT；display_name TEXT；status TEXT；row_version BIGINT | 规范化 slug 唯一 |
 | memberships | org_id FK；principal_id FK；role `owner/admin/member`；status TEXT | UNIQUE(org_id,principal_id)；最后一位 owner 不可移除（事务锁组织） |
 | access_tokens | principal_id FK；org_id? FK；name TEXT；token_prefix TEXT；token_hash BYTEA；scopes TEXT[]；scope_mode `selected/all_accessible` DEFAULT selected；expires_at；revoked_at?；last_used_at?；bound_run_id? UUID | token_hash 唯一；org_id 为空只用于人类跨组织基础 token，仍逐资源授权；run 绑定由服务校验并可复合引用 |
 | token_repository_grants | token_id FK；org_id FK；repo_id FK | UNIQUE(token_id,repo_id)；token 有限仓库模式必须列明授权，空列表不隐式全权 |
 | ssh_keys | principal_id FK；name TEXT；public_key TEXT；fingerprint TEXT；revoked_at? | fingerprint 全局唯一；公钥格式/算法白名单 |
+| scim_tokens | org_id FK；created_by FK；token_prefix TEXT；token_hash BYTEA；expires_at；revoked_at?；last_used_at? | token_hash 唯一；明文只在创建响应返回 |
+| scim_identities | org_id FK；principal_id FK；external_id TEXT；display_name TEXT | UNIQUE(org_id,external_id)、UNIQUE(org_id,principal_id) |
+| scim_groups | org_id FK；external_id?；display_name TEXT | UNIQUE(org_id,id)、UNIQUE(org_id,external_id) |
+| scim_group_members | org_id；group_id FK；principal_id FK | 复合外键要求 Group 和 SCIM User 属于同一组织；唯一键防重复成员 |
 | repository_grants | org_id FK；repo_id FK；principal_id FK；role `reader/developer/maintainer` | UNIQUE(repo_id,principal_id)；索引 principal_id,repo_id |
 
 PAT scopes 是能力集合，不替代对象授权；token_repository_grants 与 access_tokens.scopes 的交集决定权限。全仓库 token 需显式设置 scope_mode=`all_accessible`，默认 selected，禁止空 grants 被解释为无限权限。绑定任务的令牌必须 selected 且限定单仓库/分支，分支限制由运行上下文进一步约束。
@@ -75,7 +82,7 @@ tag 保护可以复用 ref_pattern=`refs/tags/*`。首版不将 commits、trees�
 
 | 表 | 字段 | 约束/索引 |
 |---|---|---|
-| issues | org_id；repo_id；number BIGINT；author_id FK；assignee_id? FK；state；current_revision_id? FK issue_revisions；resolution_reason?；row_version | UNIQUE(repo_id,number)；索引(repo_id,state,created_at,id)、(assignee_id,state) |
+| issues | org_id；repo_id；number BIGINT；author_id FK；assignee_id? FK；state (`open/in_progress/in_review/resolved/closed`)；labels TEXT[]；close_reason?；current_revision_id? FK issue_revisions；row_version | `0046_issue_workflow_states` 扩展状态 CHECK；UNIQUE(repo_id,number)；索引(repo_id,state,created_at,id)、(assignee_id,state) |
 | issue_revisions | org_id；repo_id；issue_id FK；revision INT；title TEXT；body TEXT；author_id FK；content_hash CHAR(64) | UNIQUE(issue_id,revision)；不可变；current_revision 必须属于该 issue |
 | acceptance_criteria | org_id；repo_id；issue_revision_id FK；ordinal INT；description TEXT；verification_method TEXT；required BOOL | UNIQUE(issue_revision_id,ordinal)；不可变；验收结果另记 evidence |
 | labels | org_id；repo_id；name TEXT；color TEXT | UNIQUE(repo_id,name) |
@@ -104,10 +111,10 @@ issue_revisions 与 issues 有初始化循环：事务内先创建 issue（curre
 |---|---|---|
 | agent_profiles | org_id；service_principal_id FK；name；adapter_kind；config_version INT；config_snapshot JSONB；model_endpoint_ref?；credential_secret_id? FK secrets；capabilities JSONB；enabled BOOL；row_version | UNIQUE(org_id,name)；配置更新产生新 version，运行快照不随之变化 |
 | agent_profile_grants | org_id；agent_profile_id FK；principal_id FK | UNIQUE(agent_profile_id,principal_id)；组织 owner 可管理但实际使用仍审计 |
-| agent_runs | org_id；repo_id；issue_revision_id FK；plan_id FK；pr_id? FK；profile_id FK；requested_by FK；base_oid；work_branch；input_snapshot JSONB；state；time_limit_seconds INT；max_steps INT；token_limit? BIGINT；cost_limit_microusd? BIGINT；usage JSONB；result_commit_oid?；error_code?；row_version | work_branch 在 repo 内唯一；CHECK 限额非负；索引(repo_id,state,created_at,id) |
+| agent_runs | org_id；repo_id；issue_revision_id FK；plan_id FK；pr_id? FK；profile_id FK；requested_by FK；base_oid；work_branch；input_snapshot JSONB；state；time_limit_seconds INT；max_steps INT；token_limit? BIGINT；cost_limit_microusd? BIGINT；usage JSONB；usage_evidence? JSONB；result_commit_oid?；error_code?；row_version | work_branch 在 repo 内唯一；CHECK 限额非负；索引(repo_id,state,created_at,id) |
 | agent_messages | org_id；repo_id；agent_run_id FK；sequence BIGINT；kind `input/progress/needs_input/summary/error`；author_id? FK；body TEXT；metadata JSONB | UNIQUE(agent_run_id,sequence)；限制长度；不保存隐藏推理过程 |
 
-input_snapshot 保存 profile config version、Agent 程序版本、模型 ID、运行镜像摘要、提示词模板 hash、允许工具、凭据引用；不保存凭据明文。多轮恢复由 job_attempts 表达，新增需求版本应建立新 run。
+input_snapshot 保存 profile config version、Agent 程序版本、模型 ID、运行镜像摘要、提示词模板 hash、允许工具、凭据引用；不保存凭据明文。`usage_evidence` 仅保存 Codex `turn.completed` 事件来源和 provider 上报的 usage JSON，不保存 prompt 或对话输出；它用于与 `usage_tokens` 交叉核对，不构成签名或防篡改证明。多轮恢复由 job_attempts 表达，新增需求版本应建立新 run。
 
 ## 8. 工作流、调度与制品
 
@@ -120,12 +127,14 @@ input_snapshot 保存 profile config version、Agent 程序版本、模型 ID、
 | runners | org_id；name；kind `build/agent/deploy`；labels TEXT[]；trust_class；identity_fingerprint；status；last_seen_at；max_concurrency INT | UNIQUE(identity_fingerprint)；索引(org_id,status,last_seen_at) |
 | job_attempts | org_id；repo_id；job_id FK；runner_id FK；attempt_no INT；fencing_token BIGINT；lease_expires_at；state；started_at?；ended_at?；exit_code?；error_code?；result JSONB | UNIQUE(job_id,attempt_no)、UNIQUE(job_id,fencing_token)；索引(state,lease_expires_at,id) |
 | log_chunks | org_id；repo_id；attempt_id FK；sequence BIGINT；storage_key；sha256；byte_length BIGINT；first_line BIGINT；line_count BIGINT | UNIQUE(attempt_id,sequence)；索引(attempt_id,first_line)；日志对象先持久化再登记 |
-| artifacts | org_id；repo_id；attempt_id FK；name；kind `file/junit/oci_image`；storage_uri；sha256；byte_length BIGINT；state `uploading/ready/quarantined`；retention_until? | UNIQUE(attempt_id,name)；索引(repo_id,sha256)；只有 ready 可加入 Release |
+| artifacts | org_id；repo_id；pipeline_run_id FK；attempt_id? FK；workflow_attempt_id? FK；name；kind `file/junit/oci_image`；storage_uri；sha256；byte_length BIGINT；state `uploading/ready/quarantined`；retention_until? | release artifact 按 (pipeline_run_id,name) 唯一；workflow artifact 按 (workflow_attempt_id,name) 唯一；索引(repo_id,sha256)；只有 ready 可加入 Release |
 | cache_entries | org_id；repo_id；trust_class；cache_key；storage_key；sha256；byte_length；expires_at | UNIQUE(repo_id,trust_class,cache_key)；索引 expires_at；更新用 CAS 或不可变 key |
 
 current_attempt 需要 deferred FK/归属 trigger 确认属于本 job；完成回报更新必须比较 attempt、fencing token、lease 与当前状态。jobs.current_attempt_id 为 null 时仅允许 queued/blocked 等未领取状态。
 
 状态全集：pipeline 为 queued/running/succeeded/failed/cancel_requested/canceled；job 为 blocked/queued/running/waiting_input/succeeded/failed/cancel_requested/canceled/unknown；attempt 为 leased/running/succeeded/failed/canceled/lost。pipeline 只有所有必需 job 成功才成功；上游失败引起的未执行 job 记 canceled 并保留 dependency_failed 原因。unknown job 必须先对账，不直接自动重试；lost attempt 也不证明外部副作用未发生。
+
+当前实现迁移 0038–0044 分别保存 workflow commit snapshot、workflow jobs/dependencies/attempts、pipeline trigger metadata、SSH ref trigger outbox、按 workflow job/attempt 持久化的独立日志，以及 workflow attempt 的 JSONB result 和关联 artifact/JUnit kind。`git_ref_trigger_outbox` 按 `(repo_id, git_ref, source_oid)` 幂等，保存 actor 与 storage key；控制面领取 pending 或超时 processing 行并调用 pipeline dispatcher。它不是 Git 与 PostgreSQL 的原子提交，receive-pack 与写入 outbox 之间仍有崩溃窗口；控制面每 60 秒扫描现存 heads/tags 并幂等补入 outbox，首次扫描会为没有历史 outbox 记录的 refs 触发一次 workflow。
 
 published Release 和 ready artifact 的来源必须同 repo 且 commit 匹配；仅有复合 FK 不能验证 Git OID 可达关系，这些条件由应用服务在持锁操作中核验并记录审计。SQL 约束与领域核验的职责不能相互替代。
 
@@ -133,7 +142,7 @@ published Release 和 ready artifact 的来源必须同 repo 且 commit 匹配�
 
 | 表 | 字段 | 约束/索引 |
 |---|---|---|
-| releases | org_id；repo_id；version；tag_name；commit_oid；pipeline_run_id FK；title；notes；state；published_by? FK；published_at?；manifest_hash?；row_version | UNIQUE(repo_id,version)、UNIQUE(repo_id,tag_name)；发布前核验 source_oid 一致 |
+| releases | org_id；repo_id；version；tag_name；commit_oid；pipeline_run_id FK；title；notes；state；published_by? FK；published_at?；manifest_hash?；create_request_sha256?；row_version | UNIQUE(repo_id,version)、`0048` UNIQUE(repo_id,tag_name)；相同版本仅允许相同请求摘要重放；发布前核验 source_oid 一致 |
 | release_assets | org_id；repo_id；release_id FK；artifact_id FK；name；digest；media_type | UNIQUE(release_id,name)；资产与 release 同 repo；发布后不可替换 |
 | release_pr_links | org_id；repo_id；release_id FK；pr_id FK；merged_commit_oid | UNIQUE(release_id,pr_id)；验证该合并提交可达 release.commit；用于反查 Issue |
 | environments | org_id；repo_id；name；kind `test/protected`；runner_id FK；target_config JSONB；policy_version BIGINT；current_config_id? FK environment_configs；current_deployment_id? FK；row_version | UNIQUE(repo_id,name)；target_config 仅主机/目标身份，不放明文凭据 |
@@ -155,6 +164,8 @@ secrets 的“更新”插入新版本；发布/部署快照保存准确 secret 
 | consumer_receipts | event_id FK；consumer_name；processed_at | UNIQUE(event_id,consumer_name)；与消费引起的数据库写入同事务 |
 | idempotency_records | principal_id FK；org_id? FK；tool_name；key TEXT；request_hash；state `processing/completed/failed`；response JSONB?；resource_id? UUID；expires_at | UNIQUE(principal_id,tool_name,key)；不同 hash 复用 key 返回冲突；索引 expires_at |
 | audit_events | org_id? FK；repo_id? FK；actor_id FK；initiator_id? FK；action；resource_type；resource_id UUID；request_id；decision；metadata JSONB；occurred_at | 仅追加；索引(org_id,occurred_at,id)、(resource_type,resource_id,occurred_at,id) |
+| webhook_subscriptions | org_id FK；repo_id?；endpoint_url；encrypted_secret BYTEA；event_types TEXT[]；enabled BOOL；created_by FK | `0045_webhook_notifications`；复合 FK `(org_id,repo_id)`；管理员写权限；AES-256-GCM 密钥从独立环境变量注入 |
+| webhook_deliveries | subscription_id FK；audit_event_id FK；status；attempt_count；available_at；locked_until；response_status?；last_error? | 唯一(subscription_id,audit_event_id)；审计插入触发器同事务入队；`FOR UPDATE SKIP LOCKED` 领取，最多 8 次退避重试 |
 
 audit resource_id 和 event aggregate_id 为多态引用，无法直接 FK；必须从领域服务创建，记录安全摘要，归档资源也保留 ID。审计表只追加不意味着数据库管理员无法篡改；防篡改归档可作为后续增强。
 

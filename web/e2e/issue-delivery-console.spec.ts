@@ -54,7 +54,16 @@ test.describe('Issue delivery console', () => {
     await expect(assignee).toContainText('admin')
     await expect(assignee).toContainText(member)
     await assignee.selectOption(member)
+    const patchResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PATCH' &&
+        response.url().includes('/issues/1'),
+    )
     await page.getByTestId('issue-save-meta').click()
+    const patchRequest = await patchResponse
+    expect(patchRequest.request().postDataJSON().assignee_handle).toBe(member)
+    const savedIssue = await patchRequest.json()
+    expect(savedIssue.assignee_handle).toBe(member)
     await expect(assignee).toHaveValue(member)
     await page.goto(`/org/demo/repos/${slug}/issues`)
     await expect(page.getByTestId('issue-assignee-1')).toContainText(`@${member}`)
@@ -88,8 +97,18 @@ test.describe('Issue delivery console', () => {
     await page.goto(`/org/demo/repos/${slug}/issues`)
     await createIssueViaUi(page, 'Issue delivery detail', { slug })
     await page.getByTestId('issue-link-1').click()
-    await page.getByTestId('issue-assignee').selectOption('admin')
+    const assignee = page.getByTestId('issue-assignee')
+    await assignee.selectOption('admin')
+    const patchResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PATCH' &&
+        response.url().includes('/issues/1'),
+    )
     await page.getByTestId('issue-save-meta').click()
+    const patchRequest = await patchResponse
+    expect(patchRequest.request().postDataJSON().assignee_handle).toBe('admin')
+    expect((await patchRequest.json()).assignee_handle).toBe('admin')
+    await expect(assignee).toHaveValue('admin')
     await page.goto(`/org/demo/repos/${slug}/issues`)
     await page.getByTestId('issue-filter-assignee').selectOption('admin')
     await page.getByTestId('issue-apply-filters').click()

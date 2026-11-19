@@ -44,11 +44,12 @@ PR 的 CI 失败 → 在 PR 中显示失败摘要、日志定位和关联 job �
 | IAM-01 | 本地登录、组织成员、固定角色、会话撤销 | 禁用用户后新请求与新 Git 会话被拒绝；退出后会话失效 |
 | IAM-02 | PAT、SSH key、服务/Agent 身份 | PAT 有期限、scope、仓库限制；只展示一次明文；key 可撤销 |
 | IAM-03 | 授权与审计 | Web/REST/MCP/Git 结果一致；跨组织 ID 猜测不能读取数据 |
+| IAM-04 | GitHub OAuth App 登录与 OIDC 自助身份绑定 | OAuth state 与浏览器绑定一次性消费；GitHub 按数字 ID 绑定身份；OIDC `(issuer, subject)` 仅能由已登录用户绑定到当前账号，回调时原 session 仍须有效；跨账号绑定冲突时拒绝；不按邮箱自动关联；首次 provision 不自动加入组织；生产 callback 使用 HTTPS，本地 loopback 可用 HTTP |
 | GIT-01 | 私有仓库创建、空仓库、默认分支 | 初始化失败可重试；用户路径不能决定磁盘绝对路径 |
 | GIT-02 | HTTPS/SSH clone、fetch、push | 标准 Git 客户端端到端通过；拒绝交互式 SSH shell |
 | GIT-03 | 文件、目录、提交、历史与 diff | 固定到 commit；二进制/大文件显示元数据并限制渲染 |
 | GIT-04 | 保护分支和标签 | 直推、删分支、force push、HTTP/SSH/API 合并统一受控 |
-| GIT-05 | 手动迁入与备份恢复 | 支持客户端 mirror push 迁入 Git refs；完整恢复演练通过 |
+| GIT-05 | 手动迁入与备份恢复 | 新仓库允许一次客户端 `git push --mirror` 导入 refs，之后默认分支继续受保护；内部 refs 对客户端隐藏且拒绝写入；完整恢复演练通过 |
 | ISS-01 | Issue CRUD、讨论、标签、一个负责人 | 仓库内唯一编号；列表筛选与游标分页；关闭原因明确 |
 | ISS-02 | 需求版本、验收条目、计划 | 启动执行冻结版本与计划；编辑不改变已有任务依据 |
 | PR-01 | 同仓库分支 PR、diff、行评论、审查 | 评论绑定 diff 版本，旧位置显示过期；作者不得自我批准 |
@@ -79,7 +80,7 @@ PR 的 CI 失败 → 在 PR 中显示失败摘要、日志定位和关联 job �
 | Windows/macOS Runner、多地域 HA | 首版 Linux 单控制面；明确备份恢复能力 |
 | K8s/Helm、蓝绿/金丝雀、多服务发布编排 | 首版单主机 Compose；不承诺零停机 |
 | 内建 OCI/通用包注册表 | 复用外部私有 Registry；平台存 Release 元数据与普通资产 |
-| SAML/SCIM、复杂自定义角色 | 本地账号 + 固定角色；企业 IdP 进入下一阶段 |
+| 真实企业 IdP 联调、SAML/SCIM 管理面、复杂自定义角色 | V1 先支持本地账号与 GitHub OAuth App；企业 IdP 互操作延期 |
 | 多 Agent 自治团队、向量检索、IDE | 单执行链 + 反馈轮次；文件与精确文本搜索 |
 
 ## 4. 权限模型

@@ -13,6 +13,7 @@ use crate::pr;
 use crate::security;
 use crate::AppState;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn issue_create(
     state: &Arc<AppState>,
     access: &RepoAccess,
@@ -20,10 +21,20 @@ pub async fn issue_create(
     title: &str,
     body: &str,
     criteria: &[CriterionInput],
+    labels: &[String],
+    assignee_id: Option<Uuid>,
 ) -> Result<Value, AppError> {
     if title.trim().is_empty() {
         return Err(AppError::Validation("title required".to_string()));
     }
+    crate::issues::validate_labels(labels)?;
+    let assignee_id = match assignee_id {
+        Some(id) => Some(
+            crate::issues::repo_assignee_id_for_id(&state.pool, access.org_id, access.repo_id, id)
+                .await?,
+        ),
+        None => None,
+    };
     let mut tx = state.pool.begin().await?;
     let number: (i64,) = sqlx::query_as(
         "UPDATE repositories SET next_issue_number = next_issue_number + 1
@@ -35,8 +46,8 @@ pub async fn issue_create(
     let title = title.trim().to_string();
     let issue_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body, labels, assignee_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(issue_id)
     .bind(access.org_id)
@@ -45,6 +56,8 @@ pub async fn issue_create(
     .bind(principal_id)
     .bind(&title)
     .bind(body)
+    .bind(labels)
+    .bind(assignee_id)
     .execute(&mut *tx)
     .await?;
     let revision_id = Uuid::new_v4();
@@ -93,11 +106,14 @@ pub async fn issue_create(
         "number": number.0,
         "title": title,
         "state": "open",
+        "labels": labels,
+        "assignee_id": assignee_id.map(|id| id.to_string()),
         "current_revision_id": revision_id.to_string()
     }))
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, rmcp::schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PlanStepInput {
     pub key: String,
     pub title: String,
@@ -241,29 +257,6 @@ pub async fn agent_run_start(
     budget_tokens: Option<u64>,
     adapter: Option<&str>,
 ) -> Result<Value, AppError> {
-    let issue =
-        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
-            .bind(issue_id)
-            .bind(access.repo_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if issue.is_none() {
-        return Err(AppError::NotFound);
-    }
-    let plan_ok = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM implementation_plans p
-         JOIN issues i ON i.id = $1 AND i.repo_id = $2
-         WHERE p.state = 'accepted' AND p.issue_revision_id = i.current_revision_id",
-    )
-    .bind(issue_id)
-    .bind(access.repo_id)
-    .fetch_one(&state.pool)
-    .await?;
-    if plan_ok.0 == 0 {
-        return Err(AppError::Validation(
-            "agent run requires accepted plan on current issue revision".to_string(),
-        ));
-    }
     let storage_key: (Uuid,) = sqlx::query_as("SELECT storage_key FROM repositories WHERE id = $1")
         .bind(access.repo_id)
         .fetch_one(&state.pool)
@@ -280,7 +273,10 @@ pub async fn agent_run_start(
     let remote_agent = crate::runner_api::agent_executor_remote();
     let instance_id = state.instance_id;
     let adapter_kind = crate::agent_adapter::adapter_kind_for_request(adapter);
-    let message_owned = message.to_string();
+    let mut tx = state.pool.begin().await?;
+    let message_owned =
+        crate::issues::frozen_agent_task_message(&mut tx, access.repo_id, issue_id, message)
+            .await?;
     if remote_agent {
         sqlx::query(
             "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message)
@@ -295,7 +291,7 @@ pub async fn agent_run_start(
         .bind(&branch)
         .bind(budget_tokens.map(|v| v as i64))
         .bind(&message_owned)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     } else {
         sqlx::query(
@@ -314,8 +310,11 @@ pub async fn agent_run_start(
         .bind(&message_owned)
         .bind(instance_id)
         .bind(crate::lease::lease_secs())
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    }
+    tx.commit().await?;
+    if !remote_agent {
         let supervisor = state.supervisor.clone();
         let pool = state.pool.clone();
         let git_root = state.git_root.clone();
@@ -502,7 +501,11 @@ pub async fn pipeline_run(
         storage_key.0,
         target_oid.to_string(),
         workflow,
+        None,
         "release_build",
+        None,
+        None,
+        None,
         principal_id,
         Some(merged_pr_id),
         issue_id,
@@ -593,11 +596,22 @@ fn normalize_repo_slug(slug: &str) -> Result<String, AppError> {
     Ok(slug)
 }
 
+#[derive(Debug, Clone, Default)]
+pub enum IssueAssigneePatch {
+    #[default]
+    Unchanged,
+    Clear,
+    Set(Uuid),
+}
+
 #[derive(Debug, Default)]
 pub struct IssueUpdatePatch {
     pub title: Option<String>,
     pub body: Option<String>,
     pub state: Option<String>,
+    pub labels: Option<Vec<String>>,
+    pub resolution_reason: Option<String>,
+    pub assignee_id: IssueAssigneePatch,
 }
 
 pub async fn repository_create(
@@ -680,15 +694,38 @@ pub async fn issue_update(
     expected_version: i32,
     patch: IssueUpdatePatch,
 ) -> Result<Value, AppError> {
-    let row = sqlx::query_as::<_, (Uuid, i64, String, String, Option<Uuid>)>(
-        "SELECT i.id, i.number, i.title, i.state, i.current_revision_id
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i64,
+            String,
+            String,
+            Option<Uuid>,
+            Option<Uuid>,
+            Vec<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT i.id, i.number, i.title, i.state, i.current_revision_id, i.assignee_id,
+                i.labels, i.close_reason
          FROM issues i WHERE i.id = $1 AND i.repo_id = $2",
     )
     .bind(issue_id)
     .bind(access.repo_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((id, number, title, issue_state, current_revision_id)) = row else {
+    let Some((
+        id,
+        number,
+        title,
+        issue_state,
+        current_revision_id,
+        assignee_id,
+        labels,
+        close_reason,
+    )) = row
+    else {
         return Err(AppError::NotFound);
     };
     let revision_id = current_revision_id
@@ -708,11 +745,25 @@ pub async fn issue_update(
             "expected_version {expected_version} does not match current revision {revision}"
         )));
     }
-    if patch.title.is_none() && patch.body.is_none() && patch.state.is_none() {
+    if patch.title.is_none()
+        && patch.body.is_none()
+        && patch.state.is_none()
+        && patch.labels.is_none()
+        && patch.resolution_reason.is_none()
+        && matches!(&patch.assignee_id, IssueAssigneePatch::Unchanged)
+    {
         return Err(AppError::Validation(
             "patch must include at least one field".to_string(),
         ));
     }
+    let new_assignee_id = match patch.assignee_id {
+        IssueAssigneePatch::Unchanged => assignee_id,
+        IssueAssigneePatch::Clear => None,
+        IssueAssigneePatch::Set(id) => Some(
+            crate::issues::repo_assignee_id_for_id(&state.pool, access.org_id, access.repo_id, id)
+                .await?,
+        ),
+    };
     let mut new_title = title;
     let rev_body_snapshot = rev_body.clone();
     let mut new_body = rev_body;
@@ -733,15 +784,36 @@ pub async fn issue_update(
             content_changed = true;
         }
     }
+    let state_was_patched = patch.state.is_some();
     let new_state = if let Some(s) = patch.state {
         let s = s.trim().to_lowercase();
-        if !matches!(s.as_str(), "open" | "closed") {
+        if !matches!(
+            s.as_str(),
+            "open" | "in_progress" | "in_review" | "resolved" | "closed"
+        ) {
             return Err(AppError::Validation("invalid issue state".to_string()));
         }
         s
     } else {
         issue_state.clone()
     };
+    let resolution_reason = patch
+        .resolution_reason
+        .as_deref()
+        .map(crate::issues::normalize_close_reason)
+        .transpose()?;
+    crate::issues::validate_issue_resolution_reason(
+        &new_state,
+        resolution_reason.as_deref(),
+        state_was_patched,
+    )?;
+    let new_close_reason = if matches!(new_state.as_str(), "resolved" | "closed") {
+        resolution_reason.or_else(|| close_reason.clone())
+    } else {
+        None
+    };
+    let new_labels = patch.labels.unwrap_or_else(|| labels.clone());
+    crate::issues::validate_labels(&new_labels)?;
     let mut tx = state.pool.begin().await?;
     let mut out_revision = revision;
     let mut out_revision_id = revision_id;
@@ -773,7 +845,7 @@ pub async fn issue_update(
         .execute(&mut *tx)
         .await?;
         copy_criteria_to_revision(
-            &state.pool,
+            &mut tx,
             access.org_id,
             access.repo_id,
             revision_id,
@@ -781,12 +853,32 @@ pub async fn issue_update(
         )
         .await?;
     }
-    if new_state != issue_state {
-        sqlx::query("UPDATE issues SET state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1")
+    if new_state != issue_state || new_close_reason != close_reason {
+        sqlx::query(
+            "UPDATE issues SET state = $2, close_reason = $3, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&new_state)
+        .bind(&new_close_reason)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if new_labels != labels {
+        sqlx::query("UPDATE issues SET labels = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1")
             .bind(id)
-            .bind(&new_state)
+            .bind(&new_labels)
             .execute(&mut *tx)
             .await?;
+    }
+    if new_assignee_id != assignee_id {
+        sqlx::query(
+            "UPDATE issues SET assignee_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        )
+        .bind(id)
+        .bind(new_assignee_id)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(json!({
@@ -795,6 +887,9 @@ pub async fn issue_update(
         "title": new_title,
         "state": new_state,
         "body": new_body,
+        "labels": new_labels,
+        "resolution_reason": new_close_reason,
+        "assignee_id": new_assignee_id.map(|id| id.to_string()),
         "current_revision_id": out_revision_id.to_string(),
         "version": out_revision,
     }))

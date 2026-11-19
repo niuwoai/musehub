@@ -1,6 +1,6 @@
 [package]
 name = "musehub-agent-adapter"
-version = "0.2.0-rc1"
+version = "0.20.0-rc6"
 edition = "2021"
 
 [dependencies]
@@ -9,8 +9,10 @@ tempfile = "3"
 musehub-core = { path = "../musehub-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
 
 [[bin]]
 name = "musehub-agent-reference"
@@ -35,6 +37,10 @@ path = "src/bin/musehub_pipeline_slow.rs"
 [[bin]]
 name = "musehub-pipeline-oci"
 path = "src/bin/musehub_pipeline_oci.rs"
+
+[[bin]]
+name = "musehub-pipeline-job"
+path = "src/bin/musehub_pipeline_job.rs"
 
 [[bin]]
 name = "musehub-compose-mock"

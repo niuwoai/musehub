@@ -1,7 +1,14 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { Panel } from '../components/Panel'
 import { useWorkspace } from '../app/WorkspaceProvider'
-import { createSshKey, listSshKeys, revokeSshKey, type SshKey } from '../api'
+import {
+  createSshKey,
+  getOidcIdentityLinkStatus,
+  listSshKeys,
+  revokeSshKey,
+  type OidcIdentityLinkStatus,
+  type SshKey,
+} from '../api'
 
 export function AccountSecurityPage() {
   const {
@@ -15,6 +22,17 @@ export function AccountSecurityPage() {
   const [keyName, setKeyName] = useState('laptop')
   const [publicKey, setPublicKey] = useState('')
   const [sshError, setSshError] = useState<string | null>(null)
+  const [oidcStatus, setOidcStatus] = useState<OidcIdentityLinkStatus | null>(null)
+  const [oidcError, setOidcError] = useState<string | null>(null)
+
+  const reloadIdentityStatus = useCallback(async () => {
+    setOidcError(null)
+    try {
+      setOidcStatus(await getOidcIdentityLinkStatus())
+    } catch (err) {
+      setOidcError(err instanceof Error ? err.message : t('externalIdentity.loadFailed'))
+    }
+  }, [t])
 
   const reloadKeys = useCallback(async () => {
     setKeys(await listSshKeys())
@@ -23,6 +41,10 @@ export function AccountSecurityPage() {
   useEffect(() => {
     void reloadKeys().catch(() => {})
   }, [reloadKeys])
+
+  useEffect(() => {
+    void reloadIdentityStatus()
+  }, [reloadIdentityStatus])
 
   async function onAddKey(e: FormEvent) {
     e.preventDefault()
@@ -66,6 +88,21 @@ export function AccountSecurityPage() {
           {t('accountSecurity.changePassword')}
         </button>
       </form>
+
+      <section data-testid="external-identity-section" style={{ marginTop: '2rem' }}>
+        <h3>{t('externalIdentity.title')}</h3>
+        {oidcError ? <p role="alert">{oidcError}</p> : null}
+        {!oidcStatus && !oidcError ? <p role="status">{t('externalIdentity.loading')}</p> : null}
+        {oidcStatus && !oidcStatus.enabled ? <p role="note">{t('externalIdentity.disabled')}</p> : null}
+        {oidcStatus?.enabled && oidcStatus.linked ? (
+          <p role="status">{t('externalIdentity.linked')}</p>
+        ) : null}
+        {oidcStatus?.enabled && !oidcStatus.linked ? (
+          <a href="/api/v1/auth/oidc/link?return_to=%2Faccount%2Fsecurity">
+            {t('externalIdentity.link')}
+          </a>
+        ) : null}
+      </section>
 
       <section data-testid="ssh-keys-section" style={{ marginTop: '2rem' }}>
         <h3>{t('sshKeys.title')}</h3>

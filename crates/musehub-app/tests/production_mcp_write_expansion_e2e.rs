@@ -151,6 +151,11 @@ async fn mcp_repository_create_idempotent_and_issue_update_revision() {
         .await
         .unwrap();
     let client = mcp_client(&app, &token).await;
+    let admin_id: (Uuid,) =
+        sqlx::query_as("SELECT id FROM principals WHERE handle_normalized = 'admin'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let slug = format!("mcp-exp-{}", Uuid::new_v4().simple());
     let key = "repo-create-idem-v1";
     let args = serde_json::Map::from_iter([
@@ -189,13 +194,49 @@ async fn mcp_repository_create_idempotent_and_issue_update_revision() {
         ("idempotency_key".into(), json!("issue-v1")),
         ("title".into(), json!("before")),
         ("body".into(), json!("body1")),
+        ("labels".into(), json!(["bug", "mcp"])),
+        ("assignee_id".into(), json!(admin_id.0.to_string())),
     ]);
     let issue = client
-        .call_tool(CallToolRequestParams::new("musehub_issue_create").with_arguments(issue_args))
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(issue_args.clone()),
+        )
         .await
         .expect("issue");
     assert!(!issue.is_error.unwrap_or(true));
     let issue_data = tool_data(&issue);
+    assert_eq!(issue_data["assignee_id"], admin_id.0.to_string());
+    assert_eq!(issue_data["labels"], json!(["bug", "mcp"]));
+    let mut changed_assignee_args = issue_args.clone();
+    changed_assignee_args.insert("assignee_id".into(), json!(Uuid::new_v4().to_string()));
+    let changed_assignee = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create")
+                .with_arguments(changed_assignee_args),
+        )
+        .await;
+    assert!(
+        changed_assignee.is_err()
+            || changed_assignee
+                .as_ref()
+                .is_ok_and(|result| result.is_error.unwrap_or(false)),
+        "reusing an Issue idempotency key with a different assignee must conflict"
+    );
+    let invalid_assignee = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("idempotency_key".into(), json!("issue-invalid-assignee")),
+                    ("title".into(), json!("invalid assignee")),
+                    ("assignee_id".into(), json!(Uuid::new_v4().to_string())),
+                ]),
+            ),
+        )
+        .await
+        .expect("invalid assignee envelope");
+    assert!(invalid_assignee.is_error.unwrap_or(false));
     let issue_id = issue_data["id"].as_str().unwrap().to_string();
     let update = client
         .call_tool(
@@ -214,7 +255,168 @@ async fn mcp_repository_create_idempotent_and_issue_update_revision() {
         .expect("update");
     assert!(!update.is_error.unwrap_or(true));
     assert_eq!(tool_data(&update)["title"], "after");
+    assert_eq!(tool_data(&update)["assignee_id"], admin_id.0.to_string());
     assert_eq!(tool_data(&update)["version"], 2);
+
+    let clear_assignee = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_update").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("issue_id".into(), json!(issue_id)),
+                    ("expected_version".into(), json!(2)),
+                    ("assignee_id".into(), json!(null)),
+                    ("idempotency_key".into(), json!("issue-clear-assignee")),
+                ]),
+            ),
+        )
+        .await
+        .expect("clear assignee");
+    assert!(!clear_assignee.is_error.unwrap_or(true));
+    assert!(tool_data(&clear_assignee)["assignee_id"].is_null());
+    assert_eq!(tool_data(&clear_assignee)["version"], 2);
+
+    let set_assignee = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_update").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("issue_id".into(), json!(issue_id)),
+                    ("expected_version".into(), json!(2)),
+                    ("assignee_id".into(), json!(admin_id.0.to_string())),
+                    ("labels".into(), json!(["bug", "patched"])),
+                    ("idempotency_key".into(), json!("issue-set-assignee")),
+                ]),
+            ),
+        )
+        .await
+        .expect("set assignee");
+    assert!(!set_assignee.is_error.unwrap_or(true));
+    assert_eq!(
+        tool_data(&set_assignee)["assignee_id"],
+        admin_id.0.to_string()
+    );
+    assert_eq!(tool_data(&set_assignee)["version"], 2);
+    assert_eq!(
+        tool_data(&set_assignee)["labels"],
+        json!(["bug", "patched"])
+    );
+    let resolved = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_update").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("issue_id".into(), json!(issue_id)),
+                    ("expected_version".into(), json!(2)),
+                    ("state".into(), json!("resolved")),
+                    ("resolution_reason".into(), json!("acceptance met")),
+                    ("idempotency_key".into(), json!("issue-resolve")),
+                ]),
+            ),
+        )
+        .await
+        .expect("resolve issue");
+    assert!(!resolved.is_error.unwrap_or(true));
+    assert_eq!(tool_data(&resolved)["state"], "resolved");
+    assert_eq!(tool_data(&resolved)["version"], 2);
+    let second_issue = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_create").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("idempotency_key".into(), json!("issue-page-2")),
+                    ("title".into(), json!("second issue")),
+                ]),
+            ),
+        )
+        .await
+        .expect("create second issue");
+    assert!(!second_issue.is_error.unwrap_or(true));
+    let second_issue_id = tool_data(&second_issue)["id"].as_str().unwrap().to_string();
+    let filtered = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_list").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("assignee_id".into(), json!(admin_id.0.to_string())),
+                    ("label".into(), json!("bug")),
+                ]),
+            ),
+        )
+        .await
+        .expect("filter issues by assignee and label");
+    assert!(!filtered.is_error.unwrap_or(true));
+    assert!(tool_data(&filtered)["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == issue_id));
+    let get = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_get").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("issue_id".into(), json!(issue_id)),
+                ]),
+            ),
+        )
+        .await
+        .expect("get Issue assignee");
+    assert_eq!(tool_data(&get)["assignee_id"], admin_id.0.to_string());
+    let first_page = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_list").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("limit".into(), json!(1)),
+                ]),
+            ),
+        )
+        .await
+        .expect("first issue page");
+    assert!(!first_page.is_error.unwrap_or(true));
+    assert_eq!(tool_data(&first_page)["items"][0]["id"], issue_id);
+    let page_meta = &first_page.structured_content.as_ref().expect("structured")["page"];
+    assert_eq!(page_meta["has_more"], true);
+    let cursor = page_meta["next_cursor"]
+        .as_str()
+        .expect("next issue cursor")
+        .to_string();
+    let second_page = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_list").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("limit".into(), json!(1)),
+                    ("cursor".into(), json!(cursor)),
+                ]),
+            ),
+        )
+        .await
+        .expect("second issue page");
+    assert!(!second_page.is_error.unwrap_or(true));
+    assert_eq!(tool_data(&second_page)["items"][0]["id"], second_issue_id);
+    let invalid_assignee_filter = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_list").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id)),
+                    ("assignee_id".into(), json!(Uuid::new_v4().to_string())),
+                ]),
+            ),
+        )
+        .await
+        .expect("invalid assignee filter envelope");
+    assert!(invalid_assignee_filter.is_error.unwrap_or(false));
     client.cancel().await.ok();
 }
 

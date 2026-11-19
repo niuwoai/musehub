@@ -347,12 +347,8 @@ function useWorkspaceState(): WorkspaceValue {
   }, [deploymentListMode])
 
   const repoContextTransitioning = Boolean(
-    (repoSlugFromUrl &&
-      selectedRepo &&
-      repoSlugFromUrl !== selectedRepo) ||
-      (repoSlugFromUrl &&
-        hydratingRepoSlug === repoSlugFromUrl &&
-        selectedRepo !== repoSlugFromUrl),
+    repoSlugFromUrl &&
+      (selectedRepo !== repoSlugFromUrl || hydratingRepoSlug === repoSlugFromUrl),
   )
   const activeRepoSlug = repoSlugFromUrl ?? selectedRepo
 

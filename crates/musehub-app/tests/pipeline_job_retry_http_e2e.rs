@@ -16,7 +16,8 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
     let app = common::product_app(pool.clone(), git_root.path(), &bootstrap).await;
     let cookie = common::login_cookie(&app, "admin", &bootstrap).await;
 
-    app.clone()
+    let created = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -28,6 +29,14 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
         )
         .await
         .unwrap();
+    let created_status = created.status();
+    let created_body = created.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        created_status,
+        StatusCode::CREATED,
+        "repository creation failed: {}",
+        String::from_utf8_lossy(&created_body)
+    );
 
     let org_id: Uuid =
         sqlx::query_as::<_, (Uuid,)>("SELECT id FROM organizations WHERE slug_normalized = 'demo'")
@@ -339,4 +348,115 @@ async fn list_jobs_and_retry_failed_build_idempotent() {
             .unwrap();
     assert!(matches!(run_row.0.as_str(), "queued" | "running"));
     assert!(run_row.1.is_none());
+
+    let workflow_run = Uuid::new_v4();
+    let workflow_parent = Uuid::new_v4();
+    let ancestor = Uuid::new_v4();
+    let workflow_failed = Uuid::new_v4();
+    let workflow_downstream = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
+         requested_by, run_attempt_id, run_kind, error_code)
+         VALUES ($1,$2,$3,$4,'ci','failed',$5,$6,'pr_validation','workflow_job_failed')",
+    )
+    .bind(workflow_run)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(&oid)
+    .bind(admin_id)
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pipeline_jobs (id, org_id, repo_id, pipeline_run_id, job_key, state)
+         VALUES ($1,$2,$3,$4,'workflow','failed')",
+    )
+    .bind(workflow_parent)
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(workflow_run)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (id, key, state) in [
+        (ancestor, "prepare", "succeeded"),
+        (workflow_failed, "compile", "failed"),
+        (workflow_downstream, "verify", "skipped"),
+    ] {
+        sqlx::query(
+            "INSERT INTO pipeline_workflow_jobs
+             (id, pipeline_run_id, job_key, image_ref, command, state, attempt_count)
+             VALUES ($1,$2,$3,'image@sha256:deadbeef','[]',$4,1)",
+        )
+        .bind(id)
+        .bind(workflow_run)
+        .bind(key)
+        .bind(state)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO pipeline_workflow_job_attempts (id, workflow_job_id, attempt_number, state)
+             VALUES ($1,$2,1,$3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .bind(if state == "succeeded" { "succeeded" } else if state == "failed" { "failed" } else { "canceled" })
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO pipeline_workflow_job_dependencies (job_id, needs_job_id)
+         VALUES ($1,$2),($3,$1)",
+    )
+    .bind(workflow_failed)
+    .bind(ancestor)
+    .bind(workflow_downstream)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let retry_workflow = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/pipe-retry-http/pipeline-jobs/{workflow_failed}/retry"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &cookie)
+                .body(Body::from(
+                    serde_json::json!({"attempt_id": Uuid::new_v4()}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry_workflow.status(), StatusCode::OK);
+    let states: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT j.state, MAX(a.attempt_number) FROM pipeline_workflow_jobs j
+         JOIN pipeline_workflow_job_attempts a ON a.workflow_job_id = j.id
+         WHERE j.pipeline_run_id = $1 GROUP BY j.id ORDER BY j.job_key",
+    )
+    .bind(workflow_run)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        states,
+        vec![
+            ("queued".into(), 2),
+            ("succeeded".into(), 1),
+            ("queued".into(), 2)
+        ]
+    );
+    let run_attempt_state: (String, Option<String>) =
+        sqlx::query_as("SELECT state, error_code FROM pipeline_runs WHERE id = $1")
+            .bind(workflow_run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(run_attempt_state, ("queued".into(), None));
 }

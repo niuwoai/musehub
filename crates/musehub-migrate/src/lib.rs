@@ -5,10 +5,67 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use musehub_core::ErrorCode;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row};
 
 const MIGRATIONS_TABLE: &str = "musehub_schema_migrations";
+const MIGRATION_LOCK_KEY: &str = "musehub:schema-migrations";
+
+struct MigrationRunLock {
+    connection: PoolConnection<Postgres>,
+    released: bool,
+}
+
+impl MigrationRunLock {
+    async fn acquire(pool: &PgPool) -> Result<Self, MigrateError> {
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(|source| MigrateError::Database {
+                step: "acquire migration lock connection",
+                source,
+            })?;
+        let _: bool =
+            sqlx::query_scalar("SELECT pg_advisory_lock(hashtextextended($1, 0)) IS NULL")
+                .bind(MIGRATION_LOCK_KEY)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(|source| MigrateError::Database {
+                    step: "acquire migration lock",
+                    source,
+                })?;
+        Ok(Self {
+            connection,
+            released: false,
+        })
+    }
+
+    async fn release(mut self) -> Result<(), MigrateError> {
+        let released =
+            sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
+                .bind(MIGRATION_LOCK_KEY)
+                .fetch_one(&mut *self.connection)
+                .await
+                .map_err(|source| MigrateError::Database {
+                    step: "release migration lock",
+                    source,
+                })?;
+        self.released = true;
+        if !released {
+            return Err(MigrateError::MigrationLockLost);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MigrationRunLock {
+    fn drop(&mut self) {
+        if !self.released {
+            self.connection.close_on_drop();
+        }
+    }
+}
 
 /// One reversible migration loaded from a numbered SQL pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +209,7 @@ pub async fn migrate_up(
     pool: &PgPool,
     migrations: &[Migration],
 ) -> Result<MigrationReport, MigrateError> {
+    let lock = MigrationRunLock::acquire(pool).await?;
     ensure_bookkeeping(pool).await?;
     let applied_versions = applied_versions(pool).await?;
     let mut report = MigrationReport {
@@ -197,6 +255,7 @@ pub async fn migrate_up(
         })?;
         report.applied.push(migration.version.clone());
     }
+    lock.release().await?;
     Ok(report)
 }
 
@@ -222,7 +281,13 @@ pub async fn maybe_terminate_idle_peer_backends(pool: &PgPool) -> Result<(), Mig
          WHERE datname = current_database()
            AND pid <> pg_backend_pid()
            AND backend_type = 'client backend'
-           AND state IN ('idle', 'idle in transaction', 'idle in transaction (aborted)')",
+           AND state IN ('idle', 'idle in transaction', 'idle in transaction (aborted)')
+           AND NOT EXISTS (
+             SELECT 1 FROM pg_locks lock_
+             WHERE lock_.pid = pg_stat_activity.pid
+               AND lock_.locktype = 'advisory'
+               AND lock_.granted
+           )",
     )
     .execute(pool)
     .await
@@ -237,6 +302,7 @@ pub async fn migrate_down(
     pool: &PgPool,
     migrations: &[Migration],
 ) -> Result<MigrationReport, MigrateError> {
+    let lock = MigrationRunLock::acquire(pool).await?;
     ensure_bookkeeping(pool).await?;
     maybe_terminate_idle_peer_backends(pool).await?;
     let applied_versions = applied_versions(pool).await?;
@@ -276,8 +342,9 @@ pub async fn migrate_down(
             step: "commit down",
             source,
         })?;
-        report.applied.push(migration.version.clone());
+        report.applied.push(version);
     }
+    lock.release().await?;
     Ok(report)
 }
 
@@ -341,7 +408,7 @@ pub async fn check_schema(pool: &PgPool) -> Result<SchemaCheck, MigrateError> {
                AND (
                  SELECT array_agg(index_.indkey[position]::smallint ORDER BY position)
                  FROM generate_subscripts(index_.indkey, 1) AS position
-                 WHERE position <= array_length(constraint_.conkey, 1)
+                 WHERE position < cardinality(constraint_.conkey)
                ) = constraint_.conkey
            )
          GROUP BY source.relname, constraint_.oid
@@ -451,6 +518,8 @@ pub enum MigrateError {
     InvalidName { name: String },
     #[error("applied migration {version} has no down file")]
     MissingDown { version: String },
+    #[error("migration advisory lock was not held by this connection at release")]
+    MigrationLockLost,
     #[error("migration step `{step}` failed: {source}")]
     Io {
         step: &'static str,

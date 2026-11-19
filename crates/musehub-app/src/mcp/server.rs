@@ -1,6 +1,8 @@
 //! Production MCP tool server (`/mcp`).
 
 use std::borrow::Cow;
+use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::mcp::prompts;
@@ -16,7 +18,8 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router, RoleServer,
 };
-use serde::Deserialize;
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -26,7 +29,7 @@ use crate::mcp::capabilities::capability_payload;
 use crate::mcp::domain::{
     agent_run_cancel, agent_run_start, deployment_rollback, deployment_start, issue_create,
     issue_update, pipeline_run, plan_accept, plan_create, pr_create, pr_review, repo_summary_json,
-    repository_create, IssueUpdatePatch, PlanStepInput,
+    repository_create, IssueAssigneePatch, IssueUpdatePatch, PlanStepInput,
 };
 use crate::mcp::envelope::{app_err_envelope, ToolEnvelope, MCP_CONTRACT_VERSION};
 use crate::mcp::idempotency::{
@@ -77,6 +80,7 @@ struct RepoInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct OrgListInput {
     org_id: String,
     #[serde(default, flatten)]
@@ -84,14 +88,25 @@ struct OrgListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-struct RepoPageInput {
+#[serde(deny_unknown_fields)]
+struct IssueListInput {
     #[serde(flatten)]
     repo: RepoInput,
     #[serde(default, flatten)]
     page: PageInput,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    assignee_id: Option<Uuid>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct IssueGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -99,6 +114,7 @@ struct IssueGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PlanGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -106,6 +122,7 @@ struct PlanGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -113,6 +130,7 @@ struct PrGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentRunGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -120,6 +138,7 @@ struct AgentRunGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ReleaseGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -127,6 +146,7 @@ struct ReleaseGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentGetInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -134,13 +154,69 @@ struct DeploymentGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentTraceInput {
     #[serde(flatten)]
     repo: RepoInput,
     deployment_id: String,
 }
 
+#[derive(Debug, Clone, Default)]
+enum PatchField<T> {
+    #[default]
+    Missing,
+    Null,
+    Value(T),
+}
+
+struct PatchFieldVisitor<T>(PhantomData<T>);
+
+impl<'de, T> Visitor<'de> for PatchFieldVisitor<T>
+where
+    T: Deserialize<'de>,
+{
+    type Value = PatchField<T>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("null or a valid value")
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(PatchField::Null)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(PatchField::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        T::deserialize(deserializer).map(PatchField::Value)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for PatchField<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_option(PatchFieldVisitor(PhantomData))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct IssueCreateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -149,6 +225,11 @@ struct IssueCreateInput {
     body: String,
     #[serde(default)]
     criteria: Vec<crate::mcp::contract_domain::CriterionInput>,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    assignee_id: Option<Uuid>,
     idempotency_key: String,
 }
 
@@ -160,9 +241,17 @@ struct IssueUpdatePatchInput {
     body: Option<String>,
     #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+    #[serde(default)]
+    resolution_reason: Option<String>,
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    assignee_id: PatchField<Uuid>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct IssueUpdateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -174,6 +263,7 @@ struct IssueUpdateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RepositoryCreateInput {
     org_id: String,
     slug: String,
@@ -185,6 +275,7 @@ struct RepositoryCreateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrCreateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -202,6 +293,7 @@ struct PrCreateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrMergeInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -215,6 +307,7 @@ struct PrMergeInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrListInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -225,6 +318,7 @@ struct PrListInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PlanCreateInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -236,6 +330,7 @@ struct PlanCreateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PlanAcceptInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -244,6 +339,7 @@ struct PlanAcceptInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PrReviewInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -255,6 +351,7 @@ struct PrReviewInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentRunStartInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -268,6 +365,7 @@ struct AgentRunStartInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentRunCancelInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -276,6 +374,7 @@ struct AgentRunCancelInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PipelineRunInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -287,6 +386,7 @@ struct PipelineRunInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentStartInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -300,6 +400,7 @@ struct DeploymentStartInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeploymentRollbackInput {
     #[serde(flatten)]
     repo: RepoInput,
@@ -313,6 +414,7 @@ struct DeploymentRollbackInput {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AuditListInput {
     org_id: String,
     #[serde(default)]
@@ -679,7 +781,7 @@ impl ProductionMcpServer {
     )]
     async fn musehub_issue_list(
         &self,
-        Parameters(input): Parameters<RepoPageInput>,
+        Parameters(input): Parameters<IssueListInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let pat = pat_context(&self.state).await?;
         if let Err(e) = require_scope(&pat, READ_SCOPE) {
@@ -689,30 +791,119 @@ impl ProductionMcpServer {
             Ok(a) => a,
             Err(e) => return Ok(domain_err(e)),
         };
+        let state = input.state.map(|state| state.trim().to_ascii_lowercase());
+        if state.as_deref().is_some_and(|state| {
+            !matches!(
+                state,
+                "open" | "in_progress" | "in_review" | "resolved" | "closed"
+            )
+        }) {
+            return Ok(domain_err(AppError::Validation(
+                "invalid issue state".to_string(),
+            )));
+        }
+        let query = input.query.map(|query| query.trim().to_string());
+        let query = query.filter(|query| !query.is_empty());
+        let label = input.label.map(|label| label.trim().to_string());
+        let label = label.filter(|label| !label.is_empty());
+        if let Some(label) = &label {
+            if let Err(error) = crate::issues::validate_label_filter(label) {
+                return Ok(domain_err(error));
+            }
+        }
+        if let Some(assignee_id) = input.assignee_id {
+            if let Err(error) = crate::issues::repo_assignee_id_for_id(
+                &self.state.pool,
+                access.org_id,
+                access.repo_id,
+                assignee_id,
+            )
+            .await
+            {
+                return Ok(domain_err(error));
+            }
+        }
         let limit = page_limit(input.page.limit);
-        let rows = sqlx::query_as::<_, (Uuid, i64, String, String)>(
-            "SELECT id, number, title, state FROM issues WHERE repo_id = $1 ORDER BY number LIMIT $2",
+        let after = input
+            .page
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                pagination::decode_issue_cursor(
+                    cursor,
+                    access.repo_id,
+                    pat.principal_id,
+                    state.as_deref(),
+                    input.assignee_id,
+                    query.as_deref(),
+                    label.as_deref(),
+                    limit,
+                )
+            })
+            .transpose()
+            .map_err(app_error_to_mcp)?;
+        let rows = sqlx::query_as::<_, (Uuid, i64, String, String, Vec<String>, Option<Uuid>)>(
+            "SELECT id, number, title, state, labels, assignee_id FROM issues
+             WHERE repo_id = $1
+               AND ($2::text IS NULL OR state = $2)
+               AND ($3::uuid IS NULL OR assignee_id = $3)
+               AND ($4::text IS NULL OR title ILIKE '%' || $4 || '%' OR body ILIKE '%' || $4 || '%')
+               AND ($5::text IS NULL OR $5 = ANY(labels))
+               AND ($6::bigint IS NULL OR (number, id) > ($6, $7))
+             ORDER BY number, id LIMIT $8",
         )
         .bind(access.repo_id)
-        .bind(limit)
+        .bind(&state)
+        .bind(input.assignee_id)
+        .bind(&query)
+        .bind(&label)
+        .bind(after.map(|(number, _)| number))
+        .bind(after.map(|(_, id)| id))
+        .bind(limit + 1)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let has_more = rows.len() as i64 == limit;
+        let has_more = rows.len() as i64 > limit;
+        let mut rows = rows;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|(id, number, _, _, _, _)| {
+                    pagination::encode_issue_cursor(
+                        access.repo_id,
+                        pat.principal_id,
+                        state.as_deref(),
+                        input.assignee_id,
+                        query.as_deref(),
+                        label.as_deref(),
+                        limit,
+                        *number,
+                        *id,
+                    )
+                })
+                .transpose()
+                .map_err(app_error_to_mcp)?
+        } else {
+            None
+        };
         let items: Vec<Value> = rows
             .into_iter()
-            .map(|(id, number, title, state)| {
+            .map(|(id, number, title, state, labels, assignee_id)| {
                 json!({
                     "id": id.to_string(),
                     "number": number,
                     "title": title,
                     "state": state,
+                    "labels": labels,
+                    "assignee_id": assignee_id.map(|id| id.to_string()),
                 })
             })
             .collect();
         Ok(domain_ok_page(
             json!({ "items": items }),
-            page_meta(has_more, None),
+            page_meta(has_more, next_cursor),
         ))
     }
 
@@ -734,8 +925,22 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let issue_id = parse_uuid("issue_id", &input.issue_id)?;
-        let row = sqlx::query_as::<_, (Uuid, i64, String, String, Option<Uuid>, Option<String>)>(
-            "SELECT i.id, i.number, i.title, i.state, i.current_revision_id, r.body
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                i64,
+                String,
+                String,
+                Option<Uuid>,
+                Option<String>,
+                Option<Uuid>,
+                Vec<String>,
+                Option<String>,
+            ),
+        >(
+            "SELECT i.id, i.number, i.title, i.state, i.current_revision_id, r.body,
+                    i.assignee_id, i.labels, i.close_reason
              FROM issues i
              LEFT JOIN issue_revisions r ON r.id = i.current_revision_id
              WHERE i.id = $1 AND i.repo_id = $2",
@@ -745,7 +950,18 @@ impl ProductionMcpServer {
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| app_error_to_mcp(e.into()))?;
-        let Some((id, number, title, state, revision_id, body)) = row else {
+        let Some((
+            id,
+            number,
+            title,
+            state,
+            revision_id,
+            body,
+            assignee_id,
+            labels,
+            resolution_reason,
+        )) = row
+        else {
             return Ok(domain_err(AppError::NotFound));
         };
         Ok(domain_ok(json!({
@@ -754,6 +970,9 @@ impl ProductionMcpServer {
             "title": title,
             "state": state,
             "body": body.unwrap_or_default(),
+            "labels": labels,
+            "resolution_reason": resolution_reason,
+            "assignee_id": assignee_id.map(|id| id.to_string()),
             "current_revision_id": revision_id.map(|u| u.to_string()),
         })))
     }
@@ -780,6 +999,9 @@ impl ProductionMcpServer {
             "repository_id": input.repo.repository_id,
             "title": input.title,
             "body": input.body,
+            "criteria": input.criteria,
+            "labels": input.labels,
+            "assignee_id": input.assignee_id,
         });
         let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
         let action = begin_idempotent_write(
@@ -805,6 +1027,8 @@ impl ProductionMcpServer {
             &input.title,
             &input.body,
             &input.criteria,
+            &input.labels,
+            input.assignee_id,
         )
         .await
         {
@@ -839,6 +1063,11 @@ impl ProductionMcpServer {
             Err(e) => return Ok(domain_err(e)),
         };
         let issue_id = parse_uuid("issue_id", &input.issue_id)?;
+        let canonical_assignee = match &input.patch.assignee_id {
+            PatchField::Missing => json!({"operation": "unchanged"}),
+            PatchField::Null => json!({"operation": "clear"}),
+            PatchField::Value(id) => json!({"operation": "set", "assignee_id": id}),
+        };
         let canonical = json!({
             "org_id": input.repo.org_id,
             "repository_id": input.repo.repository_id,
@@ -847,6 +1076,9 @@ impl ProductionMcpServer {
             "title": input.patch.title,
             "body": input.patch.body,
             "state": input.patch.state,
+            "labels": input.patch.labels,
+            "resolution_reason": input.patch.resolution_reason,
+            "assignee": canonical_assignee,
         });
         let canonical_json = serde_json::to_string(&canonical).unwrap_or_default();
         let action = begin_idempotent_write(
@@ -865,10 +1097,18 @@ impl ProductionMcpServer {
         let IdempotencyAction::Proceed { record_id } = action else {
             return Ok(domain_err(AppError::Other("idempotency".into())));
         };
+        let assignee_id = match input.patch.assignee_id {
+            PatchField::Missing => IssueAssigneePatch::Unchanged,
+            PatchField::Null => IssueAssigneePatch::Clear,
+            PatchField::Value(id) => IssueAssigneePatch::Set(id),
+        };
         let patch = IssueUpdatePatch {
             title: input.patch.title,
             body: input.patch.body,
             state: input.patch.state,
+            labels: input.patch.labels,
+            resolution_reason: input.patch.resolution_reason,
+            assignee_id,
         };
         match issue_update(
             &self.state,
@@ -2029,3 +2269,82 @@ impl ProductionMcpServer {
 
 #[path = "server_contract.rs"]
 mod server_contract;
+
+#[cfg(test)]
+mod strict_input_tests {
+    use super::{IssueGetInput, OrgListInput};
+    use crate::mcp::{contract_domain::CriterionInput, domain::PlanStepInput};
+    use serde_json::json;
+
+    #[test]
+    fn flattened_tool_inputs_reject_unknown_fields() {
+        let input = json!({
+            "org_id": "org",
+            "cursor": "next",
+            "limit": 10,
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<OrgListInput>(input).is_err());
+
+        let input = json!({
+            "org_id": "org",
+            "repository_id": "repo",
+            "issue_id": "issue",
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<IssueGetInput>(input).is_err());
+    }
+
+    #[test]
+    fn nested_tool_inputs_reject_unknown_fields() {
+        let criterion = json!({
+            "description": "works",
+            "verification_method": "manual",
+            "required": true,
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<CriterionInput>(criterion).is_err());
+
+        let step = json!({
+            "key": "build",
+            "title": "Build",
+            "description": "Build the project",
+            "criterion_ordinals": [1],
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<PlanStepInput>(step).is_err());
+    }
+
+    #[test]
+    fn tool_input_schemas_disallow_additional_properties() {
+        for schema in [
+            rmcp::schemars::schema_for!(IssueGetInput),
+            rmcp::schemars::schema_for!(CriterionInput),
+            rmcp::schemars::schema_for!(PlanStepInput),
+        ] {
+            let schema = serde_json::to_value(schema).expect("schema serializes");
+            assert_eq!(schema["additionalProperties"], json!(false));
+        }
+    }
+}
+
+#[cfg(test)]
+mod assignee_patch_tests {
+    use super::{IssueUpdatePatchInput, PatchField};
+    use uuid::Uuid;
+
+    #[test]
+    fn update_assignee_distinguishes_omitted_null_and_id() {
+        let missing: IssueUpdatePatchInput = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(matches!(missing.assignee_id, PatchField::Missing));
+
+        let clear: IssueUpdatePatchInput =
+            serde_json::from_value(serde_json::json!({"assignee_id": null})).unwrap();
+        assert!(matches!(clear.assignee_id, PatchField::Null));
+
+        let id = Uuid::new_v4();
+        let set: IssueUpdatePatchInput =
+            serde_json::from_value(serde_json::json!({"assignee_id": id.to_string()})).unwrap();
+        assert!(matches!(set.assignee_id, PatchField::Value(value) if value == id));
+    }
+}

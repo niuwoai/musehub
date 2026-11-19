@@ -6,9 +6,8 @@
 export function e2eBrowserApiOrigin(): string {
   const base = process.env.MUSEHUB_E2E_BASE_URL?.replace(/\/$/, '')
   if (base) return base
-  if (process.env.MUSEHUB_E2E_API?.includes(':5173')) {
-    return process.env.MUSEHUB_E2E_API.replace(/\/$/, '')
-  }
+  const api = process.env.MUSEHUB_E2E_API?.replace(/\/$/, '')
+  if (api) return api
   return 'http://127.0.0.1:5173'
 }
 

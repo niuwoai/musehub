@@ -364,10 +364,12 @@ pub async fn finalize_agent_run_state(
     error_code: Option<&str>,
     result_commit_oid: Option<&str>,
     usage_tokens: Option<i64>,
+    usage_evidence: Option<&serde_json::Value>,
 ) -> Result<bool, AppError> {
     let updated = sqlx::query(
         "UPDATE agent_runs SET state = $4, error_code = $5, result_commit_oid = COALESCE($6, result_commit_oid),
-         usage_tokens = COALESCE($7, usage_tokens), updated_at = CURRENT_TIMESTAMP
+         usage_tokens = COALESCE($7, usage_tokens), usage_evidence = COALESCE($8, usage_evidence),
+         updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND lease_holder = $2 AND lease_epoch = $3
            AND (($4 = 'canceled' AND state IN ('running','cancel_requested'))
              OR ($4 <> 'canceled' AND state = 'running'))",
@@ -379,6 +381,7 @@ pub async fn finalize_agent_run_state(
     .bind(error_code)
     .bind(result_commit_oid)
     .bind(usage_tokens)
+    .bind(usage_evidence)
     .execute(pool)
     .await?;
     Ok(updated.rows_affected() == 1)

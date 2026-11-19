@@ -21,25 +21,32 @@ pub mod git_ssh;
 pub mod git_ssh_pack_privilege;
 pub mod git_ssh_runtime;
 pub mod git_ssh_server_log;
+pub mod github_oauth;
 mod grants;
 mod hooks;
 pub mod lease;
 pub mod mcp;
 mod members;
+mod notifications;
+pub mod oidc;
 mod org_config;
 mod organizations;
 pub mod pat;
 mod pat_auth;
 mod pat_policy;
 mod pipeline;
+pub mod pipeline_workflow;
 pub mod product_profile;
 mod recovery;
 pub mod runner_api;
+pub mod saml;
 pub use agent_supervisor::run_agent_job as execute_agent_job;
 pub use artifacts::sha256_file as artifact_sha256_file;
 pub use deployment::execute_deployment_job;
+pub use notifications::run_webhook_delivery_worker;
 pub use pipeline::{
-    execute_pipeline_job, seed_repo_environment, try_publish_stale_pipeline_success_for_test,
+    execute_pipeline_job, run_git_ref_trigger_dispatcher, seed_repo_environment,
+    try_publish_stale_pipeline_success_for_test,
 };
 pub use recovery::{reconcile_orphaned_work, ReconcileReport};
 mod discussion;
@@ -49,6 +56,8 @@ mod issues;
 mod list_cursor;
 mod pr;
 mod release;
+pub mod repository_lock;
+pub mod scim;
 mod security;
 pub mod ssh_keys;
 mod trace;
@@ -57,7 +66,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -72,8 +81,8 @@ use crate::agent_supervisor::AgentSupervisor;
 use crate::pipeline_supervisor::PipelineSupervisor;
 
 use crate::auth::{
-    change_password, clear_session_cookie, cookie_name, login, logout, principal_from_session,
-    session_cookie, verify_password,
+    change_password, clear_session_cookie_with_secure, cookie_name, login, logout,
+    principal_from_session, session_cookie_with_secure, verify_password,
 };
 use crate::bootstrap::seed_if_empty;
 use crate::error::AppError;
@@ -97,8 +106,16 @@ pub struct AppState {
     pub pipeline_supervisor: Arc<PipelineSupervisor>,
     /// When true: release publish requires pipeline OCI artifact; deploy rejects mock health / mock compose.
     pub require_pipeline_oci: bool,
-    /// Request-scoped PAT for `/mcp` tools (set by MCP Bearer middleware).
+    /// Authenticated PAT consumed by MCP handlers while `mcp_request_gate` is held.
     pub mcp_pat_slot: Arc<tokio::sync::RwLock<Option<pat_auth::PatContext>>>,
+    /// Serializes authenticated MCP HTTP requests because tool handlers read `mcp_pat_slot`.
+    pub mcp_request_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Optional deployment-level OIDC provider discovered at server startup.
+    pub oidc_provider: Option<Arc<oidc::OidcProvider>>,
+    /// Optional SP-initiated SAML provider with pinned metadata signing trust.
+    pub saml_provider: Option<Arc<saml::SamlProvider>>,
+    pub github_oauth_provider: Option<Arc<github_oauth::GithubOAuthProvider>>,
+    pub cookie_secure: bool,
 }
 
 pub fn require_pipeline_oci_from_env() -> bool {
@@ -110,6 +127,16 @@ pub fn require_pipeline_oci_from_env() -> bool {
 pub fn product_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/v1/auth/login", post(login_handler))
+        .route("/api/v1/auth/providers", get(oidc::providers))
+        .route("/api/v1/auth/oidc/start", get(oidc::start))
+        .route("/api/v1/auth/oidc/link", get(oidc::start_link))
+        .route("/api/v1/auth/oidc/callback", get(oidc::callback))
+        .route("/api/v1/me/oidc-identity", get(oidc::identity_link_status))
+        .route("/api/v1/auth/github/start", get(github_oauth::start))
+        .route("/api/v1/auth/github/callback", get(github_oauth::callback))
+        .route("/api/v1/auth/saml/metadata", get(saml::metadata))
+        .route("/api/v1/auth/saml/start", get(saml::start))
+        .route("/api/v1/auth/saml/acs", post(saml::acs))
         .route("/api/v1/auth/logout", post(logout_handler))
         .route(
             "/api/v1/auth/change-password",
@@ -151,6 +178,52 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             post(members::revoke_member_sessions),
         )
         .route(
+            "/api/v1/orgs/{org}/scim-tokens",
+            get(scim::list_tokens).post(scim::create_token),
+        )
+        .route(
+            "/api/v1/orgs/{org}/scim-tokens/{token_id}",
+            delete(scim::revoke_token),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/ServiceProviderConfig",
+            get(scim::service_provider_config),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Bulk",
+            post(scim::bulk).layer(DefaultBodyLimit::max(scim::MAX_BULK_PAYLOAD_BYTES)),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Schemas",
+            get(scim::schemas),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/ResourceTypes",
+            get(scim::resource_types),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Users",
+            get(scim::list_users).post(scim::create_user),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Users/{user_id}",
+            get(scim::get_user)
+                .put(scim::replace_user)
+                .patch(scim::patch_user)
+                .delete(scim::delete_user),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Groups",
+            get(scim::list_groups).post(scim::create_group),
+        )
+        .route(
+            "/api/v1/scim/v2/organizations/{org}/Groups/{group_id}",
+            get(scim::get_group)
+                .put(scim::replace_group)
+                .patch(scim::patch_group)
+                .delete(scim::delete_group),
+        )
+        .route(
             "/api/v1/orgs/{org}/repos/{repo}/collaborators",
             post(members::grant_repo_collaborator),
         )
@@ -161,6 +234,18 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/settings",
             get(org_settings_handler).patch(patch_org_settings_handler),
+        )
+        .route(
+            "/api/v1/orgs/{org}/webhooks",
+            get(notifications::list_webhooks).post(notifications::create_webhook),
+        )
+        .route(
+            "/api/v1/orgs/{org}/webhooks/{webhook_id}",
+            delete(notifications::disable_webhook),
+        )
+        .route(
+            "/api/v1/orgs/{org}/webhooks/{webhook_id}/deliveries",
+            get(notifications::list_deliveries),
         )
         .route(
             "/api/v1/orgs/{org}/runner-tokens",
@@ -303,7 +388,11 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs",
-            post(pipeline::start_pipeline_run),
+            get(pipeline::list_pipeline_runs).post(pipeline::start_pipeline_run),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/workflow-runs",
+            post(pipeline::start_manual_workflow_run),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}",
@@ -324,6 +413,10 @@ pub fn product_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/pipeline-jobs/{job_id}/logs",
             get(pipeline::get_pipeline_job_logs),
+        )
+        .route(
+            "/api/v1/orgs/{org}/repos/{repo}/pipeline-runs/{run_id}/artifacts/{artifact_id}",
+            get(pipeline::download_pipeline_artifact),
         )
         .route(
             "/api/v1/orgs/{org}/repos/{repo}/releases",
@@ -377,6 +470,9 @@ pub fn product_router(state: Arc<AppState>) -> Router {
             "/git/{org}/{repo_git}/{*git_path}",
             axum::routing::any(git_smart_http),
         )
+        .layer(axum::middleware::from_fn(
+            scim::normalize_scim_extractor_errors,
+        ))
         .with_state(state.clone());
     mcp::merge_product_mcp(api, state)
 }
@@ -447,7 +543,10 @@ async fn login_handler(
     let mut response = Json(serde_json::json!({ "ok": true })).into_response();
     response.headers_mut().append(
         header::SET_COOKIE,
-        session_cookie(&token).to_string().parse().unwrap(),
+        session_cookie_with_secure(&token, state.cookie_secure)
+            .to_string()
+            .parse()
+            .unwrap(),
     );
     Ok(response)
 }
@@ -462,7 +561,10 @@ async fn logout_handler(
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(
         header::SET_COOKIE,
-        clear_session_cookie().to_string().parse().unwrap(),
+        clear_session_cookie_with_secure(state.cookie_secure)
+            .to_string()
+            .parse()
+            .unwrap(),
     );
     Ok(response)
 }
@@ -664,6 +766,8 @@ struct CreateIssueRequest {
     title: String,
     body: Option<String>,
     assignee_handle: Option<String>,
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 async fn create_issue(
@@ -675,6 +779,7 @@ async fn create_issue(
     if body.title.trim().is_empty() {
         return Err(AppError::Validation("title required".to_string()));
     }
+    issues::validate_labels(&body.labels)?;
     let principal_id = require_session(&state.pool, &headers).await?;
     let (org_id, repo_id) = repo_org_ids_for_member(&state.pool, &org, &repo, principal_id).await?;
     let mut tx = state.pool.begin().await?;
@@ -697,8 +802,8 @@ async fn create_issue(
     }
     let issue_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body, assignee_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO issues (id, org_id, repo_id, number, author_id, title, body, labels, assignee_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(issue_id)
     .bind(org_id)
@@ -707,6 +812,7 @@ async fn create_issue(
     .bind(principal_id)
     .bind(&title)
     .bind(&issue_body)
+    .bind(&body.labels)
     .bind(assignee_id)
     .execute(&mut *tx)
     .await?;
@@ -729,6 +835,20 @@ async fn create_issue(
         .bind(revision_id)
         .execute(&mut *tx)
         .await?;
+    audit::record_in_tx(
+        &mut tx,
+        Some(org_id),
+        Some(repo_id),
+        principal_id,
+        None,
+        "issue.created",
+        "issue",
+        issue_id,
+        audit::request_id_from_headers(&headers),
+        "allow",
+        serde_json::json!({ "number": number.0, "title": title }),
+    )
+    .await?;
     tx.commit().await?;
     Ok((
         StatusCode::CREATED,
@@ -758,8 +878,39 @@ struct AgentRunView {
     state: String,
     result_commit_oid: Option<String>,
     usage_tokens: u64,
+    budget_tokens_limit: Option<u64>,
     budget_unknown: bool,
+    base_oid: Option<String>,
+    issue_revision_id: Option<Uuid>,
+    issue_revision: Option<i32>,
+    accepted_plan_id: Option<Uuid>,
+    accepted_plan_version: Option<i32>,
+    recent_progress: Option<String>,
     error_code: Option<String>,
+}
+
+fn frozen_agent_run_metadata(
+    task_message: &str,
+) -> (Option<Uuid>, Option<i32>, Option<Uuid>, Option<i32>) {
+    let Some((_, context)) = task_message.split_once("Frozen issue context (JSON):\n") else {
+        return (None, None, None, None);
+    };
+    let Some((json, _)) = context.split_once("\n\nAdditional user request:") else {
+        return (None, None, None, None);
+    };
+    let Ok(snapshot) = serde_json::from_str::<serde_json::Value>(json) else {
+        return (None, None, None, None);
+    };
+    let revision_id = snapshot["issue_revision_id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let revision = snapshot["issue_revision"]
+        .as_i64()
+        .and_then(|v| i32::try_from(v).ok());
+    let plan = &snapshot["accepted_plan"];
+    let plan_id = plan["id"].as_str().and_then(|s| Uuid::parse_str(s).ok());
+    let plan_version = plan["version"].as_i64().and_then(|v| i32::try_from(v).ok());
+    (revision_id, revision, plan_id, plan_version)
 }
 
 async fn start_agent_run(
@@ -771,29 +922,6 @@ async fn start_agent_run(
     let principal_id = require_session(&state.pool, &headers).await?;
     let (org_id, repo_id, storage_key) =
         repo_storage_for_member(&state.pool, &org, &repo, principal_id).await?;
-    let issue =
-        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM issues WHERE id = $1 AND repo_id = $2")
-            .bind(body.issue_id)
-            .bind(repo_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if issue.is_none() {
-        return Err(AppError::NotFound);
-    }
-    let plan_ok = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM implementation_plans p
-         JOIN issues i ON i.id = $1 AND i.repo_id = $2
-         WHERE p.state = 'accepted' AND p.issue_revision_id = i.current_revision_id",
-    )
-    .bind(body.issue_id)
-    .bind(repo_id)
-    .fetch_one(&state.pool)
-    .await?;
-    if plan_ok.0 == 0 {
-        return Err(AppError::Validation(
-            "agent run requires an accepted plan bound to the issue's current revision".to_string(),
-        ));
-    }
     let run_id = Uuid::new_v4();
     let branch = format!("agent/{run_id}");
     let default_branch: (String,) =
@@ -806,7 +934,11 @@ async fn start_agent_run(
     let remote_agent = runner_api::agent_executor_remote();
     let instance_id = state.instance_id;
     let adapter = agent_adapter::adapter_kind_for_request(body.adapter.as_deref());
-    let task_message = body.message.clone();
+    let mut tx = state.pool.begin().await?;
+    let task_message =
+        issues::frozen_agent_task_message(&mut tx, repo_id, body.issue_id, &body.message).await?;
+    let (issue_revision_id, issue_revision, accepted_plan_id, accepted_plan_version) =
+        frozen_agent_run_metadata(&task_message);
     if remote_agent {
         sqlx::query(
             "INSERT INTO agent_runs (id, org_id, repo_id, issue_id, requested_by, adapter_kind, work_branch, state, budget_tokens_limit, task_message)
@@ -821,7 +953,7 @@ async fn start_agent_run(
         .bind(&branch)
         .bind(body.budget_tokens.map(|limit| limit as i64))
         .bind(&task_message)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     } else {
         sqlx::query(
@@ -840,13 +972,15 @@ async fn start_agent_run(
         .bind(&task_message)
         .bind(instance_id)
         .bind(crate::lease::lease_secs())
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    }
+    tx.commit().await?;
+    if !remote_agent {
         let supervisor = state.supervisor.clone();
         let pool = state.pool.clone();
         let git_root = state.git_root.clone();
         let reference_bin = state.reference_adapter_bin.clone();
-        let message = body.message.clone();
         let deadline = std::time::Duration::from_secs(120);
         let budget_tokens = body.budget_tokens;
         tokio::spawn(async move {
@@ -860,7 +994,7 @@ async fn start_agent_run(
                 git_root,
                 reference_bin,
                 branch,
-                message,
+                task_message,
                 deadline,
                 budget_tokens,
                 None,
@@ -875,7 +1009,14 @@ async fn start_agent_run(
         state: "queued".to_string(),
         result_commit_oid: None,
         usage_tokens: 0,
-        budget_unknown: true,
+        budget_tokens_limit: body.budget_tokens,
+        budget_unknown: body.budget_tokens.is_some(),
+        base_oid: None,
+        issue_revision_id,
+        issue_revision,
+        accepted_plan_id,
+        accepted_plan_version,
+        recent_progress: Some("queued".to_string()),
         error_code: None,
     }))
 }
@@ -886,24 +1027,62 @@ async fn get_agent_run(
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<AgentRunView>, AppError> {
     let principal_id = require_session(&state.pool, &headers).await?;
-    let row = sqlx::query_as::<_, (Uuid, String, String, Option<String>, i64, Option<String>)>(
-        "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens, error_code
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            Option<String>,
+            i64,
+            Option<i64>,
+            bool,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT id, adapter_kind, state, result_commit_oid, usage_tokens, budget_tokens_limit,
+                (usage_evidence IS NULL), head_oid, task_message, recent_progress, error_code
          FROM agent_runs WHERE id = $1 AND requested_by = $2",
     )
     .bind(run_id)
     .bind(principal_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((id, adapter_kind, run_state, commit, tokens, error_code)) = row else {
+    let Some((
+        id,
+        adapter_kind,
+        run_state,
+        commit,
+        tokens,
+        budget_limit,
+        usage_unknown,
+        base_oid,
+        task_message,
+        recent_progress,
+        error_code,
+    )) = row
+    else {
         return Err(AppError::NotFound);
     };
+    let (issue_revision_id, issue_revision, accepted_plan_id, accepted_plan_version) =
+        frozen_agent_run_metadata(&task_message);
     Ok(Json(AgentRunView {
         id,
         adapter_kind,
         state: run_state,
         result_commit_oid: commit,
         usage_tokens: tokens as u64,
-        budget_unknown: true,
+        budget_tokens_limit: budget_limit.map(|value| value as u64),
+        budget_unknown: budget_limit.is_some() && usage_unknown,
+        base_oid,
+        issue_revision_id,
+        issue_revision,
+        accepted_plan_id,
+        accepted_plan_version,
+        recent_progress,
         error_code,
     }))
 }
@@ -1048,7 +1227,29 @@ async fn git_smart_http(
     } else {
         format!("/{git_path}")
     };
-    git_http_backend(
+    let is_receive_pack = suffix.ends_with("/git-receive-pack")
+        || query
+            .iter()
+            .any(|(key, value)| key == "service" && value == "git-receive-pack");
+    let _repository_write_lock = if is_receive_pack {
+        Some(repository_lock::acquire_repository_write_lock(&state.pool, repo_id).await?)
+    } else {
+        None
+    };
+    let observe_push = is_receive_pack && method == Method::POST;
+    let bare = bare_repo_path(&state.git_root, &storage_key);
+    let refs_before = if observe_push {
+        match git_ref_snapshot(&bare).await {
+            Ok(refs) => Some(refs),
+            Err(error) => {
+                tracing::warn!(repo_id = %repo_id, %error, "could not snapshot refs before Git push");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let response = git_http_backend(
         &method,
         &storage_key,
         &suffix,
@@ -1058,7 +1259,77 @@ async fn git_smart_http(
         &state.git_root,
         &remote_user,
     )
-    .await
+    .await?;
+    if response.status().is_success() {
+        if let Some(refs_before) = refs_before {
+            match git_ref_snapshot(&bare).await {
+                Ok(refs_after) => {
+                    let updates = refs_after
+                        .into_iter()
+                        .filter(|(name, oid)| refs_before.get(name) != Some(oid))
+                        .collect::<Vec<_>>();
+                    if !updates.is_empty() {
+                        if let Err(error) = pipeline::trigger_git_ref_workflows(
+                            &state,
+                            row_org_id,
+                            repo_id,
+                            storage_key,
+                            principal_id,
+                            &updates,
+                        )
+                        .await
+                        {
+                            tracing::error!(repo_id = %repo_id, %error, "Git push accepted but workflow trigger failed");
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(repo_id = %repo_id, %error, "Git push accepted but ref rescan failed")
+                }
+            }
+        }
+    }
+    Ok(response)
+}
+
+pub(crate) async fn git_ref_snapshot(
+    bare: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let output = tokio::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["show-ref", "--heads", "--tags"])
+        .output()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let mut refs = std::collections::BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((oid, name)) = line.split_once(' ') else {
+            continue;
+        };
+        if name.starts_with("refs/tags/") {
+            let peeled = tokio::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(bare)
+                .args(["rev-parse", "--verify"])
+                .arg(format!("{name}^{{commit}}"))
+                .output()
+                .await
+                .map_err(|error| error.to_string())?;
+            if peeled.status.success() {
+                refs.insert(
+                    name.to_string(),
+                    String::from_utf8_lossy(&peeled.stdout).trim().to_string(),
+                );
+            }
+        } else {
+            refs.insert(name.to_string(), oid.to_string());
+        }
+    }
+    Ok(refs)
 }
 
 pub(crate) async fn require_session(pool: &PgPool, headers: &HeaderMap) -> Result<Uuid, AppError> {

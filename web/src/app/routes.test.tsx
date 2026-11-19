@@ -9,6 +9,7 @@ let meResolve: (v: { handle: string }) => void
 let meReject: () => void
 
 vi.mock('../api', () => ({
+  getAuthProviders: vi.fn().mockResolvedValue({ oidc: false, github: false, saml: false }),
   me: vi.fn(
     () =>
       new Promise<{ handle: string }>((resolve, reject) => {

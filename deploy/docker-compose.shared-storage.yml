@@ -1,0 +1,19 @@
+# Mount operator-provided shared filesystems for Git refs/objects and artifacts.
+# The filesystem must provide reliable POSIX locking, atomic same-directory rename,
+# stable cross-host visibility, and persistence across node restart/failover.
+services:
+  musehub-server:
+    volumes: !override
+      - ${MUSEHUB_GIT_ROOT_HOST:?set the shared Git filesystem path}:/var/lib/musehub/git:rw
+      - ${MUSEHUB_ARTIFACT_ROOT_HOST:?set the shared artifact filesystem path}:/var/lib/musehub/artifacts:rw
+
+  musehub-git-ssh:
+    volumes: !override
+      - ${MUSEHUB_GIT_ROOT_HOST:?set the shared Git filesystem path}:/var/lib/musehub/git:rw
+      - gitsshdata:/var/lib/musehub/git-ssh
+
+  musehub-runner:
+    volumes: !override
+      - ${MUSEHUB_GIT_ROOT_HOST:?set the shared Git filesystem path}:/var/lib/musehub/git:rw
+      - ${MUSEHUB_ARTIFACT_ROOT_HOST:?set the shared artifact filesystem path}:/var/lib/musehub/artifacts:rw
+      - /var/run/docker.sock:/var/run/docker.sock

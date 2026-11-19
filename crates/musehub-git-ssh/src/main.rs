@@ -275,21 +275,75 @@ async fn gateway() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Client-supplied env cannot choose gateway binary or database URL when unset in login shell.
     env::remove_var("MUSEHUB_GIT_SSH_GATEWAY_BIN");
     let original = env::var("SSH_ORIGINAL_COMMAND").unwrap_or_default();
-    let pool = pool().await?;
+    let database_pool = pool().await?;
     let session_fp = git_ssh::session_akc_bound_pubkey_fingerprint()
         .map_err(|_| "missing session key fingerprint")?;
-    let auth = lookup_ssh_key_by_fingerprint(&pool, &session_fp)
+    let auth = lookup_ssh_key_by_fingerprint(&database_pool, &session_fp)
         .await
         .map_err(|_| "unknown key")?;
-    let plan = git_ssh::plan_ssh_pack_gateway(&pool, &require_git_root(), auth.key_id, &original)
-        .await
-        .map_err(|e| {
-            musehub_app::git_ssh_server_log::log_pack_plan_failure(&e.to_string());
-            "pack operation failed"
-        })?;
-    // Release DB handles before blocking pack I/O (do not await graceful close — can stall).
-    drop(pool);
-    match git_ssh::execute_ssh_pack(&plan) {
+    let plan =
+        git_ssh::plan_ssh_pack_gateway(&database_pool, &require_git_root(), auth.key_id, &original)
+            .await
+            .map_err(|error| {
+                musehub_app::git_ssh_server_log::log_pack_plan_failure(&error.to_string());
+                "pack operation failed"
+            })?;
+    let mut write_lock = if plan.service == "receive-pack" {
+        Some(
+            musehub_app::repository_lock::acquire_repository_write_lock(
+                &database_pool,
+                plan.repo_id,
+            )
+            .await
+            .map_err(|_| "pack operation failed")?,
+        )
+    } else {
+        None
+    };
+    let refs_before = if plan.service == "receive-pack" {
+        git_ssh::snapshot_git_refs(&plan.bare).await.ok()
+    } else {
+        None
+    };
+
+    // The lock transaction remains alive for receive-pack; other DB handles are released.
+    drop(database_pool);
+    let result = git_ssh::execute_ssh_pack(&plan);
+    if matches!(&result, Ok(0)) {
+        match (refs_before, write_lock.as_mut()) {
+            (Some(refs_before), Some(transaction)) => {
+                match git_ssh::snapshot_git_refs(&plan.bare).await {
+                    Ok(refs_after) => {
+                        let updates = refs_after
+                            .into_iter()
+                            .filter(|(name, oid)| refs_before.get(name) != Some(oid))
+                            .collect::<Vec<_>>();
+                        if !updates.is_empty() {
+                            if let Err(error) =
+                                git_ssh::enqueue_git_ref_updates(transaction, &plan, &updates).await
+                            {
+                                tracing::error!(repo_id = %plan.repo_id, %error, "SSH push accepted but trigger event enqueue failed");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(repo_id = %plan.repo_id, %error, "SSH push accepted but ref rescan failed")
+                    }
+                }
+            }
+            (None, Some(_)) => {
+                tracing::error!(repo_id = %plan.repo_id, "SSH push accepted but refs-before snapshot failed")
+            }
+            _ => {}
+        }
+    }
+    if let Some(transaction) = write_lock {
+        if let Err(error) = transaction.commit().await {
+            tracing::error!(repo_id = %plan.repo_id, %error, "SSH receive-pack repository lock commit failed");
+        }
+    }
+
+    match result {
         Ok(code) => std::process::exit(code),
         Err(_) => {
             eprintln!("{}", git_ssh::GIT_PACK_CLIENT_FAILURE);

@@ -56,6 +56,20 @@ test.describe('org config and grants UI', () => {
     const body = await settings.json()
     expect(body.display_name).toBe(name)
     expect(JSON.stringify(body)).not.toMatch(tokenLike)
+
+    await page.getByTestId('org-default-collab-role').selectOption('maintainer')
+    const [roleSave] = await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PATCH' &&
+          response.url().includes(settingsPath) &&
+          response.ok(),
+        { timeout: 15_000 },
+      ),
+      page.getByTestId('save-org-settings').click(),
+    ])
+    expect((await roleSave.json()).preferences.default_collaborator_role).toBe('maintainer')
+    await expect(page.getByTestId('org-settings-saved')).toBeVisible()
   })
 
   test('default collaborator role persists via API', async ({ request }) => {

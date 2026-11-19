@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -36,6 +36,7 @@ struct HealthBody {
 struct ReadinessChecks {
     process: &'static str,
     database: &'static str,
+    database_role: &'static str,
     git_storage: &'static str,
     product_api: &'static str,
     /// `mock` default in product image; use `runner` + verified OCI path for real compose.
@@ -78,17 +79,26 @@ async fn healthz() -> Json<HealthBody> {
 }
 
 async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let database = match &state.database {
-        None if state.database_configured => DATABASE_ERROR,
-        None => NOT_CONFIGURED,
+    let (database, database_role) = match &state.database {
+        None if state.database_configured => (DATABASE_ERROR, DATABASE_ERROR),
+        None => (NOT_CONFIGURED, NOT_CONFIGURED),
         Some(pool) => match tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            sqlx::query("SELECT 1").execute(pool),
+            sqlx::query_scalar::<_, String>(
+                "SELECT CASE
+                    WHEN pg_is_in_recovery() THEN 'standby'
+                    WHEN current_setting('transaction_read_only')::boolean THEN 'read_only'
+                    ELSE 'primary'
+                 END",
+            )
+            .fetch_one(pool),
         )
         .await
         {
-            Ok(Ok(_)) => PROCESS_OK,
-            Ok(Err(_)) | Err(_) => DATABASE_ERROR,
+            Ok(Ok(role)) if role == "primary" => (PROCESS_OK, "primary"),
+            Ok(Ok(role)) if role == "standby" => ("standby", "standby"),
+            Ok(Ok(_)) => ("read_only", "read_only"),
+            Ok(Err(_)) | Err(_) => (DATABASE_ERROR, DATABASE_ERROR),
         },
     };
     let git_storage = match &state.git_root {
@@ -115,6 +125,7 @@ async fn readyz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             checks: ReadinessChecks {
                 process: PROCESS_OK,
                 database,
+                database_role,
                 git_storage,
                 product_api,
                 compose_adapter_mode: compose_adapter_mode_label(),
@@ -145,8 +156,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/version", get(version_endpoint))
-        .with_state(state.clone())
-        .layer(middleware::from_fn(with_app_version));
+        .with_state(state.clone());
     if let Some(product) = &state.product {
         router = router.merge(
             product_router(product.clone()).layer(
@@ -158,6 +168,60 @@ pub fn app(state: Arc<AppState>) -> Router {
         );
     }
     router
+        .layer(middleware::from_fn_with_state(
+            state,
+            require_primary_for_mutations,
+        ))
+        .layer(middleware::from_fn(with_app_version))
+}
+
+async fn require_primary_for_mutations(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method();
+    let path = request.uri().path();
+    let safe_method = method == Method::GET
+        || method == Method::HEAD
+        || method == Method::OPTIONS
+        || method == Method::TRACE;
+    let state_changing_get = matches!(
+        path,
+        "/api/v1/auth/oidc/start"
+            | "/api/v1/auth/oidc/callback"
+            | "/api/v1/auth/github/start"
+            | "/api/v1/auth/github/callback"
+            | "/api/v1/auth/saml/start"
+    );
+    if safe_method && !state_changing_get {
+        return next.run(request).await;
+    }
+
+    let Some(pool) = &state.database else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database_not_primary" })),
+        )
+            .into_response();
+    };
+    let primary = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query_scalar::<_, bool>(
+            "SELECT NOT pg_is_in_recovery()
+             AND NOT current_setting('transaction_read_only')::boolean",
+        )
+        .fetch_one(pool),
+    )
+    .await;
+    match primary {
+        Ok(Ok(true)) => next.run(request).await,
+        Ok(Ok(false)) | Ok(Err(_)) | Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database_not_primary" })),
+        )
+            .into_response(),
+    }
 }
 
 async fn with_app_version(request: Request, next: Next) -> Response {
@@ -175,7 +239,41 @@ pub async fn build_product_state(
     git_root: PathBuf,
     bind_display: String,
     bootstrap_password: Option<&str>,
+    oidc_config: Option<&musehub_core::OidcConfig>,
+    github_oauth_config: Option<&musehub_core::GithubOAuthConfig>,
+    cookie_secure: bool,
 ) -> Result<Arc<ProductState>, Box<dyn std::error::Error + Send + Sync>> {
+    let oidc_provider = if let Some(oidc) = oidc_config {
+        Some(Arc::new(
+            musehub_app::oidc::OidcProvider::discover(
+                oidc.issuer_url(),
+                oidc.client_id(),
+                oidc.client_secret(),
+                oidc.redirect_uri(),
+                cookie_secure,
+            )
+            .await?,
+        ))
+    } else {
+        None
+    };
+    let saml_provider = musehub_app::saml::SamlProvider::from_env()?.map(Arc::new);
+    let github_oauth_provider = github_oauth_config
+        .map(|config| musehub_app::github_oauth::GithubOAuthProvider::new(config, cookie_secure))
+        .transpose()?
+        .map(Arc::new);
+    let database_not_writable = sqlx::query_scalar::<_, bool>(
+        "SELECT pg_is_in_recovery()
+         OR current_setting('transaction_read_only')::boolean",
+    )
+    .fetch_one(&pool)
+    .await?;
+    if database_not_writable {
+        return Err(std::io::Error::other(
+            "database endpoint is read-only; refusing control-plane initialization",
+        )
+        .into());
+    }
     prepare(pool.clone(), git_root.clone(), bootstrap_password).await?;
     boot_reconcile(&pool).await?;
     let instance_id = lease::parse_instance_id();
@@ -228,5 +326,10 @@ pub async fn build_product_state(
         pipeline_supervisor: musehub_app::pipeline_supervisor::PipelineSupervisor::new(),
         require_pipeline_oci: musehub_app::require_pipeline_oci_from_env(),
         mcp_pat_slot: Arc::new(tokio::sync::RwLock::new(None)),
+        mcp_request_gate: Arc::new(tokio::sync::Mutex::new(())),
+        oidc_provider,
+        saml_provider,
+        github_oauth_provider,
+        cookie_secure,
     }))
 }

@@ -54,6 +54,28 @@ pub async fn ensure_principal_repo_access(
     Err(AppError::Forbidden)
 }
 
+pub async fn ensure_principal_repo_write_access(
+    pool: &PgPool,
+    org_id: Uuid,
+    repo_id: Uuid,
+    principal_id: Uuid,
+) -> Result<(), AppError> {
+    if is_org_privileged(pool, org_id, principal_id).await? {
+        return Ok(());
+    }
+    let grant = sqlx::query_as::<_, (String,)>(
+        "SELECT role FROM repository_grants WHERE repo_id = $1 AND principal_id = $2",
+    )
+    .bind(repo_id)
+    .bind(principal_id)
+    .fetch_optional(pool)
+    .await?;
+    match grant {
+        Some((role,)) if role == "developer" || role == "maintainer" => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
+}
+
 pub async fn ensure_pat_repo_access(
     pool: &PgPool,
     pat: &PatContext,

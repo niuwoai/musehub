@@ -259,6 +259,7 @@ pub fn git_commit_compare(
             .to_string(),
         "diff".to_string(),
         "--name-status".to_string(),
+        "-z".to_string(),
         format!("{base_oid}..{head_oid}"),
     ];
     if let Some(p) = path_filter {
@@ -274,19 +275,31 @@ pub fn git_commit_compare(
         return Err(AppError::Validation("diff failed".to_string()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let fields: Vec<&str> = stdout
+        .split('\0')
+        .filter(|field| !field.is_empty())
+        .collect();
     let mut items = Vec::new();
     let mut adds = 0i64;
     let mut dels = 0i64;
-    for line in stdout.lines() {
-        let mut parts = line.split_whitespace();
-        let status = parts.next().unwrap_or("M");
-        let old_path = parts.next().unwrap_or("");
-        let new_path = parts.next().unwrap_or(old_path);
+    let mut index = 0;
+    while index < fields.len() {
+        let status = fields[index];
+        index += 1;
+        let old_path = fields.get(index).copied().unwrap_or("");
+        index += 1;
+        let new_path = if status.starts_with('R') || status.starts_with('C') {
+            let path = fields.get(index).copied().unwrap_or(old_path);
+            index += 1;
+            path
+        } else {
+            old_path
+        };
         let change_type = match status.chars().next() {
             Some('A') => "add",
             Some('D') => "delete",
-            Some('M') => "modify",
             Some('R') => "rename",
+            Some('C') => "copy",
             _ => "modify",
         };
         items.push(json!({
@@ -313,7 +326,7 @@ pub fn git_commit_compare(
         "additions_hint": adds,
         "deletions_hint": dels,
     });
-    let has_more = stdout.lines().filter(|l| !l.is_empty()).count() > items.len();
+    let has_more = fields.len() > index;
     Ok((items, summary, has_more))
 }
 
@@ -345,7 +358,7 @@ pub fn git_log_commits(
             git_dir,
             "log",
             ref_oid,
-            "--format=%H%x09%an%x09%s%x09%ct",
+            "--format=%H%x09%P%x09%an%x09%s%x09%ct",
             "-n",
             &fetch_n.to_string(),
             "--skip",
@@ -359,15 +372,16 @@ pub fn git_log_commits(
     let take = usize::try_from(limit).unwrap_or(50).min(lines.len());
     let mut items = Vec::new();
     for line in lines.iter().take(take) {
-        let parts: Vec<&str> = line.splitn(4, '\t').collect();
-        if parts.len() < 4 {
+        let parts: Vec<&str> = line.splitn(5, '\t').collect();
+        if parts.len() < 5 {
             continue;
         }
         items.push(json!({
             "oid": parts[0],
-            "author": parts[1],
-            "summary": parts[2],
-            "committed_at_epoch": parts[3].parse::<i64>().unwrap_or(0),
+            "parents": parts[1].split_whitespace().collect::<Vec<_>>(),
+            "author": parts[2],
+            "summary": parts[3],
+            "committed_at_epoch": parts[4].parse::<i64>().unwrap_or(0),
         }));
     }
     Ok((items, has_more))
@@ -398,7 +412,7 @@ pub fn git_unified_diff(
         &bytes[..]
     };
     let text = String::from_utf8_lossy(slice);
-    let is_binary = bytes.iter().take(8192).any(|&b| b == 0);
+    let is_binary = bytes.iter().take(8192).any(|&b| b == 0) || text.contains("Binary files ");
     Ok(json!({
         "path": path,
         "base_oid": base_oid,

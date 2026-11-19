@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MuseHub storage mirror every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=musehub-storage-mirror.service
+
+[Install]
+WantedBy=timers.target

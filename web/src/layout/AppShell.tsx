@@ -76,6 +76,9 @@ export function AppShell() {
           <NavLink to={paths.runner(org)} className="repo-tab" data-testid="nav-runner">
             {t('nav.runner')}
           </NavLink>
+          <NavLink to={paths.webhooks(org)} className="repo-tab" data-testid="nav-webhooks">
+            {t('nav.webhooks')}
+          </NavLink>
           <p className="nav-group-label">{t('nav.accountSecurity')}</p>
           <NavLink
             to={paths.accountSecurity()}

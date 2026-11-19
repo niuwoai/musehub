@@ -96,6 +96,18 @@ async fn git_ssh_protected_main_push_force_delete_denied() {
         String::from_utf8_lossy(&clone.stderr)
     );
     commit_file(work, "feature/x", "x.txt", b"x\n");
+    let initial_import = git_ssh_cmd_in(
+        &f.priv_key,
+        f.sshd.port,
+        Some(work),
+        &["push", "origin", "HEAD:main"],
+    );
+    assert!(
+        initial_import.status.success(),
+        "the empty repository seed may be replaced by its initial import: {}",
+        String::from_utf8_lossy(&initial_import.stderr)
+    );
+    commit_file(work, "feature/x", "x.txt", b"x2\n");
     let push_main = git_ssh_cmd_in(
         &f.priv_key,
         f.sshd.port,
@@ -408,6 +420,113 @@ async fn git_ssh_cross_repo_without_grant_denied() {
         "{}",
         String::from_utf8_lossy(&ok.stderr)
     );
+
+    let cross_org = format!("ssh-cross-{}", Uuid::new_v4().simple());
+    let cross_org_repo = format!("cross-{}", Uuid::new_v4().simple());
+    let created_org = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs")
+                .header(header::COOKIE, &f.cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "slug": cross_org,
+                        "display_name": "SSH Cross Organization"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_org.status(), StatusCode::CREATED);
+    let created_cross_org_repo = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/{cross_org}/repos"))
+                .header(header::COOKIE, &f.cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "slug": cross_org_repo }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_cross_org_repo.status(), StatusCode::CREATED);
+    let cross_org_url = format!(
+        "ssh://git@127.0.0.1:{}/{cross_org}/{cross_org_repo}.git",
+        f.sshd.port
+    );
+    let cross_org_dir = tempfile::tempdir().unwrap();
+    let cross_org_clone = git_ssh_cmd(
+        &outsider_key,
+        f.sshd.port,
+        &[
+            "clone",
+            &cross_org_url,
+            cross_org_dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(
+        !cross_org_clone.status.success(),
+        "membership and a repository grant in demo must not authorize another organization"
+    );
+
+    sqlx::query(
+        "UPDATE repository_grants SET role = 'reader'
+         WHERE repo_id = $1 AND principal_id = $2",
+    )
+    .bind(repo_id.0)
+    .bind(outsider_id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let fetch = git_ssh_cmd_in(
+        &outsider_key,
+        f.sshd.port,
+        Some(ok_dir.path()),
+        &["fetch", "origin"],
+    );
+    assert!(
+        fetch.status.success(),
+        "reader grant should allow fetch: {}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    commit_file(ok_dir.path(), "feature/reader", "reader.txt", b"reader\n");
+    let denied_push = git_ssh_cmd_in(
+        &outsider_key,
+        f.sshd.port,
+        Some(ok_dir.path()),
+        &["push", "origin", "HEAD:refs/heads/feature/reader"],
+    );
+    assert!(
+        !denied_push.status.success(),
+        "reader grant must not allow push"
+    );
+
+    sqlx::query("DELETE FROM repository_grants WHERE repo_id = $1 AND principal_id = $2")
+        .bind(repo_id.0)
+        .bind(outsider_id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let revoked_dir = tempfile::tempdir().unwrap();
+    let revoked = git_ssh_cmd(
+        &outsider_key,
+        f.sshd.port,
+        &["clone", &allowed_url, revoked_dir.path().to_str().unwrap()],
+    );
+    assert!(
+        !revoked.status.success(),
+        "removing repository grant should deny the next SSH session"
+    );
+
     let bad_dir = tempfile::tempdir().unwrap();
     let bad = git_ssh_cmd(
         &outsider_key,
@@ -439,14 +558,19 @@ async fn git_ssh_wrong_os_login_user_denied() {
 }
 
 #[tokio::test]
-async fn git_ssh_direct_tag_push_denied() {
+async fn git_ssh_allows_new_immutable_tag_push() {
     let f = git_ssh_fixture("sshtag").await;
     let work_dir = tempfile::tempdir().expect("work");
     let work = work_dir.path();
-    git_ssh_cmd(
+    let clone = git_ssh_cmd(
         &f.priv_key,
         f.sshd.port,
         &["clone", &f.clone_url, work.to_str().unwrap()],
+    );
+    assert!(
+        clone.status.success(),
+        "tag test clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
     );
     Command::new("git")
         .current_dir(work)
@@ -464,7 +588,11 @@ async fn git_ssh_direct_tag_push_denied() {
         Some(work),
         &["push", "origin", "refs/tags/v1.0.0-test"],
     );
-    assert!(!push_tag.status.success());
+    assert!(
+        push_tag.status.success(),
+        "new tag creation should be allowed: {}",
+        String::from_utf8_lossy(&push_tag.stderr)
+    );
 }
 
 #[tokio::test]

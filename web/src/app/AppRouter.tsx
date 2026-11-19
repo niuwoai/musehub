@@ -14,6 +14,7 @@ import { OrgSettingsPage } from '../pages/OrgSettingsPage'
 import { OrgMembersPage } from '../pages/OrgMembersPage'
 import { AuditPage } from '../pages/AuditPage'
 import { RunnerPage } from '../pages/RunnerPage'
+import { OrgWebhooksPage } from '../pages/OrgWebhooksPage'
 import { AccountSecurityPage } from '../pages/AccountSecurityPage'
 import { AccountTokensPage } from '../pages/AccountTokensPage'
 import { RepoIssuesPage } from '../pages/RepoIssuesPage'
@@ -141,6 +142,14 @@ export function AppRouter() {
           element={
             <OrgScopeGuard>
               <RunnerPage />
+            </OrgScopeGuard>
+          }
+        />
+        <Route
+          path="/org/:org/webhooks"
+          element={
+            <OrgScopeGuard>
+              <OrgWebhooksPage />
             </OrgScopeGuard>
           }
         />

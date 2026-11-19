@@ -97,10 +97,10 @@ MCP `CallToolResult.structuredContent`：
 
 | 工具 | 输入 | data 输出 | scope / 说明 |
 |---|---|---|---|
-| musehub_issue_list | Repo、Page、state?:IssueState、assignee_id?:ID、query?:string | items: IssueSummary[] | issue:read |
+| musehub_issue_list | Repo、Page、state?:IssueState、assignee_id?:ID、query?:string、label?:string | items: IssueSummary[] | issue:read；cursor 绑定仓库、主体、筛选条件与 limit；负责人必须仍具备仓库资格 |
 | musehub_issue_get | Repo、issue_id:ID | Issue、current_revision、criteria、delivery_summary | issue:read；讨论另分页 |
-| musehub_issue_create | Repo、Write、title:Text、body:Text、criteria:CriterionInput[]、assignee_id?:ID | Issue | issue:write；criteria 1–50 项才允许 Agent 实现 |
-| musehub_issue_update | Repo、issue_id、Edit、patch:{title?,body?,assignee_id?,state?,resolution_reason?} | Issue、新 revision（若内容变更） | issue:write；编辑内容复制旧验收条目到新 revision |
+| musehub_issue_create | Repo、Write、title:Text、body:Text、criteria:CriterionInput[]、labels?:string[]、assignee_id?:ID | Issue | issue:write；criteria 1–50 项才允许 Agent 实现 |
+| musehub_issue_update | Repo、issue_id、Edit、patch:{title?,body?,labels?,assignee_id?,state?,resolution_reason?} | Issue、新 revision（若内容变更） | issue:write；编辑内容复制旧验收条目到新 revision；负责人缺省=不变/null=清除；labels 传空数组清空 |
 | musehub_issue_criteria_replace | Repo、issue_id、Edit、criteria:CriterionInput[] | Issue、新 revision、criteria | issue:write；不改写旧快照 |
 | musehub_discussion_list | Repo、target:DiscussionTarget、Page | items: Comment[] | issue:read 或 pr:read |
 | musehub_discussion_comment | Repo、Write、target:DiscussionTarget、body:Text、anchor?:DiffAnchor | Comment | issue:write 或 pr:write；anchor 仅 PR |
@@ -165,6 +165,7 @@ PipelineState=`queued/running/succeeded/failed/cancel_requested/canceled`。agen
 | musehub_deployment_get | Repo、deployment_id | Deployment、desired、observed、health、approval_summary | deployment:read |
 | musehub_deployment_list | Repo、environment_id、Page | items: DeploymentSummary[] | deployment:read |
 | musehub_deployment_rollback | Repo、Write、environment_id、target_healthy_deployment_id、expected_environment_version:int、reason:Text | 新 Deployment、approval_required | deployment:write；执行同一审批与健康检查路径 |
+| musehub_deployment_trace | Repo、deployment_id | deployment_id、release_id、pipeline_run_id、commit_oid、release_oci_image_ref、applied_oci_digest、verified_source_oid、gaps | 仓库读取权限；按仓库授权，返回当前实现提供的部署与镜像追踪摘要 |
 | musehub_audit_list | org_id、repository_id?:ID、resource_type?:string、resource_id?:ID、Page | items: AuditSummary[] | audit:read；不返回密钥和原始源码 |
 
 首版无 `secret.get`、任意 shell、任意 SQL、硬删除仓库或绕过审查工具。环境/Runner/secret 管理由受限 Web/管理 API 完成；本 MCP 面向研发交付。release_create 即计算草稿 manifest_hash，release_publish 校验该 hash 后冻结同一 manifest；任何草稿内容改变都递增行版本并重新计算 hash。
@@ -180,7 +181,7 @@ PipelineState=`queued/running/succeeded/failed/cancel_requested/canceled`。agen
 | TreeEntry | path、kind、oid、size?；无内容 |
 | SearchHit | path、line、snippet、commit_oid |
 | FileDiff | old_path、new_path、change_type、binary、additions、deletions、hunks?、truncated |
-| Issue | repository_id、number、state、author_id、assignee_id?、current_revision_id、title、body |
+| Issue | repository_id、number、state、author_id、assignee_id?、labels、resolution_reason?、current_revision_id、title、body |
 | Plan | issue_revision_id、state、body、steps、content_hash、accepted_by?、accepted_at? |
 | Comment | target、author_id、body、anchor?、outdated、resolved |
 | PR | repository_id、number、state、source_branch、target_branch、head_oid、base_oid、current_revision_id、merged_commit_oid? |
@@ -245,7 +246,7 @@ HTTP 429/503 的重试提示与业务结果一致。实现不得把任意异常�
 
 ## 13. Resources 与 Prompts
 
-Resource URI：`musehub://repositories/{id}/commits/{oid}/files/{encoded-path}`、`musehub://issues/{id}/revisions/{n}`、`musehub://pull-requests/{id}/revisions/{n}`、`musehub://agent-runs/{id}/summary`、`musehub://deployments/{id}`。URI 不是授权凭据；每次读取做权限检查，路径编码防穿越。
+Resource URI：`musehub://repositories/{repository_id}/commits/{oid}/files/{encoded-path}`、`musehub://issues/{issue_id}/revisions/{n}`、`musehub://pull-requests/{pr_id}/revisions/{n}`、`musehub://agent-runs/{agent_run_id}/summary`、`musehub://deployments/{deployment_id}`。URI 不是授权凭据；每次读取做权限检查，路径编码防穿越。
 
 Prompts：`plan_issue`、`review_pull_request`、`diagnose_pipeline_failure`、`draft_release_notes`。Prompt 只组装上下文，不能赋予新权限或自动发布。用户 Issue、仓库 README、评论和日志作为不可信内容处理，不可改变平台允许工具、凭据和审批规则。
 

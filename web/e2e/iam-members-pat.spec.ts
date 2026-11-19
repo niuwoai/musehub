@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { goAccountTokens, goAudit, goOrgMembers } from './helpers/navigation'
+import { createRepoViaUi } from './helpers/repo'
 import { expectLoggedInAs } from './helpers/session'
 
 const password = process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD
@@ -72,5 +73,43 @@ test.describe('org members and PAT console', () => {
     await expect(page.getByTestId('audit-panel')).toBeVisible()
     const auditBody = await page.getByTestId('audit-panel').innerText()
     expect(auditBody).not.toMatch(fullPatLike)
+  })
+
+  test('mint selected-repository PAT from the console', async ({ page }) => {
+    await page.goto('/login')
+    await page
+      .getByLabel(/password|密码/i)
+      .fill(process.env.MUSEHUB_BOOTSTRAP_ADMIN_PASSWORD!)
+    await page.getByRole('button', { name: /login|登录/i }).click()
+    await expectLoggedInAs(page, 'admin')
+
+    const { slug } = await createRepoViaUi(page)
+    const patName = `selected-ui-pat-${Date.now()}`
+    await goAccountTokens(page)
+    await page.getByTestId('pat-scope-mode').selectOption('selected')
+    const repoSelect = page.getByTestId('pat-repo-id')
+    const selectedRepoId = await repoSelect.selectOption({ label: slug })
+    expect(selectedRepoId).not.toBe('')
+    await page.getByTestId('pat-name').fill(patName)
+    await page.getByTestId('create-pat').click()
+
+    await expect(page.getByTestId('pat-minted-once')).toContainText(fullPatLike, {
+      timeout: 10_000,
+    })
+    const tokensResponse = await page.request.get(`${apiBase}/api/v1/tokens`)
+    expect(tokensResponse.ok()).toBeTruthy()
+    const tokens = (await tokensResponse.json()) as {
+      id: string
+      name: string
+      scope_mode: string
+    }[]
+    const token = tokens.find((item) => item.name === patName)
+    expect(token?.scope_mode).toBe('selected')
+    await expect(page.getByTestId('pat-masked-list')).toContainText(
+      /Selected repository|指定仓库/,
+    )
+
+    await page.getByTestId(`revoke-pat-${token!.id}`).click()
+    await expect(page.getByTestId('pat-masked-list')).not.toContainText(patName)
   })
 })

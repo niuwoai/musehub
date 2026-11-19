@@ -205,6 +205,37 @@ async fn pr_merge_gates_two_users_full_chain() {
     let pr_json: serde_json::Value =
         serde_json::from_slice(&pr_resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let pr_number = pr_json["number"].as_i64().unwrap();
+    let detail_uri = format!("/api/v1/orgs/demo/repos/pr-gates/pull-requests/{pr_number}");
+    let detail_pending = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&detail_uri)
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_pending.status(), StatusCode::OK);
+    let detail_pending: serde_json::Value = serde_json::from_slice(
+        &detail_pending
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        detail_pending["checks"][0]["check_name"],
+        DEFAULT_REPO_CHECK
+    );
+    assert_eq!(detail_pending["checks"][0]["required"], true);
+    assert_eq!(detail_pending["checks"][0]["state"], "pending");
+    assert_eq!(detail_pending["checks"][0]["valid"], false);
+    assert_eq!(detail_pending["merge_preconditions_passed"], false);
 
     let self_review = app
         .clone()
@@ -318,6 +349,34 @@ async fn pr_merge_gates_two_users_full_chain() {
         .await
         .unwrap();
     assert_eq!(check_ok.status(), StatusCode::NO_CONTENT);
+
+    let detail_passed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&detail_uri)
+                .header(header::COOKIE, &reviewer_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_passed.status(), StatusCode::OK);
+    let detail_passed: serde_json::Value = serde_json::from_slice(
+        &detail_passed
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(detail_passed["checks"][0]["state"], "success");
+    assert_eq!(detail_passed["checks"][0]["valid"], true);
+    assert_eq!(detail_passed["has_current_approval"], true);
+    assert_eq!(detail_passed["checks_gate_passed"], true);
+    assert_eq!(detail_passed["merge_preconditions_passed"], true);
 
     let merge_ok = app
         .clone()
@@ -646,6 +705,152 @@ async fn stale_approval_after_new_commit_requires_resync() {
         )
         .await
         .unwrap();
+
+    Command::new("git")
+        .current_dir(&work)
+        .args(["checkout", "-B", "main", "origin/main"])
+        .status()
+        .unwrap();
+    std::fs::write(work.join("base-advance.txt"), b"base advanced\n").unwrap();
+    Command::new("git")
+        .current_dir(&work)
+        .args(["add", "base-advance.txt"])
+        .status()
+        .unwrap();
+    Command::new("git")
+        .current_dir(&work)
+        .args([
+            "-c",
+            "user.email=a@musehub.local",
+            "-c",
+            "user.name=a",
+            "commit",
+            "-m",
+            "advance base",
+            "--no-gpg-sign",
+        ])
+        .status()
+        .unwrap();
+    assert!(Command::new("git")
+        .current_dir(&work)
+        .args(["push", "origin", "HEAD:refs/heads/main"])
+        .status()
+        .unwrap()
+        .success());
+
+    let stale_base_merge = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/merge"
+                ))
+                .header(header::COOKIE, &rev_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_base_merge.status(), StatusCode::BAD_REQUEST);
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}"
+                ))
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let row_version = serde_json::from_slice::<serde_json::Value>(
+        &detail.into_body().collect().await.unwrap().to_bytes(),
+    )
+    .unwrap()["row_version"]
+        .as_i64()
+        .unwrap();
+    let synced_base = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/sync"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::from(
+                    serde_json::json!({ "expected_row_version": row_version }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(synced_base.status(), StatusCode::OK);
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}"
+                ))
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail: serde_json::Value =
+        serde_json::from_slice(&detail.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(detail["checks"][0]["state"], "pending");
+    assert_eq!(detail["checks"][0]["valid"], false);
+
+    let stale_check_merge = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/merge"
+                ))
+                .header(header::COOKIE, &rev_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_check_merge.status(), StatusCode::BAD_REQUEST);
+
+    let fresh_check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/orgs/demo/repos/stale/pull-requests/{pr_number}/checks/{DEFAULT_REPO_CHECK}"
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &ci_cookie)
+                .body(Body::from(
+                    serde_json::json!({
+                        "state": "success",
+                        "attempt_id": uuid::Uuid::new_v4()
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fresh_check.status(), StatusCode::NO_CONTENT);
+
     let merged = app
         .clone()
         .oneshot(

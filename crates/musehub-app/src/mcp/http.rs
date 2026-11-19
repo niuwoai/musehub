@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::OwnedMutexGuard;
+
 use axum::{
     extract::{Request, State},
     http::{header::AUTHORIZATION, Method, StatusCode},
@@ -21,6 +23,16 @@ pub fn parse_bearer_token(authorization_header: Option<&str>) -> Option<&str> {
     authorization_header?
         .strip_prefix("Bearer ")
         .filter(|token| !token.is_empty())
+}
+
+async fn install_request_pat(
+    gate: &Arc<tokio::sync::Mutex<()>>,
+    slot: &Arc<tokio::sync::RwLock<Option<pat_auth::PatContext>>>,
+    pat: pat_auth::PatContext,
+) -> OwnedMutexGuard<()> {
+    let guard = gate.clone().lock_owned().await;
+    *slot.write().await = Some(pat);
+    guard
 }
 
 pub fn product_mcp_router(state: Arc<AppState>, cancel: CancellationToken) -> Router {
@@ -65,10 +77,16 @@ async fn require_pat_for_mcp(
     if pat_policy::is_runner_only_pat(&pat.scopes) {
         return Err(StatusCode::FORBIDDEN);
     }
-    {
-        let mut guard = state.mcp_pat_slot.write().await;
-        *guard = Some(pat);
+    // Only POST carries MCP requests that can reach handlers using the PAT slot.
+    // GET/DELETE may manage long-lived transport streams and do not read it.
+    if request.method() != Method::POST {
+        return Ok(next.run(request).await);
     }
+    // Handlers currently obtain their PAT through AppState. Hold this gate from
+    // installing the authenticated identity until the MCP request has fully
+    // completed, so concurrent HTTP requests cannot observe each other's PAT.
+    let _request_guard =
+        install_request_pat(&state.mcp_request_gate, &state.mcp_pat_slot, pat).await;
     Ok(next.run(request).await)
 }
 
@@ -84,4 +102,48 @@ pub fn product_mcp_enabled() -> bool {
     std::env::var("MUSEHUB_MCP_PRODUCT")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pat(principal_id: uuid::Uuid) -> pat_auth::PatContext {
+        pat_auth::PatContext {
+            token_id: uuid::Uuid::new_v4(),
+            principal_id,
+            org_id: None,
+            scopes: vec!["repo:read".to_string()],
+            scope_mode: "all".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_cannot_replace_the_active_pat_mid_request() {
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let slot = Arc::new(tokio::sync::RwLock::new(None));
+        let first_id = uuid::Uuid::new_v4();
+        let second_id = uuid::Uuid::new_v4();
+
+        let first_guard = install_request_pat(&gate, &slot, pat(first_id)).await;
+        let second_gate = Arc::clone(&gate);
+        let second_slot = Arc::clone(&slot);
+        let second = tokio::spawn(async move {
+            install_request_pat(&second_gate, &second_slot, pat(second_id)).await
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(
+            slot.read().await.as_ref().map(|pat| pat.principal_id),
+            Some(first_id)
+        );
+
+        drop(first_guard);
+        let second_guard = second.await.expect("second request acquires gate");
+        assert_eq!(
+            slot.read().await.as_ref().map(|pat| pat.principal_id),
+            Some(second_id)
+        );
+        drop(second_guard);
+    }
 }

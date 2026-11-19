@@ -132,7 +132,7 @@ async fn remote_runner_claims_and_completes_pipeline() {
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
          requested_by, run_attempt_id, run_kind)
-         VALUES ($1,$2,$3,$4,'product-ci','queued',$5,$6,'pr_validation')",
+         VALUES ($1,$2,$3,$4,'product-ci','queued',$5,$6,'release_build')",
     )
     .bind(run_id)
     .bind(org_id.0)
@@ -218,7 +218,7 @@ async fn remote_runner_claims_and_completes_pipeline() {
     sqlx::query(
         "INSERT INTO pipeline_runs (id, org_id, repo_id, source_oid, workflow_name, state,
          requested_by, run_attempt_id, run_kind)
-         VALUES ($1,$2,$3,$4,'product-ci','queued',$5,$6,'pr_validation')",
+         VALUES ($1,$2,$3,$4,'product-ci','queued',$5,$6,'release_build')",
     )
     .bind(canceled_run_id)
     .bind(org_id.0)

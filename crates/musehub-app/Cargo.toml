@@ -1,10 +1,12 @@
 [package]
 name = "musehub-app"
-version = "0.2.0-rc1"
+version = "0.20.0-rc6"
 edition = "2021"
 
 [dependencies]
 argon2 = "0.5"
+aes-gcm = "0.10"
+hmac = "0.12"
 axum = { workspace = true }
 base64 = "0.22"
 axum-extra = { version = "0.10", features = ["cookie"] }
@@ -12,10 +14,15 @@ bytes = { workspace = true }
 http = { workspace = true }
 musehub-agent-adapter = { path = "../musehub-agent-adapter" }
 musehub-core = { path = "../musehub-core" }
+openidconnect = "4.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = "2.5"
 rand = "0.8"
+quick-xml = "=0.42.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_urlencoded = "0.7"
+serde_yaml_ng = "=0.10.0"
 tempfile = "3"
 sha2 = "0.10"
 sqlx = { workspace = true, features = ["time"] }
@@ -27,7 +34,8 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 rmcp = { workspace = true }
-schemars = { version = "1", features = ["derive"] }
+saml-rs = { version = "=0.8.0", default-features = false, features = ["crypto-rustcrypto"] }
+schemars = { version = "1", features = ["derive", "uuid1"] }
 tokio-util = { workspace = true }
 urlencoding = "2.1"
 
@@ -40,4 +48,5 @@ tokio-util = { workspace = true }
 tower = { workspace = true }
 http-body-util = { workspace = true }
 musehub-migrate = { path = "../musehub-migrate" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rcgen = "0.13"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

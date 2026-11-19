@@ -22,6 +22,7 @@ struct Config {
     git_root: PathBuf,
     artifact_root: PathBuf,
     pipeline_bin: PathBuf,
+    pipeline_job_bin: PathBuf,
     reference_adapter_bin: PathBuf,
     compose_mock_bin: PathBuf,
     compose_runner_bin: PathBuf,
@@ -54,16 +55,41 @@ async fn main() {
         tracing::error!("MUSEHUB_RUNNER_PAT is required");
         std::process::exit(78);
     }
+    if !matches!(cfg.work_kinds, WorkKinds::AgentOnly) {
+        tracing::info!("runner startup cleanup started");
+        let cleanup = std::process::Command::new(&cfg.pipeline_job_bin)
+            .arg("--cleanup")
+            .env(
+                "MUSEHUB_JOB_DOCKER_BIN",
+                std::env::var_os("MUSEHUB_JOB_DOCKER_BIN").unwrap_or_default(),
+            )
+            .env("MUSEHUB_RUNNER_INSTANCE_ID", cfg.instance_id.to_string())
+            .status();
+        if !matches!(cleanup, Ok(status) if status.success()) {
+            tracing::error!("could not clean up orphaned job containers for this Runner instance");
+            std::process::exit(78);
+        }
+        tracing::info!("runner startup cleanup completed");
+    }
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
         let _ = shutdown_tx.send(true);
     });
     let client = reqwest::Client::new();
-    let pool = connect_pool().await.unwrap_or_else(|e| {
-        tracing::error!(error = %e, "database connect failed");
-        std::process::exit(78);
-    });
+    tracing::info!("runner database connection started");
+    let pool = match tokio::time::timeout(Duration::from_secs(20), connect_pool()).await {
+        Ok(Ok(pool)) => pool,
+        Ok(Err(error)) => {
+            tracing::error!(error = %error, "database connect failed");
+            std::process::exit(78);
+        }
+        Err(_) => {
+            tracing::error!("runner database connection timed out after 20 seconds");
+            std::process::exit(78);
+        }
+    };
+    tracing::info!("runner database connection completed");
     let pipeline_supervisor = Arc::new(PipelineSupervisor::new());
     let agent_supervisor = Arc::new(AgentSupervisor::default());
     tracing::info!(
@@ -174,6 +200,13 @@ fn load_config() -> Result<Config, String> {
     } else {
         PathBuf::from("/dev/null")
     };
+    let pipeline_job_bin = if needs_pipeline {
+        std::env::var("MUSEHUB_PIPELINE_JOB_ADAPTER_BIN")
+            .map(PathBuf::from)
+            .map_err(|_| "MUSEHUB_PIPELINE_JOB_ADAPTER_BIN required".to_string())?
+    } else {
+        PathBuf::from("/dev/null")
+    };
     let reference_adapter_bin = if needs_agent {
         std::env::var("MUSEHUB_REFERENCE_ADAPTER_BIN")
             .map(PathBuf::from)
@@ -204,6 +237,7 @@ fn load_config() -> Result<Config, String> {
         git_root,
         artifact_root,
         pipeline_bin,
+        pipeline_job_bin,
         reference_adapter_bin,
         compose_mock_bin,
         compose_runner_bin,
@@ -276,11 +310,16 @@ async fn run_pipeline(
         claimed.run_id,
         claimed.lease_epoch,
     );
+    let pipeline_bin = if claimed.run_kind != "release_build" {
+        cfg.pipeline_job_bin.clone()
+    } else {
+        cfg.pipeline_bin.clone()
+    };
     execute_pipeline_job(
         pool.clone(),
         cfg.git_root.clone(),
         cfg.artifact_root.clone(),
-        cfg.pipeline_bin.clone(),
+        pipeline_bin,
         supervisor.clone(),
         cfg.instance_id,
         claimed.storage_key,

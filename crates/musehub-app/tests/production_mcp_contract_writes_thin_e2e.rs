@@ -664,7 +664,7 @@ async fn issue_with_accepted_plan(
     client: &rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>,
     org_id: Uuid,
     repo_id: Uuid,
-) -> (String, String) {
+) -> (String, String, String) {
     let issue = client
         .call_tool(
             CallToolRequestParams::new("musehub_issue_create").with_arguments(
@@ -673,7 +673,15 @@ async fn issue_with_accepted_plan(
                     ("repository_id".into(), json!(repo_id.to_string())),
                     ("idempotency_key".into(), json!("ag-start-issue")),
                     ("title".into(), json!("Agent")),
-                    ("body".into(), json!("")),
+                    ("body".into(), json!("initial issue body")),
+                    (
+                        "criteria".into(),
+                        json!([{
+                            "description": "MCP snapshot criterion",
+                            "verification_method": "automated",
+                            "required": true
+                        }]),
+                    ),
                 ]),
             ),
         )
@@ -715,7 +723,7 @@ async fn issue_with_accepted_plan(
         .await
         .expect("accept");
     assert!(!accepted.is_error.unwrap_or(true));
-    (issue_id, plan_id)
+    (issue_id, plan_id, revision_id)
 }
 
 #[tokio::test]
@@ -820,7 +828,8 @@ async fn mcp_agent_run_start_queues_run_idempotent_replay_and_conflict() {
             .await
             .unwrap();
     let client = mcp_client(&app, &token).await;
-    let (issue_id, _plan_id) = issue_with_accepted_plan(&client, org_id.0, repo_id.0).await;
+    let (issue_id, plan_id, issue_revision_id) =
+        issue_with_accepted_plan(&client, org_id.0, repo_id.0).await;
     let args = serde_json::Map::from_iter([
         ("org_id".into(), json!(org_id.0.to_string())),
         ("repository_id".into(), json!(repo_id.0.to_string())),
@@ -849,6 +858,80 @@ async fn mcp_agent_run_start_queues_run_idempotent_replay_and_conflict() {
         db.0
     );
     assert_eq!(db.1, issue_id);
+    let (task_message,): (String,) =
+        sqlx::query_as("SELECT task_message FROM agent_runs WHERE id = $1")
+            .bind(Uuid::parse_str(&run_a).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let snapshot_text = task_message
+        .split_once("Frozen issue context (JSON):\n")
+        .expect("frozen issue context")
+        .1
+        .split_once("\n\nAdditional user request:")
+        .expect("user request separator")
+        .0;
+    let snapshot: serde_json::Value = serde_json::from_str(snapshot_text).unwrap();
+    assert_eq!(snapshot["issue_revision"], 1);
+    assert_eq!(snapshot["issue_revision_id"], issue_revision_id);
+    assert_eq!(snapshot["issue"]["title"], "Agent");
+    assert_eq!(snapshot["issue"]["body"], "initial issue body");
+    assert_eq!(
+        snapshot["acceptance_criteria"][0]["description"],
+        "MCP snapshot criterion"
+    );
+    assert_eq!(
+        snapshot["acceptance_criteria"][0]["verification_method"],
+        "automated"
+    );
+    assert_eq!(snapshot["accepted_plan"]["id"], plan_id);
+    assert_eq!(snapshot["accepted_plan"]["body"], "plan");
+
+    let updated_issue = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_issue_update").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("issue_id".into(), json!(issue_id)),
+                    ("expected_version".into(), json!(1)),
+                    ("title".into(), json!("Agent revised")),
+                    ("idempotency_key".into(), json!("ag-start-revise-issue")),
+                ]),
+            ),
+        )
+        .await
+        .expect("revise issue");
+    assert!(
+        !updated_issue.is_error.unwrap_or(true),
+        "issue revision update failed: {updated_issue:?}"
+    );
+    assert_eq!(tool_data(&updated_issue)["version"], 2);
+
+    let stale_start = client
+        .call_tool(
+            CallToolRequestParams::new("musehub_agent_run_start").with_arguments(
+                serde_json::Map::from_iter([
+                    ("org_id".into(), json!(org_id.0.to_string())),
+                    ("repository_id".into(), json!(repo_id.0.to_string())),
+                    ("issue_id".into(), json!(issue_id)),
+                    ("message".into(), json!("start from stale plan")),
+                    ("adapter".into(), json!("reference")),
+                    ("idempotency_key".into(), json!("ag-start-stale-plan")),
+                ]),
+            ),
+        )
+        .await
+        .expect("reject stale plan start");
+    assert!(stale_start.is_error.unwrap_or(false));
+    let frozen_message_after_revision: (String,) =
+        sqlx::query_as("SELECT task_message FROM agent_runs WHERE id = $1")
+            .bind(Uuid::parse_str(&run_a).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(frozen_message_after_revision.0, task_message);
+
     let replay = client
         .call_tool(CallToolRequestParams::new("musehub_agent_run_start").with_arguments(args))
         .await

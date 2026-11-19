@@ -5,13 +5,14 @@ import { defineConfig } from 'vitest/config'
 
 const versionFile = fileURLToPath(new URL('../VERSION', import.meta.url))
 const appVersion = readFileSync(versionFile, 'utf8').trim()
+const e2eServer = process.env.MUSEHUB_E2E_SERVER ?? 'http://127.0.0.1:8080'
 
 export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8080',
-      '/git': 'http://127.0.0.1:8080',
+      '/api': e2eServer,
+      '/git': e2eServer,
     },
   },
   define: {

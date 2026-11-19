@@ -69,8 +69,11 @@ export type IssueDetail = Issue & {
 export type IssueDeliveryTrace = {
   issue_id: string
   issue_number: number
+  plans: { id: string; version: number; state: string }[]
+  agent_runs: { id: string; state: string; adapter_kind: string; error_code?: string | null }[]
   pull_requests: { id: string; number: number; state: string; merged_oid?: string | null }[]
   pipeline_runs: { id: string; state: string; source_oid: string }[]
+  releases: { id: string; version: string; tag_name: string; state: string }[]
   deployments: { id: string; environment_slug: string; state: string }[]
   gaps: string[]
 }
@@ -92,11 +95,21 @@ export type DiscussionComment = {
   created_at: string
 }
 export type SshKey = { id: string; name: string; fingerprint: string; created_at: string }
+export type PullRequestCheck = {
+  check_name: string
+  state: 'pending' | 'success' | 'failure' | null
+  required: boolean
+  valid: boolean
+}
 export type PullRequestDetail = PullRequest & {
   row_version: number
   author_handle: string
   base_oid?: string
   head_oid?: string
+  checks: PullRequestCheck[]
+  has_current_approval: boolean
+  checks_gate_passed: boolean
+  merge_preconditions_passed: boolean
 }
 export type AgentRun = {
   id: string
@@ -104,7 +117,15 @@ export type AgentRun = {
   state: string
   result_commit_oid?: string | null
   usage_tokens: number
+  budget_tokens_limit?: number | null
   budget_unknown: boolean
+  base_oid?: string | null
+  issue_revision_id?: string | null
+  issue_revision?: number | null
+  accepted_plan_id?: string | null
+  accepted_plan_version?: number | null
+  recent_progress?: string | null
+  error_code?: string | null
 }
 export type PullRequest = {
   id: string
@@ -167,12 +188,36 @@ export type PipelineRun = {
   error_code?: string | null
 }
 
+export type PipelineRunHistoryItem = PipelineRun & { created_at: string }
+export type PipelineRunHistoryPage = {
+  items: PipelineRunHistoryItem[]
+  next_cursor: string | null
+  has_more: boolean
+}
+
+export async function listPipelineRuns(
+  org: string,
+  repo: string,
+  options?: { beforeId?: string | null; limit?: number },
+) {
+  const params = new URLSearchParams()
+  if (options?.beforeId) params.set('before_id', options.beforeId)
+  if (options?.limit != null) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return api<PipelineRunHistoryPage>(
+    `/api/v1/orgs/${org}/repos/${repo}/pipeline-runs${query ? `?${query}` : ''}`,
+  )
+}
+
 export type PipelineJob = {
   id: string
   pipeline_run_id: string
   job_key: string
   state: string
   retry_allowed: boolean
+  attempt_id?: string | null
+  result?: { junit?: { tests: number; failures: number; errors: number; skipped: number } } | null
+  artifacts?: { id: string; name: string; kind: string; sha256: string; byte_length: number; download_url: string }[]
 }
 
 export type DeploymentTrace = {
@@ -197,6 +242,14 @@ export type DeploymentTrace = {
   gaps: string[]
 }
 
+export type ReleaseArtifact = {
+  id: string
+  name: string
+  kind: string
+  sha256: string
+  byte_length: number
+}
+
 export type Release = {
   id: string
   version: string
@@ -204,6 +257,8 @@ export type Release = {
   commit_oid: string
   pipeline_run_id: string
   state: string
+  release_notes: string
+  assets: ReleaseArtifact[]
 }
 
 export type DeploymentHealthSummary = {
@@ -234,6 +289,12 @@ export type DeploymentSummary = {
   plan_hash?: string | null
   approval_required: boolean
   updated_at: string
+  desired_version: string
+  desired_commit_oid: string
+  desired_oci_image_ref?: string | null
+  observed_oci_digest?: string | null
+  observed_source_oid?: string | null
+  observed_at?: string | null
 }
 
 export type DeploymentListResponse = {
@@ -246,6 +307,19 @@ export type DeploymentApprovalResult = {
   decision: string
   state: string
   plan_hash?: string
+}
+
+export async function getAuthProviders() {
+  return api<{ oidc: boolean; github: boolean; saml: boolean }>('/api/v1/auth/providers')
+}
+
+export type OidcIdentityLinkStatus = {
+  enabled: boolean
+  linked: boolean
+}
+
+export async function getOidcIdentityLinkStatus() {
+  return api<OidcIdentityLinkStatus>('/api/v1/me/oidc-identity')
 }
 
 export async function login(handle: string, password: string) {
@@ -409,6 +483,50 @@ export type ReleaseSummary = {
   state: string
   manifest_sha256?: string | null
   oci_image_ref?: string | null
+  release_notes: string
+  assets: ReleaseArtifact[]
+}
+
+export type WebhookSubscription = {
+  id: string
+  repo_id: string | null
+  endpoint_url: string
+  event_types: string[]
+  enabled: boolean
+  created_at: string
+}
+
+export type WebhookDelivery = {
+  id: string
+  subscription_id: string
+  audit_event_id: string
+  status: string
+  attempt_count: number
+  response_status: number | null
+  last_error: string | null
+  created_at: string
+}
+
+export async function listWebhooks(org: string) {
+  return api<WebhookSubscription[]>(`/api/v1/orgs/${org}/webhooks`)
+}
+
+export async function createWebhook(
+  org: string,
+  body: { endpoint_url: string; event_types: string[]; repo_id?: string },
+) {
+  return api<{ subscription: WebhookSubscription; secret: string }>(`/api/v1/orgs/${org}/webhooks`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function disableWebhook(org: string, webhookId: string) {
+  return api<void>(`/api/v1/orgs/${org}/webhooks/${webhookId}`, { method: 'DELETE' })
+}
+
+export async function listWebhookDeliveries(org: string, webhookId: string) {
+  return api<WebhookDelivery[]>(`/api/v1/orgs/${org}/webhooks/${webhookId}/deliveries`)
 }
 
 export async function listReleases(org: string, repo: string) {
@@ -538,10 +656,18 @@ export async function syncPullRequest(org: string, repo: string, number: number,
   })
 }
 
-export async function listGitCommits(org: string, repo: string, ref: string) {
-  return api<{ items: { oid: string; summary: string; author: string }[] }>(
-    `/api/v1/orgs/${org}/repos/${repo}/git/commits?ref=${encodeURIComponent(ref)}`,
-  )
+export async function listGitCommits(
+  org: string,
+  repo: string,
+  ref: string,
+  limit = 20,
+  offset = 0,
+) {
+  const params = new URLSearchParams({ ref, limit: String(limit), offset: String(offset) })
+  return api<{
+    items: { oid: string; parents: string[]; summary: string; author: string }[]
+    has_more: boolean
+  }>(`/api/v1/orgs/${org}/repos/${repo}/git/commits?${params}`)
 }
 
 export async function listGitTree(org: string, repo: string, commit: string, path: string) {
@@ -559,6 +685,28 @@ export async function readGitBlob(
 ) {
   return api<{ binary: boolean; text?: string | null; truncated?: boolean }>(
     `/api/v1/orgs/${org}/repos/${repo}/git/blob?commit=${encodeURIComponent(commit)}&path=${encodeURIComponent(path)}&start_line=${startLine}`,
+  )
+}
+
+export async function listGitCommitDiff(org: string, repo: string, base: string, head: string) {
+  return api<{
+    files: { old_path: string; new_path: string; change_type: string; truncated: boolean }[]
+    summary: { files_changed: number; additions_hint: number; deletions_hint: number }
+    has_more: boolean
+  }>(
+    `/api/v1/orgs/${org}/repos/${repo}/git/diff?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}&path=`,
+  )
+}
+
+export async function readGitCommitDiff(
+  org: string,
+  repo: string,
+  base: string,
+  head: string,
+  path: string,
+) {
+  return api<{ path: string; binary: boolean; unified?: string | null; truncated: boolean }>(
+    `/api/v1/orgs/${org}/repos/${repo}/git/diff?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}&path=${encodeURIComponent(path)}`,
   )
 }
 
@@ -614,13 +762,14 @@ export async function createPullRequest(
   repo: string,
   title: string,
   sourceBranch: string,
-  opts?: { issue_id?: string; agent_run_id?: string },
+  opts?: { issue_id?: string; agent_run_id?: string; target_branch?: string },
 ) {
   return api<PullRequest>(`/api/v1/orgs/${org}/repos/${repo}/pull-requests`, {
     method: 'POST',
     body: JSON.stringify({
       title,
       source_branch: sourceBranch,
+      target_branch: opts?.target_branch,
       issue_id: opts?.issue_id,
       agent_run_id: opts?.agent_run_id,
     }),
@@ -741,6 +890,8 @@ export async function createRelease(
     commit_oid: string
     pipeline_run_id: string
     pr_id?: string
+    release_notes?: string
+    artifact_ids?: string[]
   },
 ) {
   return api<Release>(`/api/v1/orgs/${org}/repos/${repo}/releases`, {

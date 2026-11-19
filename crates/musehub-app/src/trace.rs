@@ -235,11 +235,37 @@ pub struct IssueDeliveryLinkDeployment {
 }
 
 #[derive(Serialize)]
+pub struct IssueDeliveryLinkPlan {
+    pub id: Uuid,
+    pub version: i32,
+    pub state: String,
+}
+
+#[derive(Serialize)]
+pub struct IssueDeliveryLinkAgentRun {
+    pub id: Uuid,
+    pub state: String,
+    pub adapter_kind: String,
+    pub error_code: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct IssueDeliveryLinkRelease {
+    pub id: Uuid,
+    pub version: String,
+    pub tag_name: String,
+    pub state: String,
+}
+
+#[derive(Serialize)]
 pub struct IssueDeliveryTrace {
     pub issue_id: Uuid,
     pub issue_number: i64,
+    pub plans: Vec<IssueDeliveryLinkPlan>,
+    pub agent_runs: Vec<IssueDeliveryLinkAgentRun>,
     pub pull_requests: Vec<IssueDeliveryLinkPr>,
     pub pipeline_runs: Vec<IssueDeliveryLinkPipeline>,
+    pub releases: Vec<IssueDeliveryLinkRelease>,
     pub deployments: Vec<IssueDeliveryLinkDeployment>,
     pub gaps: Vec<String>,
 }
@@ -262,6 +288,28 @@ pub async fn get_issue_delivery_trace(
         return Err(AppError::NotFound);
     };
     let mut gaps = Vec::new();
+    let plans = sqlx::query_as::<_, (Uuid, i32, String)>(
+        "SELECT p.id, p.version, p.state FROM implementation_plans p
+         JOIN issue_revisions r ON r.id = p.issue_revision_id
+         WHERE r.issue_id = $1 ORDER BY p.version DESC LIMIT 20",
+    )
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if plans.is_empty() {
+        gaps.push("no_plans".to_string());
+    }
+    let agent_runs = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+        "SELECT id, state, adapter_kind, error_code FROM agent_runs
+         WHERE repo_id = $1 AND issue_id = $2 ORDER BY created_at DESC LIMIT 20",
+    )
+    .bind(repo_id)
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if agent_runs.is_empty() {
+        gaps.push("no_agent_runs".to_string());
+    }
     let prs = sqlx::query_as::<_, (Uuid, i64, String, Option<String>)>(
         "SELECT id, number, state, merged_oid FROM pull_requests
          WHERE repo_id = $1 AND issue_id = $2 ORDER BY number DESC LIMIT 20",
@@ -284,6 +332,19 @@ pub async fn get_issue_delivery_trace(
     if pipelines.is_empty() {
         gaps.push("no_pipeline_runs".to_string());
     }
+    let releases = sqlx::query_as::<_, (Uuid, String, String, String)>(
+        "SELECT r.id, r.version, r.tag_name, r.state FROM releases r
+         JOIN pipeline_runs p ON p.id = r.pipeline_run_id
+         WHERE r.repo_id = $1 AND p.issue_id = $2
+         ORDER BY r.created_at DESC LIMIT 20",
+    )
+    .bind(repo_id)
+    .bind(issue_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if releases.is_empty() {
+        gaps.push("no_releases".to_string());
+    }
     let deployments = sqlx::query_as::<_, (Uuid, String, String)>(
         "SELECT d.id, e.slug, d.state FROM deployments d
          JOIN environments e ON e.id = d.environment_id
@@ -305,6 +366,21 @@ pub async fn get_issue_delivery_trace(
     Ok(Json(IssueDeliveryTrace {
         issue_id,
         issue_number,
+        plans: plans
+            .into_iter()
+            .map(|(id, version, state)| IssueDeliveryLinkPlan { id, version, state })
+            .collect(),
+        agent_runs: agent_runs
+            .into_iter()
+            .map(
+                |(id, state, adapter_kind, error_code)| IssueDeliveryLinkAgentRun {
+                    id,
+                    state,
+                    adapter_kind,
+                    error_code,
+                },
+            )
+            .collect(),
         pull_requests: prs
             .into_iter()
             .map(|(id, number, state, merged_oid)| IssueDeliveryLinkPr {
@@ -320,6 +396,15 @@ pub async fn get_issue_delivery_trace(
                 id,
                 state,
                 source_oid,
+            })
+            .collect(),
+        releases: releases
+            .into_iter()
+            .map(|(id, version, tag_name, state)| IssueDeliveryLinkRelease {
+                id,
+                version,
+                tag_name,
+                state,
             })
             .collect(),
         deployments: deployments

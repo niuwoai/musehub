@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use rmcp::schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -16,7 +17,8 @@ use crate::release;
 use crate::security;
 use crate::AppState;
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CriterionInput {
     pub description: String,
     #[serde(default = "default_verification")]
@@ -41,7 +43,7 @@ pub async fn storage_for_repo(state: &AppState, repo_id: Uuid) -> Result<Uuid, A
 }
 
 pub async fn copy_criteria_to_revision(
-    pool: &sqlx::PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     org_id: Uuid,
     repo_id: Uuid,
     from_revision: Uuid,
@@ -52,7 +54,7 @@ pub async fn copy_criteria_to_revision(
          FROM issue_acceptance_criteria WHERE issue_revision_id = $1 ORDER BY ordinal",
     )
     .bind(from_revision)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await?;
     for (description, method, required, ordinal) in rows {
         sqlx::query(
@@ -68,7 +70,7 @@ pub async fn copy_criteria_to_revision(
         .bind(description)
         .bind(method)
         .bind(required)
-        .execute(pool)
+        .execute(&mut **tx)
         .await?;
     }
     Ok(())
@@ -775,26 +777,49 @@ pub async fn job_logs(
     cursor: Option<i32>,
     max_bytes: usize,
 ) -> Result<Value, AppError> {
-    let job =
-        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM pipeline_jobs WHERE id = $1 AND repo_id = $2")
-            .bind(job_id)
-            .bind(repo_id)
-            .fetch_optional(pool)
-            .await?;
-    if job.is_none() {
-        return Err(AppError::NotFound);
-    }
-    let start = cursor.unwrap_or(0);
-    let rows = sqlx::query_as::<_, (i32, String, bool)>(
-        "SELECT chunk_index, text, complete FROM pipeline_job_logs
-         WHERE job_id = $1 AND attempt_id = $2 AND chunk_index >= $3
-         ORDER BY chunk_index LIMIT 10",
+    let workflow_job = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT j.id FROM pipeline_workflow_jobs j
+         JOIN pipeline_runs r ON r.id = j.pipeline_run_id
+         WHERE j.id = $1 AND r.repo_id = $2",
     )
     .bind(job_id)
-    .bind(attempt_id)
-    .bind(start)
-    .fetch_all(pool)
+    .bind(repo_id)
+    .fetch_optional(pool)
     .await?;
+    let start = cursor.unwrap_or(0);
+    let rows = if workflow_job.is_some() {
+        sqlx::query_as::<_, (i32, String, bool)>(
+            "SELECT chunk_index, text, complete FROM pipeline_workflow_job_logs
+             WHERE workflow_job_id = $1 AND attempt_id = $2 AND chunk_index >= $3
+             ORDER BY chunk_index LIMIT 10",
+        )
+        .bind(job_id)
+        .bind(attempt_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?
+    } else {
+        let job = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT id FROM pipeline_jobs WHERE id = $1 AND repo_id = $2",
+        )
+        .bind(job_id)
+        .bind(repo_id)
+        .fetch_optional(pool)
+        .await?;
+        if job.is_none() {
+            return Err(AppError::NotFound);
+        }
+        sqlx::query_as::<_, (i32, String, bool)>(
+            "SELECT chunk_index, text, complete FROM pipeline_job_logs
+             WHERE job_id = $1 AND attempt_id = $2 AND chunk_index >= $3
+             ORDER BY chunk_index LIMIT 10",
+        )
+        .bind(job_id)
+        .bind(attempt_id)
+        .bind(start)
+        .fetch_all(pool)
+        .await?
+    };
     let mut text = String::new();
     let mut complete = true;
     let mut next_cursor = None;
@@ -910,6 +935,8 @@ pub async fn release_create_mcp(
         commit_oid: commit_oid.to_string(),
         pipeline_run_id,
         pr_id,
+        release_notes: String::new(),
+        artifact_ids: Vec::new(),
     };
     let view = release::create_release_core(state, access.org_id, access.repo_id, req).await?;
     Ok(json!({
@@ -1130,6 +1157,32 @@ pub(crate) async fn append_pipeline_job_log(
     .bind(org_id)
     .bind(repo_id)
     .bind(job_id)
+    .bind(attempt_id)
+    .bind(text)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn append_pipeline_workflow_job_log(
+    pool: &sqlx::PgPool,
+    org_id: Uuid,
+    repo_id: Uuid,
+    workflow_job_id: Uuid,
+    attempt_id: Uuid,
+    text: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO pipeline_workflow_job_logs
+         (id, org_id, repo_id, workflow_job_id, attempt_id, chunk_index, text, complete)
+         VALUES ($1,$2,$3,$4,$5,0,$6,true)
+         ON CONFLICT (workflow_job_id, attempt_id, chunk_index)
+         DO UPDATE SET text = EXCLUDED.text, complete = EXCLUDED.complete",
+    )
+    .bind(Uuid::new_v4())
+    .bind(org_id)
+    .bind(repo_id)
+    .bind(workflow_job_id)
     .bind(attempt_id)
     .bind(text)
     .execute(pool)

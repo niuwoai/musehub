@@ -78,7 +78,7 @@ pub fn resolve_git_transport_passwd_uid() -> Result<libc::uid_t, AppError> {
     Ok(uid)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, target_os = "linux"))]
 pub fn prepare_receive_pack_child_setup() -> Result<ReceivePackChildSetup, AppError> {
     let storage_gid = resolve_trusted_storage_group_gid()?;
     let git_uid = resolve_git_transport_passwd_uid()?;
@@ -92,6 +92,13 @@ pub fn prepare_receive_pack_child_setup() -> Result<ReceivePackChildSetup, AppEr
         storage_gid,
         git_uid,
     })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn prepare_receive_pack_child_setup() -> Result<ReceivePackChildSetup, AppError> {
+    Err(AppError::Other(
+        "receive-pack privilege setup requires Linux".into(),
+    ))
 }
 
 #[cfg(unix)]
@@ -182,7 +189,7 @@ pub fn drop_gateway_inherited_capabilities() -> Result<(), AppError> {
 /// Must only be called from a `pre_exec` hook in the child process between `fork` and `exec`.
 /// Caller must have precomputed `setup` in the parent; this function performs no allocation and
 /// uses only async-signal-safe syscalls.
-#[cfg(unix)]
+#[cfg(all(unix, target_os = "linux"))]
 pub unsafe fn receive_pack_child_privilege_setup_raw(setup: ReceivePackChildSetup) {
     let gid = setup.storage_gid;
     let uid = setup.git_uid;
@@ -212,6 +219,17 @@ pub unsafe fn receive_pack_child_privilege_setup_raw(setup: ReceivePackChildSetu
     if capset_empty_raw() != 0 {
         libc::_exit(96);
     }
+}
+
+/// Fails closed when Linux receive-pack privilege setup is unavailable.
+///
+/// # Safety
+///
+/// Must only be called from the receive-pack child's `pre_exec` hook; this function always exits
+/// the child process.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub unsafe fn receive_pack_child_privilege_setup_raw(_setup: ReceivePackChildSetup) {
+    libc::_exit(97);
 }
 
 #[cfg(all(unix, target_os = "linux"))]
